@@ -90,7 +90,7 @@ class PushHttpTransportPolicyTest {
 
         assertEquals("GET", method)
         assertEquals("Bearer secret", authorization)
-        assertEquals("1.0", acceptedVersions)
+        assertEquals("1.1,1.0", acceptedVersions)
         assertEquals(
             PushCapabilitiesResult.Available(
                 PushCapabilities(
@@ -116,10 +116,39 @@ class PushHttpTransportPolicyTest {
         assertEquals(PushFailureCode.HTTP_CLIENT, (result as PushCapabilitiesResult.Rejected).failure?.code)
     }
 
+    @Test fun unknownOnlyCapabilitiesParseToEmptyWithoutRejectingTransport() = runBlocking {
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            Response.Builder()
+                .request(chain.request())
+                .protocol(Protocol.HTTP_1_1)
+                .code(200)
+                .message("ok")
+                .body(
+                    """{"type":"capabilities","protocolVersion":"1.1","receiverStateId":"00000000-0000-4000-8000-000000000099","streams":["stepSample","futureStream"]}"""
+                        .toResponseBody(),
+                )
+                .build()
+        }.build()
+        val endpoint = (PushEndpointPolicy.validate("https://receiver.example/push") as PushEndpointPolicy.Result.Valid).endpoint
+
+        val result = PushHttpTransport(endpoint, "secret", client).capabilities()
+
+        assertEquals(
+            PushCapabilitiesResult.Available(
+                PushCapabilities(
+                    appendTables = emptySet(),
+                    mutableTables = emptySet(),
+                    protocolVersion = "1.1",
+                    receiverStateId = "00000000-0000-4000-8000-000000000099",
+                ),
+            ),
+            result,
+        )
+    }
+
     @Test fun malformedOrExpandingCapabilitiesFailClosed() = runBlocking {
         val bodies = listOf(
             """{"type":"capabilities","protocolVersion":"1.0","streams":["hrSample"]}""",
-            """{"type":"capabilities","protocolVersion":"1.0","receiverStateId":"00000000-0000-4000-8000-000000000099","streams":["unknown"]}""",
             """{"type":"capabilities","protocolVersion":"1.0","receiverStateId":"00000000-0000-4000-8000-000000000099","streams":["hrSample","hrSample"]}""",
             """{"type":"capabilities","protocolVersion":"1.0","receiverStateId":"00000000-0000-4000-8000-000000000099","streams":"hrSample"}""",
         )

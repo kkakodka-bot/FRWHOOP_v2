@@ -38,7 +38,7 @@ struct AutomationsView: View {
     @AppStorage("notif.masterEnabled") private var wristAlertsMaster = false
     #endif
 
-    // #haptics (#1115): per-event toggles for NOOP's IN-SESSION strap buzzes. Default ON (opt-out) — these
+    // #haptics (#1115): per-event toggles for NARA's IN-SESSION strap buzzes. Default ON (opt-out) — these
     // are feedback to a feature you started, so a fresh install buzzes as before and a user turns off any
     // cue. Ambient cues (inactivity / stress / coaching) keep their own opt-in cards; double-tap is gated by
     // its action picker. Same keys the buzz sites read via HapticPrefs (which also defaults an unset key on).
@@ -81,7 +81,7 @@ struct AutomationsView: View {
     /// `notif.masterEnabled` key the SedentaryDetector and the notification posting read.
     private var wristAlertsCard: some View {
         Section2(icon: "bell.badge.fill", title: String(localized: "Wrist alerts"),
-                 blurb: String(localized: "Let NOOP tap your wrist for the things you turn on below, so you can leave your phone and still feel what matters."),
+                 blurb: String(localized: "Let NARA tap your wrist for the things you turn on below, so you can leave your phone and still feel what matters."),
                  active: wristAlertsMaster) {
             VStack(spacing: 0) {
                 ToggleRow(label: String(localized: "Enable wrist alerts"),
@@ -94,7 +94,7 @@ struct AutomationsView: View {
 
     // MARK: - Haptics (#1115)
 
-    /// Per-event opt-in toggles for NOOP's in-session strap buzzes (all default OFF, existing installs
+    /// Per-event opt-in toggles for NARA's in-session strap buzzes (all default OFF, existing installs
     /// migrated on). Parity with the Android Automations "Haptics" section. Ambient cues and the
     /// Android-only call/notification buzzes are not shown here (the latter can't exist on Apple).
     private var hapticsCard: some View {
@@ -224,7 +224,7 @@ struct AutomationsView: View {
                 // v5 L3 closed-loop check-in (master + sub toggles). Default OFF, manual-first. The keys
                 // mirror BiofeedbackPrefs, which the central detector (AppModel.evaluateStress) reads.
                 ToggleRow(label: String(localized: "Stress check-ins (haptic)"),
-                          help: String(localized: "When a fresh, non-exercise HRV dip is detected while you're still, NOOP offers a one-minute guided breath: a single confirming buzz and a dismissible card. Never an alarm, never a diagnosis."),
+                          help: String(localized: "When a fresh, non-exercise HRV dip is detected while you're still, NARA offers a one-minute guided breath: a single confirming buzz and a dismissible card. Never an alarm, never a diagnosis."),
                           isOn: $behavior.stressCheckIn)
                 if behavior.stressCheckIn {
                     rowDivider
@@ -427,7 +427,7 @@ struct AutomationsView: View {
                  blurb: String(localized: "A once-a-day nudge when your Effort reaches the low end of today's optimal strain range, worked out from your recovery."),
                  active: behavior.strainTargetNudge) {
             ToggleRow(label: String(localized: "Notify when optimal strain is reached"),
-                      help: String(localized: "Posts after your strap syncs and NOOP scores the day — not the exact second you cross it. At most once per day."),
+                      help: String(localized: "Posts after your strap syncs and NARA scores the day — not the exact second you cross it. At most once per day."),
                       isOn: $behavior.strainTargetNudge)
                 .onChangeCompat(of: behavior.strainTargetNudge) { on in
                     if on {

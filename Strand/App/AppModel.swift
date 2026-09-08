@@ -674,6 +674,9 @@ final class AppModel: ObservableObject {
         // raced the data it was meant to publish and last night's sleep reached Health an app-open late.
         // Set by StrandiOSApp; nil on macOS and in tests, where there is no bridge.
         await healthWriteBack?()
+        if let writer = await repo.registryWriterForPush() {
+            CloudPushWorker.enqueueAfterSuccessfulOffload(db: writer)
+        }
         #endif
     }
 

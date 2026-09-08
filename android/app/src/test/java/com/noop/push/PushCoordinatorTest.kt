@@ -611,7 +611,8 @@ internal class FakePushSource(
         deviceDiscoveryCapabilities = capabilities
         knownDeviceIdsFailure?.let { throw it }
         val supportedNames = capabilities.appendTables.map { it.wireName }.toSet() +
-            capabilities.mutableTables.map { it.wireName }
+            capabilities.mutableTables.map { it.wireName } +
+            capabilities.binaryTables.map { it.wireName }
         return (append.keys + mutable.keys)
             .filter { it.substringBefore('|') in supportedNames }
             .map { it.substringAfter('|') }
@@ -652,11 +653,23 @@ internal class FakePushSource(
         mutableRowsFailure?.let { throw it }
         return mutable[key(table, deviceId)].orEmpty().take(limit)
     }
+
+    override suspend fun binaryRecordAt(table: PushBinaryTable, deviceId: String, rowId: Long): PushBinaryRow? = null
+
+    override suspend fun binaryRows(
+        table: PushBinaryTable,
+        deviceId: String,
+        afterRowId: Long,
+        limit: Int,
+    ): List<PushBinaryRow> = emptyList()
+
+    override suspend fun acknowledgeBinary(table: PushBinaryTable, deviceId: String, rows: List<PushBinaryRow>) = Unit
 }
 
 internal class MemoryProgress : PushProgressStore {
     val devices = mutableSetOf<String>()
     val cursors = mutableMapOf<String, PushCursor>()
+    val binaryCursors = mutableMapOf<String, PushCursor>()
     val windows = mutableMapOf<String, PushWindowProgress>()
 
     override suspend fun knownDeviceIds(): Set<String> = devices.toSet()
@@ -665,6 +678,13 @@ internal class MemoryProgress : PushProgressStore {
     override suspend fun cursor(table: PushAppendTable, deviceId: String): PushCursor? = cursors[key(table, deviceId)]
     override suspend fun saveCursor(table: PushAppendTable, deviceId: String, cursor: PushCursor) {
         cursors[key(table, deviceId)] = cursor
+    }
+
+    override suspend fun binaryCursor(table: PushBinaryTable, deviceId: String): PushCursor? =
+        binaryCursors[key(table, deviceId)]
+
+    override suspend fun saveBinaryCursor(table: PushBinaryTable, deviceId: String, cursor: PushCursor) {
+        binaryCursors[key(table, deviceId)] = cursor
     }
 
     override suspend fun window(table: PushMutableTable, deviceId: String): PushWindowProgress? =
@@ -686,4 +706,7 @@ internal class AckingTransport(
         bodies += batch.body.copyOf()
         return PushTransportResponse(200, ack(batch).encode())
     }
+
+    override suspend fun postBinary(batch: PushBinaryBatch): PushTransportResponse =
+        throw PushTransportException(PushFailure(PushFailureCode.LOCAL_DATA))
 }

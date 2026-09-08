@@ -56,7 +56,7 @@ struct TestCentreView: View {
     // #polar-debug: the Polar strap-identity diagnostic toggle. Only rendered when a Polar strap is paired.
     @AppStorage(AppModel.polarDebugLoggingKey) private var polarDebugLogging = false
 
-    /// The model NOOP auto-detects for a PAIRED Polar strap, from its stored advertised name (no live
+    /// The model NARA auto-detects for a PAIRED Polar strap, from its stored advertised name (no live
     /// connection needed) — e.g. "Polar H10 identified — PMD ecg,acc; HRV via standard R-R". `nil` when no
     /// Polar strap is paired, which hides the whole toggle so a non-Polar user never sees Polar debug.
     private var polarIdentity: String? {
@@ -117,7 +117,7 @@ struct TestCentreView: View {
             Button("Clear", role: .destructive) { clearScheduledExports() }
             Button("Cancel", role: .cancel) { }
         } message: {
-            Text("This deletes every scheduled strap-log and raw-capture file NOOP has saved. This can't be undone.")
+            Text("This deletes every scheduled strap-log and raw-capture file NARA has saved. This can't be undone.")
         }
         .alert(infoTitle, isPresented: $showInfo) {
             Button("OK", role: .cancel) { }
@@ -195,7 +195,7 @@ struct TestCentreView: View {
                 Divider().overlay(StrandPalette.hairline)
                 Toggle("Legacy R22 feature-flag experiment", isOn: $deepDataEnabled)
                     .toggleStyle(.switch).tint(StrandPalette.accent)
-                Text("The strap accepts these writes, but NOOP has not observed them enabling a separate live stream. This is not the Raw Data Collector.")
+                Text("The strap accepts these writes, but NARA has not observed them enabling a separate live stream. This is not the Raw Data Collector.")
                     .font(StrandFont.caption).foregroundStyle(StrandPalette.textTertiary)
                 if deepDataEnabled {
                     NoopButton("Send legacy R22 enable sequence", systemImage: "bolt.badge.automatic", kind: .secondary) {
@@ -314,7 +314,7 @@ struct TestCentreView: View {
                     Toggle(isOn: $polarDebugLogging) {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Polar debug logging").font(StrandFont.body)
-                            Text("\(identity). Logs this to the strap log on each connect, so a Polar bug report shows the model NOOP resolved your strap to.")
+                            Text("\(identity). Logs this to the strap log on each connect, so a Polar bug report shows the model NARA resolved your strap to.")
                                 .font(StrandFont.caption).foregroundStyle(StrandPalette.textTertiary)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
@@ -448,7 +448,7 @@ struct TestCentreView: View {
                         .font(StrandFont.subhead).foregroundStyle(StrandPalette.textPrimary)
                 }
                 .toggleStyle(.switch).tint(StrandPalette.accent)
-                Text("When NOOP reconstructs heart rate from the WHOOP 5/MG v26 optical waveform (the seconds the strap stored no HR), refine the autocorrelation peak with a parabolic sub-lag fit so the estimate is not quantized to roughly 16 bpm steps near a high HR. It only fills seconds the strap never reported; it never overrides a stored HR. 5/MG only, off by default.")
+                Text("When NARA reconstructs heart rate from the WHOOP 5/MG v26 optical waveform (the seconds the strap stored no HR), refine the autocorrelation peak with a parabolic sub-lag fit so the estimate is not quantized to roughly 16 bpm steps near a high HR. It only fills seconds the strap never reported; it never overrides a stored HR. 5/MG only, off by default.")
                     .font(StrandFont.caption).foregroundStyle(StrandPalette.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
 
@@ -530,12 +530,12 @@ struct TestCentreView: View {
             await model.repo.refresh()
         }
         infoTitle = String(localized: "Charge baseline recalibrating")
-        infoMessage = String(localized: "NOOP will re-learn your baseline from tonight's data onward. Your history is kept, and it takes a few nights to settle.")
+        infoMessage = String(localized: "NARA will re-learn your baseline from tonight's data onward. Your history is kept, and it takes a few nights to settle.")
         showInfo = true
     }
 
     /// The manual "Clear scheduled exports" action (#650): wipes every scheduled strap-log / raw-capture
-    /// file NOOP has dropped into Documents, regardless of the retention setting, then confirms via the
+    /// file NARA has dropped into Documents, regardless of the retention setting, then confirms via the
     /// same info alert the other export actions use.
     private func clearScheduledExports() {
         let removed = ScheduledDebugExport.clearScheduledExports()
@@ -601,7 +601,7 @@ struct TestCentreView: View {
             if let url {
                 infoTitle = String(localized: "Strap log exported")
                 #if os(iOS)
-                infoMessage = String(localized: "Saved \(url.lastPathComponent) to NOOP's folder in the Files app.")
+                infoMessage = String(localized: "Saved \(url.lastPathComponent) to NARA's folder in the Files app.")
                 #else
                 infoMessage = String(localized: "Saved \(url.lastPathComponent) to your Documents folder.")
                 #endif

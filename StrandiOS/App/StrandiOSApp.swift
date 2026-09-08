@@ -62,6 +62,7 @@ struct StrandiOSApp: App {
         // target's BGTaskSchedulerPermittedIdentifiers (project.yml). Without this the overnight drop
         // never fires; the macOS timer, foreground catch-up, and "Run now" already work without it.
         ScheduledDebugExport.register()
+        CloudPushSettings.applyLaunchArgsIfNeeded()
         // Foreground presentation: without a delegate, iOS suppresses a notification's banner while the app
         // is open, so a user testing the wind-down reminder with NOOP foregrounded sees nothing. Register
         // before the first scene so any early-fired notification is presented.
@@ -81,6 +82,10 @@ struct StrandiOSApp: App {
         // Registered before launch finishes and permitted in project.yml, or iOS never delivers it.
         RescoreBackgroundScheduler.register { [weak model] in
             await model?.runDeferredRescoreIfOwed()
+        }
+        CloudPushBackgroundScheduler.register { [weak model] in
+            guard let writer = await model?.repo.registryWriterForPush() else { return }
+            await CloudPushWorker.runOnce(db: writer, trigger: "background")
         }
         let bridge = HealthKitBridge(
             repo: model.repo,

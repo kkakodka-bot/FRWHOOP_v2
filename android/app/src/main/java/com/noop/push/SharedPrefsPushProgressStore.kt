@@ -31,6 +31,21 @@ class SharedPrefsPushProgressStore private constructor(
         }
     }
 
+    override suspend fun binaryCursor(table: PushBinaryTable, deviceId: String): PushCursor? {
+        val prefix = key("binary", table.wireName, deviceId)
+        val rowId = prefs.getLong("$prefix.row", 0L)
+        val fingerprint = prefs.getString("$prefix.key", null)
+        return if (rowId > 0 && fingerprint != null) PushCursor(rowId, fingerprint) else null
+    }
+
+    override suspend fun saveBinaryCursor(table: PushBinaryTable, deviceId: String, cursor: PushCursor) {
+        val prefix = key("binary", table.wireName, deviceId)
+        check(prefs.edit().putLong("$prefix.row", cursor.rowId)
+            .putString("$prefix.key", cursor.naturalKeyFingerprint).commit()) {
+            "Could not persist push binary cursor"
+        }
+    }
+
     override suspend fun window(table: PushMutableTable, deviceId: String): PushWindowProgress? {
         val prefix = key("window", table.wireName, deviceId)
         val batch = prefs.getString("$prefix.batch", null) ?: return null
@@ -58,6 +73,31 @@ class SharedPrefsPushProgressStore private constructor(
             .putLong("$prefix.end", progress.window.endTsExclusive)
             .putString("$prefix.dayHashes", encodeDayHashes(progress.dayHashes))
             .commit()) { "Could not persist push window" }
+    }
+
+    override suspend fun inFlightObject(table: PushBinaryTable, deviceId: String): PushInFlightObject? {
+        val prefix = key("inflight", table.wireName, deviceId)
+        val objectId = prefs.getString("$prefix.objectId", null) ?: return null
+        val objectKey = prefs.getString("$prefix.objectKey", null) ?: return null
+        val sha = prefs.getString("$prefix.sha", null) ?: return null
+        return PushInFlightObject(objectId, objectKey, sha, prefs.getBoolean("$prefix.uploaded", false))
+    }
+
+    override suspend fun saveInFlightObject(table: PushBinaryTable, deviceId: String, object: PushInFlightObject?) {
+        val prefix = key("inflight", table.wireName, deviceId)
+        val editor = prefs.edit()
+        if (object == null) {
+            editor.remove("$prefix.objectId")
+                .remove("$prefix.objectKey")
+                .remove("$prefix.sha")
+                .remove("$prefix.uploaded")
+        } else {
+            editor.putString("$prefix.objectId", object.objectId)
+                .putString("$prefix.objectKey", object.objectKey)
+                .putString("$prefix.sha", object.contentSha256)
+                .putBoolean("$prefix.uploaded", object.uploaded)
+        }
+        check(editor.commit()) { "Could not persist in-flight object" }
     }
 
     private fun key(kind: String, table: String, deviceId: String): String =

@@ -11,7 +11,7 @@ import StrandImport
 /// Settings → Backup & restore → "Export CSV…": serialize the merged WHOOP history (imported wins
 /// per day — exactly what the dashboards show; Apple Health rows are deliberately EXCLUDED so a
 /// re-import can't mis-attribute them as WHOOP data) into WHOOP's 4-CSV zip via
-/// StrandImport.WhoopCsvExporter. The zip re-imports into NOOP on Mac (Data Sources → WHOOP Export)
+/// StrandImport.WhoopCsvExporter. The zip re-imports into NARA on Mac (Data Sources → WHOOP Export)
 /// and on Android. On-device computed rows are marked "noop (APPROXIMATE)" in the Source column both
 /// importers ignore; the .sqlite backup remains the lossless restore path.
 ///
@@ -98,7 +98,7 @@ enum CsvExport {
                 for j in try await store.journalEntries(deviceId: id, from: fromDay, to: toDay)
                 where seenJournal.insert("\(j.day)|\(j.question)").inserted { journal.append(j) }
             }
-            // Sidecar: every metricSeries row under EVERY NOOP source id, full fidelity (rows keep
+            // Sidecar: every metricSeries row under EVERY NARA source id, full fidelity (rows keep
             // their own deviceId, so union entries stay distinguishable on re-import).
             var sidecar: [String: [MetricPoint]] = [:]
             for id in importedIds + computedIds {
@@ -152,7 +152,7 @@ enum CsvExport {
                 let sleeps = SleepMerge.merge(imported: impSleep, computed: compSleep, endDay: endDay)
 
                 // Workouts: imported WHOOP ∪ on-device detected. Apple-Health workouts are intentionally
-                // omitted (read only the two NOOP sources), matching the cycles/sleep exclusion.
+                // omitted (read only the two NARA sources), matching the cycles/sleep exclusion.
                 // Dedup by (startTs, sport), imported (deviceId) first so it wins. The same session can
                 // exist under both ids (e.g. a reimported export + BLE re-detection), which double-counted
                 // it in the CSV and inflated totals on reimport. (PR #97 review, tigercraft4.)
@@ -186,7 +186,7 @@ enum CsvExport {
             #if os(macOS)
             // Save panel — DataBackup.runExport precedent (NSSavePanel + .zip content type).
             let panel = NSSavePanel()
-            panel.title = String(localized: "Export NOOP data as CSV")
+            panel.title = String(localized: "Export NARA data as CSV")
             panel.nameFieldStringValue = name
             panel.allowedContentTypes = [.zip]
             panel.canCreateDirectories = true

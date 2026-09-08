@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import GRDB
 import WhoopStore
 import WhoopProtocol
 import StrandAnalytics
@@ -263,6 +264,11 @@ final class Repository: ObservableObject {
     /// against an in-memory `WhoopStore` without touching the on-disk path. DEBUG-only test seam.
     func setStoreForTesting(_ s: WhoopStore) { self.store = s }
     #endif
+
+    /// Shared GRDB writer for the opt-in cloud push worker.
+    func registryWriterForPush() async -> (any DatabaseWriter)? {
+        await ensureStore()?.registryWriter
+    }
 
     // MARK: - Union reads (active strap + canonical)
     //

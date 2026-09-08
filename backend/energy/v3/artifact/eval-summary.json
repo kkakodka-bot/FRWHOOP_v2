@@ -1,0 +1,6182 @@
+{
+  "weee_n": 412,
+  "habits_n": 1318,
+  "eval_kind_warning": "oracle_family is not end-to-end V3; runtime_router is evalRuntime.mjs",
+  "dataset_role": "development_transfer_not_external_validation",
+  "weee_nested": {
+    "ridge_core": {
+      "n": 407,
+      "n_participants": 17,
+      "mae": 1.425,
+      "rmse": 1.843,
+      "mape": 79.0,
+      "bias": 0.042,
+      "name": "ridge_core",
+      "eval_kind": "oracle_family",
+      "loa95": [
+        -3.573,
+        3.658
+      ],
+      "least_products": {
+        "slope": 1.4731,
+        "intercept": -1.4005,
+        "proportional_bias": true
+      },
+      "per_activity": {
+        "cycle1": {
+          "n": 72,
+          "n_participants": 16,
+          "mae": 0.968,
+          "rmse": 1.393,
+          "mape": 54.36,
+          "bias": 0.194,
+          "loa95": [
+            -2.53,
+            2.917
+          ],
+          "least_products": {
+            "slope": -1.0032,
+            "intercept": 4.8577,
+            "proportional_bias": true
+          }
+        },
+        "cycle2": {
+          "n": 77,
+          "n_participants": 16,
+          "mae": 1.992,
+          "rmse": 2.586,
+          "mape": 48.42,
+          "bias": -1.497,
+          "loa95": [
+            -5.656,
+            2.663
+          ],
+          "least_products": {
+            "slope": -2.72,
+            "intercept": 11.1266,
+            "proportional_bias": true
+          }
+        },
+        "run1": {
+          "n": 69,
+          "n_participants": 15,
+          "mae": 1.606,
+          "rmse": 2.024,
+          "mape": 39.36,
+          "bias": -0.449,
+          "loa95": [
+            -4.345,
+            3.447
+          ],
+          "least_products": {
+            "slope": 0.9129,
+            "intercept": 0.8378,
+            "proportional_bias": false
+          }
+        },
+        "run2": {
+          "n": 33,
+          "n_participants": 11,
+          "mae": 2.391,
+          "rmse": 2.727,
+          "mape": 73.01,
+          "bias": -0.501,
+          "loa95": [
+            -5.836,
+            4.833
+          ],
+          "least_products": {
+            "slope": 1.0964,
+            "intercept": 0.0292,
+            "proportional_bias": false
+          }
+        },
+        "sit": {
+          "n": 69,
+          "n_participants": 16,
+          "mae": 1.071,
+          "rmse": 1.1,
+          "mape": 132.18,
+          "bias": 1.071,
+          "loa95": [
+            0.581,
+            1.562
+          ],
+          "least_products": {
+            "slope": -0.6642,
+            "intercept": 2.12,
+            "proportional_bias": true
+          }
+        },
+        "stand": {
+          "n": 87,
+          "n_participants": 16,
+          "mae": 1.074,
+          "rmse": 1.157,
+          "mape": 118.01,
+          "bias": 1.059,
+          "loa95": [
+            0.139,
+            1.979
+          ],
+          "least_products": {
+            "slope": 0.8289,
+            "intercept": -0.6946,
+            "proportional_bias": true
+          }
+        }
+      },
+      "per_subject": {
+        "P01": {
+          "n": 29,
+          "mae": 1.36,
+          "bias": -0.837
+        },
+        "P02": {
+          "n": 27,
+          "mae": 1.48,
+          "bias": -0.457
+        },
+        "P03": {
+          "n": 20,
+          "mae": 0.876,
+          "bias": 0.744
+        },
+        "P04": {
+          "n": 27,
+          "mae": 1.11,
+          "bias": -0.384
+        },
+        "P05": {
+          "n": 24,
+          "mae": 1.823,
+          "bias": -0.513
+        },
+        "P06": {
+          "n": 25,
+          "mae": 2.252,
+          "bias": 2.219
+        },
+        "P07": {
+          "n": 27,
+          "mae": 0.762,
+          "bias": 0.375
+        },
+        "P08": {
+          "n": 27,
+          "mae": 1.693,
+          "bias": 1.58
+        },
+        "P09": {
+          "n": 22,
+          "mae": 1.531,
+          "bias": -0.703
+        },
+        "P10": {
+          "n": 21,
+          "mae": 0.925,
+          "bias": 0.813
+        },
+        "P11": {
+          "n": 27,
+          "mae": 1.255,
+          "bias": 0.308
+        },
+        "P12": {
+          "n": 28,
+          "mae": 1.704,
+          "bias": -1.145
+        },
+        "P13": {
+          "n": 28,
+          "mae": 1.163,
+          "bias": 0.632
+        },
+        "P14": {
+          "n": 5,
+          "mae": 0.956,
+          "bias": 0.956
+        },
+        "P15": {
+          "n": 27,
+          "mae": 1.85,
+          "bias": -0.835
+        },
+        "P16": {
+          "n": 19,
+          "mae": 1.552,
+          "bias": -0.603
+        },
+        "P17": {
+          "n": 24,
+          "mae": 1.475,
+          "bias": -0.54
+        }
+      }
+    },
+    "ridge_core_hr": {
+      "n": 386,
+      "n_participants": 16,
+      "mae": 1.155,
+      "rmse": 1.52,
+      "mape": 63.56,
+      "bias": -0.031,
+      "name": "ridge_core_hr",
+      "eval_kind": "oracle_family",
+      "loa95": [
+        -3.013,
+        2.951
+      ],
+      "least_products": {
+        "slope": 1.269,
+        "intercept": -0.721,
+        "proportional_bias": true
+      },
+      "per_activity": {
+        "cycle1": {
+          "n": 67,
+          "n_participants": 15,
+          "mae": 0.921,
+          "rmse": 1.144,
+          "mape": 43.21,
+          "bias": -0.423,
+          "loa95": [
+            -2.522,
+            1.677
+          ],
+          "least_products": {
+            "slope": 1.1254,
+            "intercept": 0.182,
+            "proportional_bias": true
+          }
+        },
+        "cycle2": {
+          "n": 73,
+          "n_participants": 15,
+          "mae": 1.48,
+          "rmse": 1.944,
+          "mape": 33.9,
+          "bias": -1.189,
+          "loa95": [
+            -4.225,
+            1.847
+          ],
+          "least_products": {
+            "slope": 2.2242,
+            "intercept": -2.4406,
+            "proportional_bias": true
+          }
+        },
+        "run1": {
+          "n": 64,
+          "n_participants": 14,
+          "mae": 1.523,
+          "rmse": 1.88,
+          "mape": 38.23,
+          "bias": -0.228,
+          "loa95": [
+            -3.915,
+            3.459
+          ],
+          "least_products": {
+            "slope": 0.7717,
+            "intercept": 1.312,
+            "proportional_bias": true
+          }
+        },
+        "run2": {
+          "n": 30,
+          "n_participants": 10,
+          "mae": 1.886,
+          "rmse": 2.372,
+          "mape": 75.32,
+          "bias": -0.051,
+          "loa95": [
+            -4.779,
+            4.677
+          ],
+          "least_products": {
+            "slope": 1.4895,
+            "intercept": -2.6308,
+            "proportional_bias": true
+          }
+        },
+        "sit": {
+          "n": 69,
+          "n_participants": 16,
+          "mae": 0.744,
+          "rmse": 0.899,
+          "mape": 94.21,
+          "bias": 0.725,
+          "loa95": [
+            -0.324,
+            1.774
+          ],
+          "least_products": {
+            "slope": -0.2651,
+            "intercept": 1.2627,
+            "proportional_bias": true
+          }
+        },
+        "stand": {
+          "n": 83,
+          "n_participants": 15,
+          "mae": 0.852,
+          "rmse": 0.964,
+          "mape": 95.88,
+          "bias": 0.833,
+          "loa95": [
+            -0.124,
+            1.79
+          ],
+          "least_products": {
+            "slope": 0.8069,
+            "intercept": -0.4664,
+            "proportional_bias": true
+          }
+        }
+      },
+      "per_subject": {
+        "P01": {
+          "n": 29,
+          "mae": 0.687,
+          "bias": -0.354
+        },
+        "P02": {
+          "n": 27,
+          "mae": 1.648,
+          "bias": -0.765
+        },
+        "P03": {
+          "n": 20,
+          "mae": 0.622,
+          "bias": 0.237
+        },
+        "P04": {
+          "n": 27,
+          "mae": 0.629,
+          "bias": 0.144
+        },
+        "P05": {
+          "n": 24,
+          "mae": 0.888,
+          "bias": 0.053
+        },
+        "P06": {
+          "n": 25,
+          "mae": 2.121,
+          "bias": 2.121
+        },
+        "P07": {
+          "n": 27,
+          "mae": 1.048,
+          "bias": 0.14
+        },
+        "P08": {
+          "n": 27,
+          "mae": 1.184,
+          "bias": 0.245
+        },
+        "P09": {
+          "n": 22,
+          "mae": 0.894,
+          "bias": -0.447
+        },
+        "P11": {
+          "n": 27,
+          "mae": 0.854,
+          "bias": 0.305
+        },
+        "P12": {
+          "n": 28,
+          "mae": 1.108,
+          "bias": -0.421
+        },
+        "P13": {
+          "n": 28,
+          "mae": 1.298,
+          "bias": -0.645
+        },
+        "P14": {
+          "n": 5,
+          "mae": 0.561,
+          "bias": 0.561
+        },
+        "P15": {
+          "n": 27,
+          "mae": 1.648,
+          "bias": -0.392
+        },
+        "P16": {
+          "n": 19,
+          "mae": 1.457,
+          "bias": -1.102
+        },
+        "P17": {
+          "n": 24,
+          "mae": 1.348,
+          "bias": 0.238
+        }
+      }
+    },
+    "ridge_orient": {
+      "n": 407,
+      "n_participants": 17,
+      "mae": 1.157,
+      "rmse": 1.565,
+      "mape": 61.33,
+      "bias": 0.048,
+      "name": "ridge_orient",
+      "eval_kind": "oracle_family",
+      "loa95": [
+        -3.022,
+        3.118
+      ],
+      "least_products": {
+        "slope": 1.4264,
+        "intercept": -1.2746,
+        "proportional_bias": true
+      },
+      "per_activity": {
+        "cycle1": {
+          "n": 72,
+          "n_participants": 16,
+          "mae": 0.904,
+          "rmse": 1.17,
+          "mape": 50.76,
+          "bias": 0.4,
+          "loa95": [
+            -1.772,
+            2.571
+          ],
+          "least_products": {
+            "slope": 1.1446,
+            "intercept": -0.794,
+            "proportional_bias": true
+          }
+        },
+        "cycle2": {
+          "n": 77,
+          "n_participants": 16,
+          "mae": 1.625,
+          "rmse": 2.136,
+          "mape": 42.25,
+          "bias": -0.972,
+          "loa95": [
+            -4.724,
+            2.781
+          ],
+          "least_products": {
+            "slope": 2.915,
+            "intercept": -4.9912,
+            "proportional_bias": true
+          }
+        },
+        "run1": {
+          "n": 69,
+          "n_participants": 15,
+          "mae": 1.332,
+          "rmse": 1.701,
+          "mape": 31.12,
+          "bias": -0.538,
+          "loa95": [
+            -3.723,
+            2.648
+          ],
+          "least_products": {
+            "slope": 1.0974,
+            "intercept": 0.1109,
+            "proportional_bias": false
+          }
+        },
+        "run2": {
+          "n": 33,
+          "n_participants": 11,
+          "mae": 1.914,
+          "rmse": 2.27,
+          "mape": 61.5,
+          "bias": -0.49,
+          "loa95": [
+            -4.902,
+            3.921
+          ],
+          "least_products": {
+            "slope": 1.2531,
+            "intercept": -0.7525,
+            "proportional_bias": true
+          }
+        },
+        "sit": {
+          "n": 69,
+          "n_participants": 16,
+          "mae": 0.785,
+          "rmse": 1.013,
+          "mape": 96.67,
+          "bias": 0.742,
+          "loa95": [
+            -0.62,
+            2.104
+          ],
+          "least_products": {
+            "slope": 0.1871,
+            "intercept": 0.5492,
+            "proportional_bias": true
+          }
+        },
+        "stand": {
+          "n": 87,
+          "n_participants": 16,
+          "mae": 0.822,
+          "rmse": 1.109,
+          "mape": 82.81,
+          "bias": 0.778,
+          "loa95": [
+            -0.781,
+            2.337
+          ],
+          "least_products": {
+            "slope": 0.4654,
+            "intercept": 0.2099,
+            "proportional_bias": true
+          }
+        }
+      },
+      "per_subject": {
+        "P01": {
+          "n": 29,
+          "mae": 1.321,
+          "bias": -0.304
+        },
+        "P02": {
+          "n": 27,
+          "mae": 1.294,
+          "bias": 0.044
+        },
+        "P03": {
+          "n": 20,
+          "mae": 0.966,
+          "bias": 0.866
+        },
+        "P04": {
+          "n": 27,
+          "mae": 1.212,
+          "bias": -0.063
+        },
+        "P05": {
+          "n": 24,
+          "mae": 1.249,
+          "bias": -0.56
+        },
+        "P06": {
+          "n": 25,
+          "mae": 1.862,
+          "bias": 1.798
+        },
+        "P07": {
+          "n": 27,
+          "mae": 0.753,
+          "bias": 0.386
+        },
+        "P08": {
+          "n": 27,
+          "mae": 1.243,
+          "bias": 1.154
+        },
+        "P09": {
+          "n": 22,
+          "mae": 1.236,
+          "bias": -0.871
+        },
+        "P10": {
+          "n": 21,
+          "mae": 0.772,
+          "bias": 0.505
+        },
+        "P11": {
+          "n": 27,
+          "mae": 0.882,
+          "bias": -0.232
+        },
+        "P12": {
+          "n": 28,
+          "mae": 1.21,
+          "bias": -0.85
+        },
+        "P13": {
+          "n": 28,
+          "mae": 0.634,
+          "bias": 0.384
+        },
+        "P14": {
+          "n": 5,
+          "mae": 0.28,
+          "bias": -0.034
+        },
+        "P15": {
+          "n": 27,
+          "mae": 1.624,
+          "bias": -0.796
+        },
+        "P16": {
+          "n": 19,
+          "mae": 1.122,
+          "bias": -0.068
+        },
+        "P17": {
+          "n": 24,
+          "mae": 1.239,
+          "bias": -0.448
+        }
+      }
+    },
+    "rf_core_hr": {
+      "n": 386,
+      "n_participants": 16,
+      "mae": 0.867,
+      "rmse": 1.296,
+      "mape": 40.72,
+      "bias": -0.052,
+      "name": "rf_core_hr",
+      "eval_kind": "oracle_family",
+      "loa95": [
+        -2.594,
+        2.489
+      ],
+      "least_products": {
+        "slope": 1.2189,
+        "intercept": -0.555,
+        "proportional_bias": true
+      },
+      "per_activity": {
+        "cycle1": {
+          "n": 67,
+          "n_participants": 15,
+          "mae": 0.78,
+          "rmse": 0.96,
+          "mape": 37.97,
+          "bias": -0.254,
+          "loa95": [
+            -2.083,
+            1.575
+          ],
+          "least_products": {
+            "slope": 1.9666,
+            "intercept": -1.7661,
+            "proportional_bias": true
+          }
+        },
+        "cycle2": {
+          "n": 73,
+          "n_participants": 15,
+          "mae": 1.264,
+          "rmse": 1.66,
+          "mape": 33.29,
+          "bias": -0.671,
+          "loa95": [
+            -3.668,
+            2.326
+          ],
+          "least_products": {
+            "slope": 1.5578,
+            "intercept": -1.271,
+            "proportional_bias": true
+          }
+        },
+        "run1": {
+          "n": 64,
+          "n_participants": 14,
+          "mae": 1.172,
+          "rmse": 1.52,
+          "mape": 30.39,
+          "bias": 0.045,
+          "loa95": [
+            -2.956,
+            3.046
+          ],
+          "least_products": {
+            "slope": 1.6649,
+            "intercept": -3.3837,
+            "proportional_bias": true
+          }
+        },
+        "run2": {
+          "n": 30,
+          "n_participants": 10,
+          "mae": 1.965,
+          "rmse": 2.461,
+          "mape": 78.31,
+          "bias": -0.079,
+          "loa95": [
+            -4.982,
+            4.824
+          ],
+          "least_products": {
+            "slope": -1.9566,
+            "intercept": 16.1918,
+            "proportional_bias": true
+          }
+        },
+        "sit": {
+          "n": 69,
+          "n_participants": 16,
+          "mae": 0.332,
+          "rmse": 0.619,
+          "mape": 41.42,
+          "bias": 0.267,
+          "loa95": [
+            -0.834,
+            1.369
+          ],
+          "least_products": {
+            "slope": -0.2382,
+            "intercept": 1.1114,
+            "proportional_bias": true
+          }
+        },
+        "stand": {
+          "n": 83,
+          "n_participants": 15,
+          "mae": 0.4,
+          "rmse": 0.595,
+          "mape": 43.26,
+          "bias": 0.323,
+          "loa95": [
+            -0.662,
+            1.308
+          ],
+          "least_products": {
+            "slope": 0.7721,
+            "intercept": -0.0065,
+            "proportional_bias": true
+          }
+        }
+      },
+      "per_subject": {
+        "P01": {
+          "n": 29,
+          "mae": 0.574,
+          "bias": -0.153
+        },
+        "P02": {
+          "n": 27,
+          "mae": 1.418,
+          "bias": -0.758
+        },
+        "P03": {
+          "n": 20,
+          "mae": 0.606,
+          "bias": 0.505
+        },
+        "P04": {
+          "n": 27,
+          "mae": 0.646,
+          "bias": 0.237
+        },
+        "P05": {
+          "n": 24,
+          "mae": 0.454,
+          "bias": -0.105
+        },
+        "P06": {
+          "n": 25,
+          "mae": 1.974,
+          "bias": 1.974
+        },
+        "P07": {
+          "n": 27,
+          "mae": 0.656,
+          "bias": 0.02
+        },
+        "P08": {
+          "n": 27,
+          "mae": 0.758,
+          "bias": 0.686
+        },
+        "P09": {
+          "n": 22,
+          "mae": 0.421,
+          "bias": -0.221
+        },
+        "P11": {
+          "n": 27,
+          "mae": 0.707,
+          "bias": 0.471
+        },
+        "P12": {
+          "n": 28,
+          "mae": 1.22,
+          "bias": -1.073
+        },
+        "P13": {
+          "n": 28,
+          "mae": 0.722,
+          "bias": -0.553
+        },
+        "P14": {
+          "n": 5,
+          "mae": 0.263,
+          "bias": 0.036
+        },
+        "P15": {
+          "n": 27,
+          "mae": 1.136,
+          "bias": -0.574
+        },
+        "P16": {
+          "n": 19,
+          "mae": 0.836,
+          "bias": -0.619
+        },
+        "P17": {
+          "n": 24,
+          "mae": 0.877,
+          "bias": -0.54
+        }
+      }
+    },
+    "gb_core_hr": {
+      "n": 386,
+      "n_participants": 16,
+      "mae": 0.898,
+      "rmse": 1.302,
+      "mape": 42.8,
+      "bias": -0.044,
+      "name": "gb_core_hr",
+      "eval_kind": "oracle_family",
+      "loa95": [
+        -2.598,
+        2.51
+      ],
+      "least_products": {
+        "slope": 1.2495,
+        "intercept": -0.6505,
+        "proportional_bias": true
+      },
+      "per_activity": {
+        "cycle1": {
+          "n": 67,
+          "n_participants": 15,
+          "mae": 0.846,
+          "rmse": 1.012,
+          "mape": 39.94,
+          "bias": -0.287,
+          "loa95": [
+            -2.204,
+            1.629
+          ],
+          "least_products": {
+            "slope": 1.7359,
+            "intercept": -1.226,
+            "proportional_bias": true
+          }
+        },
+        "cycle2": {
+          "n": 73,
+          "n_participants": 15,
+          "mae": 1.234,
+          "rmse": 1.672,
+          "mape": 32.51,
+          "bias": -0.534,
+          "loa95": [
+            -3.662,
+            2.594
+          ],
+          "least_products": {
+            "slope": 1.6429,
+            "intercept": -1.7928,
+            "proportional_bias": true
+          }
+        },
+        "run1": {
+          "n": 64,
+          "n_participants": 14,
+          "mae": 1.219,
+          "rmse": 1.553,
+          "mape": 30.94,
+          "bias": -0.196,
+          "loa95": [
+            -3.239,
+            2.847
+          ],
+          "least_products": {
+            "slope": 1.4456,
+            "intercept": -1.934,
+            "proportional_bias": true
+          }
+        },
+        "run2": {
+          "n": 30,
+          "n_participants": 10,
+          "mae": 1.955,
+          "rmse": 2.389,
+          "mape": 75.2,
+          "bias": -0.073,
+          "loa95": [
+            -4.833,
+            4.686
+          ],
+          "least_products": {
+            "slope": 1.7206,
+            "intercept": -3.8578,
+            "proportional_bias": true
+          }
+        },
+        "sit": {
+          "n": 69,
+          "n_participants": 16,
+          "mae": 0.356,
+          "rmse": 0.564,
+          "mape": 44.72,
+          "bias": 0.305,
+          "loa95": [
+            -0.632,
+            1.242
+          ],
+          "least_products": {
+            "slope": -0.2869,
+            "intercept": 1.1765,
+            "proportional_bias": true
+          }
+        },
+        "stand": {
+          "n": 83,
+          "n_participants": 15,
+          "mae": 0.468,
+          "rmse": 0.642,
+          "mape": 50.01,
+          "bias": 0.422,
+          "loa95": [
+            -0.533,
+            1.376
+          ],
+          "least_products": {
+            "slope": 0.7175,
+            "intercept": -0.0013,
+            "proportional_bias": true
+          }
+        }
+      },
+      "per_subject": {
+        "P01": {
+          "n": 29,
+          "mae": 0.623,
+          "bias": -0.145
+        },
+        "P02": {
+          "n": 27,
+          "mae": 1.408,
+          "bias": -0.747
+        },
+        "P03": {
+          "n": 20,
+          "mae": 0.604,
+          "bias": 0.408
+        },
+        "P04": {
+          "n": 27,
+          "mae": 0.533,
+          "bias": 0.118
+        },
+        "P05": {
+          "n": 24,
+          "mae": 0.672,
+          "bias": -0.019
+        },
+        "P06": {
+          "n": 25,
+          "mae": 1.831,
+          "bias": 1.831
+        },
+        "P07": {
+          "n": 27,
+          "mae": 0.677,
+          "bias": 0.144
+        },
+        "P08": {
+          "n": 27,
+          "mae": 0.893,
+          "bias": 0.718
+        },
+        "P09": {
+          "n": 22,
+          "mae": 0.518,
+          "bias": -0.259
+        },
+        "P11": {
+          "n": 27,
+          "mae": 0.746,
+          "bias": 0.501
+        },
+        "P12": {
+          "n": 28,
+          "mae": 1.445,
+          "bias": -1.315
+        },
+        "P13": {
+          "n": 28,
+          "mae": 0.712,
+          "bias": -0.473
+        },
+        "P14": {
+          "n": 5,
+          "mae": 0.195,
+          "bias": 0.176
+        },
+        "P15": {
+          "n": 27,
+          "mae": 1.065,
+          "bias": -0.369
+        },
+        "P16": {
+          "n": 19,
+          "mae": 0.873,
+          "bias": -0.467
+        },
+        "P17": {
+          "n": 24,
+          "mae": 0.906,
+          "bias": -0.512
+        }
+      }
+    },
+    "ridge_sed_sit_stand": {
+      "n": 156,
+      "n_participants": 17,
+      "mae": 0.194,
+      "rmse": 0.28,
+      "mape": 20.33,
+      "bias": 0.015,
+      "name": "ridge_sed",
+      "eval_kind": "oracle_family",
+      "loa95": [
+        -0.535,
+        0.565
+      ],
+      "least_products": {
+        "slope": 1.4189,
+        "intercept": -0.4284,
+        "proportional_bias": true
+      },
+      "per_activity": {
+        "sit": {
+          "n": 69,
+          "n_participants": 16,
+          "mae": 0.141,
+          "rmse": 0.185,
+          "mape": 17.43,
+          "bias": 0.039,
+          "loa95": [
+            -0.318,
+            0.396
+          ],
+          "least_products": {
+            "slope": -1.1289,
+            "intercept": 1.8454,
+            "proportional_bias": true
+          }
+        },
+        "stand": {
+          "n": 87,
+          "n_participants": 16,
+          "mae": 0.235,
+          "rmse": 0.337,
+          "mape": 22.64,
+          "bias": -0.003,
+          "loa95": [
+            -0.668,
+            0.661
+          ],
+          "least_products": {
+            "slope": 1.4715,
+            "intercept": -0.4993,
+            "proportional_bias": true
+          }
+        }
+      },
+      "per_subject": {
+        "P01": {
+          "n": 9,
+          "mae": 0.206,
+          "bias": -0.206
+        },
+        "P02": {
+          "n": 10,
+          "mae": 0.284,
+          "bias": 0.284
+        },
+        "P03": {
+          "n": 11,
+          "mae": 0.105,
+          "bias": 0.063
+        },
+        "P04": {
+          "n": 10,
+          "mae": 0.083,
+          "bias": -0.036
+        },
+        "P05": {
+          "n": 9,
+          "mae": 0.113,
+          "bias": -0.064
+        },
+        "P06": {
+          "n": 6,
+          "mae": 0.492,
+          "bias": 0.492
+        },
+        "P07": {
+          "n": 10,
+          "mae": 0.122,
+          "bias": -0.023
+        },
+        "P08": {
+          "n": 9,
+          "mae": 0.22,
+          "bias": 0.22
+        },
+        "P09": {
+          "n": 9,
+          "mae": 0.089,
+          "bias": -0.081
+        },
+        "P10": {
+          "n": 4,
+          "mae": 0.294,
+          "bias": 0.071
+        },
+        "P11": {
+          "n": 11,
+          "mae": 0.25,
+          "bias": 0.207
+        },
+        "P12": {
+          "n": 10,
+          "mae": 0.227,
+          "bias": -0.155
+        },
+        "P13": {
+          "n": 12,
+          "mae": 0.205,
+          "bias": -0.19
+        },
+        "P14": {
+          "n": 5,
+          "mae": 0.151,
+          "bias": -0.15
+        },
+        "P15": {
+          "n": 12,
+          "mae": 0.274,
+          "bias": -0.06
+        },
+        "P16": {
+          "n": 10,
+          "mae": 0.138,
+          "bias": -0.031
+        },
+        "P17": {
+          "n": 9,
+          "mae": 0.162,
+          "bias": 0.081
+        }
+      }
+    },
+    "ridge_adl_oracle": {
+      "n": 156,
+      "n_participants": 17,
+      "mae": 0.194,
+      "rmse": 0.28,
+      "mape": 20.33,
+      "bias": 0.015,
+      "name": "ridge_adl_oracle",
+      "eval_kind": "oracle_family",
+      "loa95": [
+        -0.535,
+        0.565
+      ],
+      "least_products": {
+        "slope": 1.4189,
+        "intercept": -0.4284,
+        "proportional_bias": true
+      },
+      "per_activity": {
+        "sit": {
+          "n": 69,
+          "n_participants": 16,
+          "mae": 0.141,
+          "rmse": 0.185,
+          "mape": 17.43,
+          "bias": 0.039,
+          "loa95": [
+            -0.318,
+            0.396
+          ],
+          "least_products": {
+            "slope": -1.1289,
+            "intercept": 1.8454,
+            "proportional_bias": true
+          }
+        },
+        "stand": {
+          "n": 87,
+          "n_participants": 16,
+          "mae": 0.235,
+          "rmse": 0.337,
+          "mape": 22.64,
+          "bias": -0.003,
+          "loa95": [
+            -0.668,
+            0.661
+          ],
+          "least_products": {
+            "slope": 1.4715,
+            "intercept": -0.4993,
+            "proportional_bias": true
+          }
+        }
+      },
+      "per_subject": {
+        "P01": {
+          "n": 9,
+          "mae": 0.206,
+          "bias": -0.206
+        },
+        "P02": {
+          "n": 10,
+          "mae": 0.284,
+          "bias": 0.284
+        },
+        "P03": {
+          "n": 11,
+          "mae": 0.105,
+          "bias": 0.063
+        },
+        "P04": {
+          "n": 10,
+          "mae": 0.083,
+          "bias": -0.036
+        },
+        "P05": {
+          "n": 9,
+          "mae": 0.113,
+          "bias": -0.064
+        },
+        "P06": {
+          "n": 6,
+          "mae": 0.492,
+          "bias": 0.492
+        },
+        "P07": {
+          "n": 10,
+          "mae": 0.122,
+          "bias": -0.023
+        },
+        "P08": {
+          "n": 9,
+          "mae": 0.22,
+          "bias": 0.22
+        },
+        "P09": {
+          "n": 9,
+          "mae": 0.089,
+          "bias": -0.081
+        },
+        "P10": {
+          "n": 4,
+          "mae": 0.294,
+          "bias": 0.071
+        },
+        "P11": {
+          "n": 11,
+          "mae": 0.25,
+          "bias": 0.207
+        },
+        "P12": {
+          "n": 10,
+          "mae": 0.227,
+          "bias": -0.155
+        },
+        "P13": {
+          "n": 12,
+          "mae": 0.205,
+          "bias": -0.19
+        },
+        "P14": {
+          "n": 5,
+          "mae": 0.151,
+          "bias": -0.15
+        },
+        "P15": {
+          "n": 12,
+          "mae": 0.274,
+          "bias": -0.06
+        },
+        "P16": {
+          "n": 10,
+          "mae": 0.138,
+          "bias": -0.031
+        },
+        "P17": {
+          "n": 9,
+          "mae": 0.162,
+          "bias": 0.081
+        }
+      }
+    },
+    "ridge_run_hr": {
+      "n": 94,
+      "n_participants": 14,
+      "mae": 1.448,
+      "rmse": 1.895,
+      "mape": 44.28,
+      "bias": 0.212,
+      "name": "ridge_run_hr",
+      "eval_kind": "oracle_family",
+      "loa95": [
+        -3.498,
+        3.922
+      ],
+      "least_products": {
+        "slope": 1.2757,
+        "intercept": -1.6911,
+        "proportional_bias": true
+      },
+      "per_activity": {
+        "run1": {
+          "n": 64,
+          "n_participants": 14,
+          "mae": 1.315,
+          "rmse": 1.754,
+          "mape": 32.63,
+          "bias": 0.142,
+          "loa95": [
+            -3.312,
+            3.596
+          ],
+          "least_products": {
+            "slope": 1.0556,
+            "intercept": -0.4265,
+            "proportional_bias": false
+          }
+        },
+        "run2": {
+          "n": 30,
+          "n_participants": 10,
+          "mae": 1.731,
+          "rmse": 2.164,
+          "mape": 69.14,
+          "bias": 0.362,
+          "loa95": [
+            -3.892,
+            4.616
+          ],
+          "least_products": {
+            "slope": 2.0274,
+            "intercept": -6.4136,
+            "proportional_bias": true
+          }
+        }
+      },
+      "per_subject": {
+        "P01": {
+          "n": 10,
+          "mae": 0.827,
+          "bias": -0.028
+        },
+        "P02": {
+          "n": 9,
+          "mae": 2.465,
+          "bias": -1.923
+        },
+        "P03": {
+          "n": 4,
+          "mae": 0.69,
+          "bias": 0.016
+        },
+        "P04": {
+          "n": 8,
+          "mae": 2.544,
+          "bias": 2.544
+        },
+        "P05": {
+          "n": 6,
+          "mae": 1.57,
+          "bias": -1.094
+        },
+        "P06": {
+          "n": 10,
+          "mae": 3.274,
+          "bias": 3.274
+        },
+        "P07": {
+          "n": 6,
+          "mae": 0.378,
+          "bias": -0.186
+        },
+        "P08": {
+          "n": 8,
+          "mae": 0.807,
+          "bias": -0.233
+        },
+        "P09": {
+          "n": 3,
+          "mae": 1.475,
+          "bias": -1.475
+        },
+        "P11": {
+          "n": 6,
+          "mae": 0.851,
+          "bias": -0.334
+        },
+        "P12": {
+          "n": 8,
+          "mae": 0.392,
+          "bias": -0.098
+        },
+        "P13": {
+          "n": 7,
+          "mae": 1.288,
+          "bias": 1.288
+        },
+        "P15": {
+          "n": 3,
+          "mae": 1.339,
+          "bias": -1.339
+        },
+        "P17": {
+          "n": 6,
+          "mae": 0.987,
+          "bias": -0.644
+        }
+      }
+    },
+    "ridge_loco_oracle": {
+      "n": 94,
+      "n_participants": 14,
+      "mae": 1.448,
+      "rmse": 1.895,
+      "mape": 44.28,
+      "bias": 0.212,
+      "name": "ridge_loco_oracle",
+      "eval_kind": "oracle_family",
+      "loa95": [
+        -3.498,
+        3.922
+      ],
+      "least_products": {
+        "slope": 1.2757,
+        "intercept": -1.6911,
+        "proportional_bias": true
+      },
+      "per_activity": {
+        "run1": {
+          "n": 64,
+          "n_participants": 14,
+          "mae": 1.315,
+          "rmse": 1.754,
+          "mape": 32.63,
+          "bias": 0.142,
+          "loa95": [
+            -3.312,
+            3.596
+          ],
+          "least_products": {
+            "slope": 1.0556,
+            "intercept": -0.4265,
+            "proportional_bias": false
+          }
+        },
+        "run2": {
+          "n": 30,
+          "n_participants": 10,
+          "mae": 1.731,
+          "rmse": 2.164,
+          "mape": 69.14,
+          "bias": 0.362,
+          "loa95": [
+            -3.892,
+            4.616
+          ],
+          "least_products": {
+            "slope": 2.0274,
+            "intercept": -6.4136,
+            "proportional_bias": true
+          }
+        }
+      },
+      "per_subject": {
+        "P01": {
+          "n": 10,
+          "mae": 0.827,
+          "bias": -0.028
+        },
+        "P02": {
+          "n": 9,
+          "mae": 2.465,
+          "bias": -1.923
+        },
+        "P03": {
+          "n": 4,
+          "mae": 0.69,
+          "bias": 0.016
+        },
+        "P04": {
+          "n": 8,
+          "mae": 2.544,
+          "bias": 2.544
+        },
+        "P05": {
+          "n": 6,
+          "mae": 1.57,
+          "bias": -1.094
+        },
+        "P06": {
+          "n": 10,
+          "mae": 3.274,
+          "bias": 3.274
+        },
+        "P07": {
+          "n": 6,
+          "mae": 0.378,
+          "bias": -0.186
+        },
+        "P08": {
+          "n": 8,
+          "mae": 0.807,
+          "bias": -0.233
+        },
+        "P09": {
+          "n": 3,
+          "mae": 1.475,
+          "bias": -1.475
+        },
+        "P11": {
+          "n": 6,
+          "mae": 0.851,
+          "bias": -0.334
+        },
+        "P12": {
+          "n": 8,
+          "mae": 0.392,
+          "bias": -0.098
+        },
+        "P13": {
+          "n": 7,
+          "mae": 1.288,
+          "bias": 1.288
+        },
+        "P15": {
+          "n": 3,
+          "mae": 1.339,
+          "bias": -1.339
+        },
+        "P17": {
+          "n": 6,
+          "mae": 0.987,
+          "bias": -0.644
+        }
+      }
+    },
+    "ridge_cycling_hr": {
+      "n": 140,
+      "n_participants": 15,
+      "mae": 1.014,
+      "rmse": 1.302,
+      "mape": 39.5,
+      "bias": 0.015,
+      "name": "ridge_cycling_hr",
+      "eval_kind": "oracle_family",
+      "loa95": [
+        -2.546,
+        2.575
+      ],
+      "least_products": {
+        "slope": 1.2918,
+        "intercept": -0.9782,
+        "proportional_bias": true
+      },
+      "per_activity": {
+        "cycle1": {
+          "n": 67,
+          "n_participants": 15,
+          "mae": 0.826,
+          "rmse": 0.977,
+          "mape": 42.18,
+          "bias": 0.035,
+          "loa95": [
+            -1.893,
+            1.962
+          ],
+          "least_products": {
+            "slope": 1.0844,
+            "intercept": -0.2353,
+            "proportional_bias": false
+          }
+        },
+        "cycle2": {
+          "n": 73,
+          "n_participants": 15,
+          "mae": 1.186,
+          "rmse": 1.541,
+          "mape": 37.04,
+          "bias": -0.004,
+          "loa95": [
+            -3.045,
+            3.038
+          ],
+          "least_products": {
+            "slope": 1.5729,
+            "intercept": -2.3738,
+            "proportional_bias": true
+          }
+        }
+      },
+      "per_subject": {
+        "P01": {
+          "n": 10,
+          "mae": 0.844,
+          "bias": 0.071
+        },
+        "P02": {
+          "n": 8,
+          "mae": 0.596,
+          "bias": -0.596
+        },
+        "P03": {
+          "n": 5,
+          "mae": 1.092,
+          "bias": 1.055
+        },
+        "P04": {
+          "n": 9,
+          "mae": 0.539,
+          "bias": 0.459
+        },
+        "P05": {
+          "n": 9,
+          "mae": 0.636,
+          "bias": 0.281
+        },
+        "P06": {
+          "n": 9,
+          "mae": 1.496,
+          "bias": 1.496
+        },
+        "P07": {
+          "n": 11,
+          "mae": 0.83,
+          "bias": 0.338
+        },
+        "P08": {
+          "n": 10,
+          "mae": 1.31,
+          "bias": 1.2
+        },
+        "P09": {
+          "n": 10,
+          "mae": 0.92,
+          "bias": -0.779
+        },
+        "P11": {
+          "n": 10,
+          "mae": 1.046,
+          "bias": 0.664
+        },
+        "P12": {
+          "n": 10,
+          "mae": 1.657,
+          "bias": -1.069
+        },
+        "P13": {
+          "n": 9,
+          "mae": 0.98,
+          "bias": -0.939
+        },
+        "P15": {
+          "n": 12,
+          "mae": 1.336,
+          "bias": -0.811
+        },
+        "P16": {
+          "n": 9,
+          "mae": 1.064,
+          "bias": -0.694
+        },
+        "P17": {
+          "n": 9,
+          "mae": 0.7,
+          "bias": 0.141
+        }
+      }
+    },
+    "steady_state_last3_exercise": {
+      "n": 126,
+      "n_participants": 14,
+      "mae": 1.326,
+      "rmse": 1.747,
+      "mape": 47.5,
+      "bias": -0.02,
+      "name": "ridge_core_hr_steady",
+      "eval_kind": "oracle_family",
+      "loa95": [
+        -3.458,
+        3.417
+      ],
+      "least_products": {
+        "slope": 1.3475,
+        "intercept": -1.4057,
+        "proportional_bias": true
+      },
+      "per_activity": {
+        "cycle1": {
+          "n": 42,
+          "n_participants": 14,
+          "mae": 0.954,
+          "rmse": 1.146,
+          "mape": 50.79,
+          "bias": 0.448,
+          "loa95": [
+            -1.645,
+            2.542
+          ],
+          "least_products": {
+            "slope": 1.1743,
+            "intercept": -0.971,
+            "proportional_bias": true
+          }
+        },
+        "cycle2": {
+          "n": 42,
+          "n_participants": 14,
+          "mae": 1.424,
+          "rmse": 1.837,
+          "mape": 36.09,
+          "bias": -0.519,
+          "loa95": [
+            -4.014,
+            2.976
+          ],
+          "least_products": {
+            "slope": 2.5628,
+            "intercept": -5.778,
+            "proportional_bias": true
+          }
+        },
+        "run1": {
+          "n": 30,
+          "n_participants": 10,
+          "mae": 1.52,
+          "rmse": 1.95,
+          "mape": 37.05,
+          "bias": -0.305,
+          "loa95": [
+            -4.144,
+            3.533
+          ],
+          "least_products": {
+            "slope": 0.8324,
+            "intercept": 1.1232,
+            "proportional_bias": true
+          }
+        },
+        "run2": {
+          "n": 12,
+          "n_participants": 4,
+          "mae": 1.793,
+          "rmse": 2.476,
+          "mape": 102.06,
+          "bias": 0.798,
+          "loa95": [
+            -3.999,
+            5.595
+          ],
+          "least_products": {
+            "slope": 2.4676,
+            "intercept": -10.0274,
+            "proportional_bias": true
+          }
+        }
+      },
+      "per_subject": {
+        "P01": {
+          "n": 12,
+          "mae": 1.101,
+          "bias": -0.19
+        },
+        "P02": {
+          "n": 12,
+          "mae": 1.633,
+          "bias": -1.113
+        },
+        "P04": {
+          "n": 9,
+          "mae": 0.96,
+          "bias": 0.96
+        },
+        "P05": {
+          "n": 6,
+          "mae": 0.959,
+          "bias": 0.84
+        },
+        "P06": {
+          "n": 12,
+          "mae": 2.949,
+          "bias": 2.949
+        },
+        "P07": {
+          "n": 9,
+          "mae": 0.729,
+          "bias": -0.37
+        },
+        "P08": {
+          "n": 9,
+          "mae": 1.309,
+          "bias": -0.189
+        },
+        "P09": {
+          "n": 6,
+          "mae": 0.705,
+          "bias": -0.228
+        },
+        "P11": {
+          "n": 9,
+          "mae": 1.127,
+          "bias": 0.74
+        },
+        "P12": {
+          "n": 12,
+          "mae": 1.203,
+          "bias": -0.52
+        },
+        "P13": {
+          "n": 9,
+          "mae": 0.673,
+          "bias": -0.579
+        },
+        "P15": {
+          "n": 6,
+          "mae": 2.082,
+          "bias": -1.627
+        },
+        "P16": {
+          "n": 6,
+          "mae": 1.783,
+          "bias": -1.783
+        },
+        "P17": {
+          "n": 9,
+          "mae": 0.892,
+          "bias": -0.481
+        }
+      }
+    },
+    "two_stage_core_hr": {
+      "n": 386,
+      "n_participants": 16,
+      "mae": 0.959,
+      "rmse": 1.379,
+      "mape": 43.94,
+      "bias": -0.048,
+      "name": "two_stage_core_hr",
+      "eval_kind": "oracle_family",
+      "loa95": [
+        -2.753,
+        2.658
+      ],
+      "least_products": {
+        "slope": 1.1331,
+        "intercept": -0.3223,
+        "proportional_bias": true
+      },
+      "per_activity": {
+        "cycle1": {
+          "n": 67,
+          "n_participants": 15,
+          "mae": 1.149,
+          "rmse": 1.287,
+          "mape": 56.75,
+          "bias": -0.159,
+          "loa95": [
+            -2.681,
+            2.363
+          ],
+          "least_products": {
+            "slope": 0.8413,
+            "intercept": 0.5059,
+            "proportional_bias": true
+          }
+        },
+        "cycle2": {
+          "n": 73,
+          "n_participants": 15,
+          "mae": 1.308,
+          "rmse": 1.638,
+          "mape": 33.92,
+          "bias": -0.676,
+          "loa95": [
+            -3.62,
+            2.267
+          ],
+          "least_products": {
+            "slope": 1.751,
+            "intercept": -1.9349,
+            "proportional_bias": true
+          }
+        },
+        "run1": {
+          "n": 64,
+          "n_participants": 14,
+          "mae": 1.346,
+          "rmse": 1.724,
+          "mape": 34.82,
+          "bias": -0.213,
+          "loa95": [
+            -3.592,
+            3.166
+          ],
+          "least_products": {
+            "slope": 0.9863,
+            "intercept": 0.2782,
+            "proportional_bias": false
+          }
+        },
+        "run2": {
+          "n": 30,
+          "n_participants": 10,
+          "mae": 1.685,
+          "rmse": 2.232,
+          "mape": 71.98,
+          "bias": 0.38,
+          "loa95": [
+            -4.004,
+            4.764
+          ],
+          "least_products": {
+            "slope": 1.9933,
+            "intercept": -6.2492,
+            "proportional_bias": true
+          }
+        },
+        "sit": {
+          "n": 69,
+          "n_participants": 16,
+          "mae": 0.299,
+          "rmse": 0.731,
+          "mape": 40.0,
+          "bias": 0.192,
+          "loa95": [
+            -1.201,
+            1.585
+          ],
+          "least_products": {
+            "slope": -0.1934,
+            "intercept": 1.047,
+            "proportional_bias": true
+          }
+        },
+        "stand": {
+          "n": 83,
+          "n_participants": 15,
+          "mae": 0.488,
+          "rmse": 0.785,
+          "mape": 42.57,
+          "bias": 0.369,
+          "loa95": [
+            -0.996,
+            1.735
+          ],
+          "least_products": {
+            "slope": 0.4847,
+            "intercept": 0.3702,
+            "proportional_bias": true
+          }
+        }
+      }
+    }
+  },
+  "habits_lopo": {
+    "ridge_core": {
+      "n": 1317,
+      "n_participants": 22,
+      "mae": 0.356,
+      "rmse": 0.655,
+      "mape": 22.77,
+      "bias": -0.008,
+      "name": "ridge_core",
+      "eval_kind": "oracle_family",
+      "loa95": [
+        -1.292,
+        1.275
+      ],
+      "least_products": {
+        "slope": 1.1088,
+        "intercept": -0.1609,
+        "proportional_bias": true
+      },
+      "per_activity": {
+        "Chester Step Test (0.25 m step at a rate of 30 steps per minute)": {
+          "n": 35,
+          "n_participants": 13,
+          "mae": 1.725,
+          "rmse": 2.012,
+          "mape": 30.98,
+          "bias": -1.684,
+          "loa95": [
+            -3.875,
+            0.507
+          ],
+          "least_products": {
+            "slope": 0.946,
+            "intercept": 1.8936,
+            "proportional_bias": false
+          }
+        },
+        "General aerobics video": {
+          "n": 53,
+          "n_participants": 18,
+          "mae": 1.156,
+          "rmse": 1.477,
+          "mape": 28.39,
+          "bias": -0.286,
+          "loa95": [
+            -3.154,
+            2.582
+          ],
+          "least_products": {
+            "slope": 0.8908,
+            "intercept": 0.7346,
+            "proportional_bias": true
+          }
+        },
+        "Lying down while doing nothing": {
+          "n": 59,
+          "n_participants": 20,
+          "mae": 0.183,
+          "rmse": 0.258,
+          "mape": 22.18,
+          "bias": 0.071,
+          "loa95": [
+            -0.421,
+            0.562
+          ],
+          "least_products": {
+            "slope": -2.0442,
+            "intercept": 2.6966,
+            "proportional_bias": true
+          }
+        },
+        "Reading a book or magazine while reclining": {
+          "n": 66,
+          "n_participants": 22,
+          "mae": 0.15,
+          "rmse": 0.182,
+          "mape": 19.88,
+          "bias": 0.104,
+          "loa95": [
+            -0.192,
+            0.4
+          ],
+          "least_products": {
+            "slope": 1.4707,
+            "intercept": -0.5491,
+            "proportional_bias": true
+          }
+        },
+        "Rest": {
+          "n": 775,
+          "n_participants": 22,
+          "mae": 0.181,
+          "rmse": 0.242,
+          "mape": 21.51,
+          "bias": 0.057,
+          "loa95": [
+            -0.405,
+            0.519
+          ],
+          "least_products": {
+            "slope": 1.0757,
+            "intercept": -0.1291,
+            "proportional_bias": false
+          }
+        },
+        "Running 4 mph on a treadmill": {
+          "n": 44,
+          "n_participants": 15,
+          "mae": 0.993,
+          "rmse": 1.404,
+          "mape": 20.98,
+          "bias": -0.725,
+          "loa95": [
+            -3.108,
+            1.658
+          ],
+          "least_products": {
+            "slope": 0.7453,
+            "intercept": 1.746,
+            "proportional_bias": true
+          }
+        },
+        "Standing while fidgeting": {
+          "n": 36,
+          "n_participants": 12,
+          "mae": 0.162,
+          "rmse": 0.199,
+          "mape": 19.88,
+          "bias": 0.047,
+          "loa95": [
+            -0.337,
+            0.432
+          ],
+          "least_products": {
+            "slope": 1.4097,
+            "intercept": -0.428,
+            "proportional_bias": true
+          }
+        },
+        "Sweeping slowly": {
+          "n": 66,
+          "n_participants": 22,
+          "mae": 0.96,
+          "rmse": 1.246,
+          "mape": 48.2,
+          "bias": 0.726,
+          "loa95": [
+            -1.275,
+            2.727
+          ],
+          "least_products": {
+            "slope": 0.408,
+            "intercept": 0.9455,
+            "proportional_bias": true
+          }
+        },
+        "Typing on a computer while seated": {
+          "n": 63,
+          "n_participants": 21,
+          "mae": 0.14,
+          "rmse": 0.172,
+          "mape": 18.4,
+          "bias": 0.042,
+          "loa95": [
+            -0.287,
+            0.372
+          ],
+          "least_products": {
+            "slope": 1.9274,
+            "intercept": -0.8582,
+            "proportional_bias": true
+          }
+        },
+        "Walking 2 mph on treadmill": {
+          "n": 60,
+          "n_participants": 20,
+          "mae": 0.504,
+          "rmse": 0.641,
+          "mape": 18.26,
+          "bias": -0.096,
+          "loa95": [
+            -1.348,
+            1.156
+          ],
+          "least_products": {
+            "slope": 0.5231,
+            "intercept": 1.4825,
+            "proportional_bias": true
+          }
+        },
+        "Walking 3.5 mph on treadmill": {
+          "n": 60,
+          "n_participants": 20,
+          "mae": 0.568,
+          "rmse": 0.8,
+          "mape": 17.23,
+          "bias": -0.114,
+          "loa95": [
+            -1.678,
+            1.451
+          ],
+          "least_products": {
+            "slope": 0.6638,
+            "intercept": 1.3158,
+            "proportional_bias": true
+          }
+        }
+      },
+      "per_subject": {
+        "P1000": {
+          "n": 60,
+          "mae": 0.197,
+          "bias": -0.052
+        },
+        "P1002": {
+          "n": 45,
+          "mae": 0.13,
+          "bias": -0.046
+        },
+        "P1003": {
+          "n": 48,
+          "mae": 0.217,
+          "bias": 0.16
+        },
+        "P1004": {
+          "n": 57,
+          "mae": 0.544,
+          "bias": 0.333
+        },
+        "P1005": {
+          "n": 45,
+          "mae": 0.293,
+          "bias": 0.009
+        },
+        "P1006": {
+          "n": 63,
+          "mae": 0.328,
+          "bias": 0.08
+        },
+        "P1008": {
+          "n": 63,
+          "mae": 0.342,
+          "bias": -0.048
+        },
+        "P1010": {
+          "n": 63,
+          "mae": 0.337,
+          "bias": -0.13
+        },
+        "P1012": {
+          "n": 57,
+          "mae": 0.296,
+          "bias": 0.076
+        },
+        "P1013": {
+          "n": 58,
+          "mae": 0.239,
+          "bias": 0.028
+        },
+        "P1015": {
+          "n": 63,
+          "mae": 0.363,
+          "bias": 0.156
+        },
+        "P1016": {
+          "n": 61,
+          "mae": 0.249,
+          "bias": 0.059
+        },
+        "P1017": {
+          "n": 66,
+          "mae": 0.283,
+          "bias": -0.157
+        },
+        "P1018": {
+          "n": 54,
+          "mae": 0.428,
+          "bias": 0.119
+        },
+        "P1019": {
+          "n": 66,
+          "mae": 0.719,
+          "bias": -0.637
+        },
+        "P1020": {
+          "n": 66,
+          "mae": 0.499,
+          "bias": -0.172
+        },
+        "P1021": {
+          "n": 64,
+          "mae": 0.278,
+          "bias": 0.179
+        },
+        "P1022": {
+          "n": 63,
+          "mae": 0.241,
+          "bias": 0.091
+        },
+        "P1023": {
+          "n": 63,
+          "mae": 0.464,
+          "bias": 0.463
+        },
+        "P1024": {
+          "n": 60,
+          "mae": 0.257,
+          "bias": 0.07
+        },
+        "P1025": {
+          "n": 66,
+          "mae": 0.592,
+          "bias": -0.421
+        },
+        "P1026": {
+          "n": 66,
+          "mae": 0.385,
+          "bias": -0.176
+        }
+      }
+    },
+    "rf_core": {
+      "n": 1317,
+      "n_participants": 22,
+      "mae": 0.329,
+      "rmse": 0.632,
+      "mape": 20.37,
+      "bias": -0.036,
+      "name": "rf_core",
+      "eval_kind": "oracle_family",
+      "loa95": [
+        -1.274,
+        1.202
+      ],
+      "least_products": {
+        "slope": 1.1056,
+        "intercept": -0.1254,
+        "proportional_bias": true
+      },
+      "per_activity": {
+        "Chester Step Test (0.25 m step at a rate of 30 steps per minute)": {
+          "n": 35,
+          "n_participants": 13,
+          "mae": 1.501,
+          "rmse": 1.908,
+          "mape": 26.78,
+          "bias": -1.459,
+          "loa95": [
+            -3.904,
+            0.985
+          ],
+          "least_products": {
+            "slope": 0.8556,
+            "intercept": 2.0526,
+            "proportional_bias": true
+          }
+        },
+        "General aerobics video": {
+          "n": 53,
+          "n_participants": 18,
+          "mae": 1.081,
+          "rmse": 1.441,
+          "mape": 27.62,
+          "bias": -0.189,
+          "loa95": [
+            -3.017,
+            2.638
+          ],
+          "least_products": {
+            "slope": 0.9993,
+            "intercept": 0.1924,
+            "proportional_bias": false
+          }
+        },
+        "Lying down while doing nothing": {
+          "n": 59,
+          "n_participants": 20,
+          "mae": 0.166,
+          "rmse": 0.244,
+          "mape": 19.93,
+          "bias": 0.045,
+          "loa95": [
+            -0.429,
+            0.519
+          ],
+          "least_products": {
+            "slope": -2.4841,
+            "intercept": 3.0317,
+            "proportional_bias": true
+          }
+        },
+        "Reading a book or magazine while reclining": {
+          "n": 66,
+          "n_participants": 22,
+          "mae": 0.129,
+          "rmse": 0.161,
+          "mape": 16.81,
+          "bias": 0.048,
+          "loa95": [
+            -0.256,
+            0.352
+          ],
+          "least_products": {
+            "slope": 2.7067,
+            "intercept": -1.5677,
+            "proportional_bias": true
+          }
+        },
+        "Rest": {
+          "n": 775,
+          "n_participants": 22,
+          "mae": 0.156,
+          "rmse": 0.209,
+          "mape": 18.1,
+          "bias": 0.009,
+          "loa95": [
+            -0.401,
+            0.419
+          ],
+          "least_products": {
+            "slope": 1.6393,
+            "intercept": -0.5884,
+            "proportional_bias": true
+          }
+        },
+        "Running 4 mph on a treadmill": {
+          "n": 44,
+          "n_participants": 15,
+          "mae": 1.072,
+          "rmse": 1.455,
+          "mape": 22.19,
+          "bias": -0.896,
+          "loa95": [
+            -3.169,
+            1.378
+          ],
+          "least_products": {
+            "slope": 0.8086,
+            "intercept": 1.6301,
+            "proportional_bias": true
+          }
+        },
+        "Standing while fidgeting": {
+          "n": 36,
+          "n_participants": 12,
+          "mae": 0.142,
+          "rmse": 0.176,
+          "mape": 16.77,
+          "bias": 0.017,
+          "loa95": [
+            -0.33,
+            0.364
+          ],
+          "least_products": {
+            "slope": 1.8687,
+            "intercept": -0.7975,
+            "proportional_bias": true
+          }
+        },
+        "Sweeping slowly": {
+          "n": 66,
+          "n_participants": 22,
+          "mae": 0.959,
+          "rmse": 1.221,
+          "mape": 49.63,
+          "bias": 0.709,
+          "loa95": [
+            -1.253,
+            2.671
+          ],
+          "least_products": {
+            "slope": 0.446,
+            "intercept": 0.8455,
+            "proportional_bias": true
+          }
+        },
+        "Typing on a computer while seated": {
+          "n": 63,
+          "n_participants": 21,
+          "mae": 0.152,
+          "rmse": 0.178,
+          "mape": 20.14,
+          "bias": 0.066,
+          "loa95": [
+            -0.26,
+            0.393
+          ],
+          "least_products": {
+            "slope": 3.3864,
+            "intercept": -2.2217,
+            "proportional_bias": true
+          }
+        },
+        "Walking 2 mph on treadmill": {
+          "n": 60,
+          "n_participants": 20,
+          "mae": 0.433,
+          "rmse": 0.589,
+          "mape": 16.22,
+          "bias": 0.031,
+          "loa95": [
+            -1.131,
+            1.193
+          ],
+          "least_products": {
+            "slope": 0.5493,
+            "intercept": 1.3366,
+            "proportional_bias": true
+          }
+        },
+        "Walking 3.5 mph on treadmill": {
+          "n": 60,
+          "n_participants": 20,
+          "mae": 0.55,
+          "rmse": 0.758,
+          "mape": 16.89,
+          "bias": -0.222,
+          "loa95": [
+            -1.654,
+            1.21
+          ],
+          "least_products": {
+            "slope": 0.6899,
+            "intercept": 1.297,
+            "proportional_bias": true
+          }
+        }
+      },
+      "per_subject": {
+        "P1000": {
+          "n": 60,
+          "mae": 0.219,
+          "bias": -0.073
+        },
+        "P1002": {
+          "n": 45,
+          "mae": 0.123,
+          "bias": -0.041
+        },
+        "P1003": {
+          "n": 48,
+          "mae": 0.164,
+          "bias": 0.111
+        },
+        "P1004": {
+          "n": 57,
+          "mae": 0.547,
+          "bias": 0.134
+        },
+        "P1005": {
+          "n": 45,
+          "mae": 0.258,
+          "bias": 0.043
+        },
+        "P1006": {
+          "n": 63,
+          "mae": 0.313,
+          "bias": -0.047
+        },
+        "P1008": {
+          "n": 63,
+          "mae": 0.233,
+          "bias": -0.078
+        },
+        "P1010": {
+          "n": 63,
+          "mae": 0.325,
+          "bias": -0.099
+        },
+        "P1012": {
+          "n": 57,
+          "mae": 0.288,
+          "bias": 0.055
+        },
+        "P1013": {
+          "n": 58,
+          "mae": 0.21,
+          "bias": -0.091
+        },
+        "P1015": {
+          "n": 63,
+          "mae": 0.319,
+          "bias": 0.092
+        },
+        "P1016": {
+          "n": 61,
+          "mae": 0.219,
+          "bias": 0.083
+        },
+        "P1017": {
+          "n": 66,
+          "mae": 0.267,
+          "bias": -0.147
+        },
+        "P1018": {
+          "n": 54,
+          "mae": 0.438,
+          "bias": 0.122
+        },
+        "P1019": {
+          "n": 66,
+          "mae": 0.725,
+          "bias": -0.586
+        },
+        "P1020": {
+          "n": 66,
+          "mae": 0.462,
+          "bias": -0.25
+        },
+        "P1021": {
+          "n": 64,
+          "mae": 0.258,
+          "bias": 0.182
+        },
+        "P1022": {
+          "n": 63,
+          "mae": 0.213,
+          "bias": 0.104
+        },
+        "P1023": {
+          "n": 63,
+          "mae": 0.44,
+          "bias": 0.429
+        },
+        "P1024": {
+          "n": 60,
+          "mae": 0.196,
+          "bias": 0.005
+        },
+        "P1025": {
+          "n": 66,
+          "mae": 0.584,
+          "bias": -0.395
+        },
+        "P1026": {
+          "n": 66,
+          "mae": 0.299,
+          "bias": -0.18
+        }
+      }
+    },
+    "ridge_sed_sit_stand": {
+      "n": 963,
+      "n_participants": 22,
+      "mae": 0.15,
+      "rmse": 0.196,
+      "mape": 17.49,
+      "bias": -0.0,
+      "name": "ridge_sed",
+      "eval_kind": "oracle_family",
+      "loa95": [
+        -0.384,
+        0.384
+      ],
+      "least_products": {
+        "slope": 2.798,
+        "intercept": -1.5916,
+        "proportional_bias": true
+      },
+      "per_activity": {
+        "Lying down while doing nothing": {
+          "n": 59,
+          "n_participants": 20,
+          "mae": 0.162,
+          "rmse": 0.231,
+          "mape": 19.22,
+          "bias": 0.03,
+          "loa95": [
+            -0.421,
+            0.482
+          ],
+          "least_products": {
+            "slope": 3.3715,
+            "intercept": -2.0905,
+            "proportional_bias": true
+          }
+        },
+        "Reading a book or magazine while reclining": {
+          "n": 66,
+          "n_participants": 22,
+          "mae": 0.117,
+          "rmse": 0.151,
+          "mape": 15.47,
+          "bias": 0.045,
+          "loa95": [
+            -0.24,
+            0.33
+          ],
+          "least_products": {
+            "slope": 2.6624,
+            "intercept": -1.5213,
+            "proportional_bias": true
+          }
+        },
+        "Rest": {
+          "n": 775,
+          "n_participants": 22,
+          "mae": 0.152,
+          "rmse": 0.198,
+          "mape": 17.45,
+          "bias": -0.01,
+          "loa95": [
+            -0.398,
+            0.378
+          ],
+          "least_products": {
+            "slope": 2.6971,
+            "intercept": -1.4945,
+            "proportional_bias": true
+          }
+        },
+        "Typing on a computer while seated": {
+          "n": 63,
+          "n_participants": 21,
+          "mae": 0.141,
+          "rmse": 0.171,
+          "mape": 18.49,
+          "bias": 0.046,
+          "loa95": [
+            -0.281,
+            0.372
+          ],
+          "least_products": {
+            "slope": 5.196,
+            "intercept": -3.7496,
+            "proportional_bias": true
+          }
+        }
+      },
+      "per_subject": {
+        "P1000": {
+          "n": 45,
+          "mae": 0.077,
+          "bias": 0.016
+        },
+        "P1002": {
+          "n": 42,
+          "mae": 0.086,
+          "bias": -0.025
+        },
+        "P1003": {
+          "n": 42,
+          "mae": 0.115,
+          "bias": 0.05
+        },
+        "P1004": {
+          "n": 45,
+          "mae": 0.3,
+          "bias": -0.288
+        },
+        "P1005": {
+          "n": 33,
+          "mae": 0.129,
+          "bias": -0.096
+        },
+        "P1006": {
+          "n": 45,
+          "mae": 0.159,
+          "bias": 0.021
+        },
+        "P1008": {
+          "n": 45,
+          "mae": 0.144,
+          "bias": -0.137
+        },
+        "P1010": {
+          "n": 45,
+          "mae": 0.084,
+          "bias": 0.022
+        },
+        "P1012": {
+          "n": 45,
+          "mae": 0.132,
+          "bias": -0.101
+        },
+        "P1013": {
+          "n": 42,
+          "mae": 0.111,
+          "bias": -0.067
+        },
+        "P1015": {
+          "n": 45,
+          "mae": 0.134,
+          "bias": 0.12
+        },
+        "P1016": {
+          "n": 46,
+          "mae": 0.137,
+          "bias": 0.101
+        },
+        "P1017": {
+          "n": 45,
+          "mae": 0.219,
+          "bias": -0.212
+        },
+        "P1018": {
+          "n": 38,
+          "mae": 0.257,
+          "bias": 0.247
+        },
+        "P1019": {
+          "n": 45,
+          "mae": 0.1,
+          "bias": 0.088
+        },
+        "P1020": {
+          "n": 45,
+          "mae": 0.181,
+          "bias": -0.011
+        },
+        "P1021": {
+          "n": 45,
+          "mae": 0.133,
+          "bias": 0.107
+        },
+        "P1022": {
+          "n": 45,
+          "mae": 0.137,
+          "bias": 0.096
+        },
+        "P1023": {
+          "n": 45,
+          "mae": 0.257,
+          "bias": 0.257
+        },
+        "P1024": {
+          "n": 45,
+          "mae": 0.095,
+          "bias": -0.061
+        },
+        "P1025": {
+          "n": 45,
+          "mae": 0.18,
+          "bias": -0.026
+        },
+        "P1026": {
+          "n": 45,
+          "mae": 0.131,
+          "bias": -0.098
+        }
+      }
+    },
+    "ridge_adl_oracle": {
+      "n": 1118,
+      "n_participants": 22,
+      "mae": 0.23,
+      "rmse": 0.426,
+      "mape": 19.65,
+      "bias": 0.004,
+      "name": "ridge_adl_oracle",
+      "eval_kind": "oracle_family",
+      "loa95": [
+        -0.831,
+        0.838
+      ],
+      "least_products": {
+        "slope": 1.1225,
+        "intercept": -0.1418,
+        "proportional_bias": true
+      },
+      "per_activity": {
+        "General aerobics video": {
+          "n": 53,
+          "n_participants": 18,
+          "mae": 1.176,
+          "rmse": 1.516,
+          "mape": 27.47,
+          "bias": -0.69,
+          "loa95": [
+            -3.361,
+            1.982
+          ],
+          "least_products": {
+            "slope": 0.8929,
+            "intercept": 1.0861,
+            "proportional_bias": true
+          }
+        },
+        "Lying down while doing nothing": {
+          "n": 59,
+          "n_participants": 20,
+          "mae": 0.183,
+          "rmse": 0.268,
+          "mape": 21.24,
+          "bias": 0.031,
+          "loa95": [
+            -0.495,
+            0.558
+          ],
+          "least_products": {
+            "slope": 1.4763,
+            "intercept": -0.4455,
+            "proportional_bias": true
+          }
+        },
+        "Reading a book or magazine while reclining": {
+          "n": 66,
+          "n_participants": 22,
+          "mae": 0.125,
+          "rmse": 0.161,
+          "mape": 16.44,
+          "bias": 0.071,
+          "loa95": [
+            -0.213,
+            0.356
+          ],
+          "least_products": {
+            "slope": 1.2069,
+            "intercept": -0.2602,
+            "proportional_bias": true
+          }
+        },
+        "Rest": {
+          "n": 775,
+          "n_participants": 22,
+          "mae": 0.16,
+          "rmse": 0.217,
+          "mape": 18.52,
+          "bias": 0.021,
+          "loa95": [
+            -0.402,
+            0.444
+          ],
+          "least_products": {
+            "slope": 1.2116,
+            "intercept": -0.2156,
+            "proportional_bias": true
+          }
+        },
+        "Standing while fidgeting": {
+          "n": 36,
+          "n_participants": 12,
+          "mae": 0.171,
+          "rmse": 0.213,
+          "mape": 19.4,
+          "bias": 0.005,
+          "loa95": [
+            -0.418,
+            0.428
+          ],
+          "least_products": {
+            "slope": 1.008,
+            "intercept": -0.012,
+            "proportional_bias": false
+          }
+        },
+        "Sweeping slowly": {
+          "n": 66,
+          "n_participants": 22,
+          "mae": 0.55,
+          "rmse": 0.724,
+          "mape": 27.72,
+          "bias": 0.18,
+          "loa95": [
+            -1.205,
+            1.564
+          ],
+          "least_products": {
+            "slope": 0.6259,
+            "intercept": 0.6722,
+            "proportional_bias": true
+          }
+        },
+        "Typing on a computer while seated": {
+          "n": 63,
+          "n_participants": 21,
+          "mae": 0.152,
+          "rmse": 0.184,
+          "mape": 20.54,
+          "bias": 0.089,
+          "loa95": [
+            -0.228,
+            0.406
+          ],
+          "least_products": {
+            "slope": 2.2508,
+            "intercept": -1.2471,
+            "proportional_bias": true
+          }
+        }
+      },
+      "per_subject": {
+        "P1000": {
+          "n": 51,
+          "mae": 0.091,
+          "bias": 0.006
+        },
+        "P1002": {
+          "n": 45,
+          "mae": 0.119,
+          "bias": -0.059
+        },
+        "P1003": {
+          "n": 48,
+          "mae": 0.162,
+          "bias": 0.059
+        },
+        "P1004": {
+          "n": 51,
+          "mae": 0.391,
+          "bias": 0.043
+        },
+        "P1005": {
+          "n": 39,
+          "mae": 0.214,
+          "bias": -0.007
+        },
+        "P1006": {
+          "n": 51,
+          "mae": 0.271,
+          "bias": 0.032
+        },
+        "P1008": {
+          "n": 54,
+          "mae": 0.22,
+          "bias": -0.072
+        },
+        "P1010": {
+          "n": 51,
+          "mae": 0.145,
+          "bias": 0.011
+        },
+        "P1012": {
+          "n": 51,
+          "mae": 0.212,
+          "bias": -0.08
+        },
+        "P1013": {
+          "n": 47,
+          "mae": 0.162,
+          "bias": 0.022
+        },
+        "P1015": {
+          "n": 51,
+          "mae": 0.229,
+          "bias": 0.159
+        },
+        "P1016": {
+          "n": 49,
+          "mae": 0.161,
+          "bias": 0.088
+        },
+        "P1017": {
+          "n": 54,
+          "mae": 0.264,
+          "bias": -0.235
+        },
+        "P1018": {
+          "n": 47,
+          "mae": 0.286,
+          "bias": 0.272
+        },
+        "P1019": {
+          "n": 54,
+          "mae": 0.306,
+          "bias": -0.207
+        },
+        "P1020": {
+          "n": 54,
+          "mae": 0.384,
+          "bias": -0.091
+        },
+        "P1021": {
+          "n": 54,
+          "mae": 0.219,
+          "bias": 0.055
+        },
+        "P1022": {
+          "n": 54,
+          "mae": 0.175,
+          "bias": 0.034
+        },
+        "P1023": {
+          "n": 54,
+          "mae": 0.304,
+          "bias": 0.276
+        },
+        "P1024": {
+          "n": 51,
+          "mae": 0.171,
+          "bias": 0.01
+        },
+        "P1025": {
+          "n": 54,
+          "mae": 0.337,
+          "bias": -0.074
+        },
+        "P1026": {
+          "n": 54,
+          "mae": 0.193,
+          "bias": -0.113
+        }
+      }
+    },
+    "rf_adl_oracle": {
+      "n": 1118,
+      "n_participants": 22,
+      "mae": 0.218,
+      "rmse": 0.384,
+      "mape": 18.82,
+      "bias": -0.008,
+      "name": "rf_adl_oracle",
+      "eval_kind": "oracle_family",
+      "loa95": [
+        -0.761,
+        0.746
+      ],
+      "least_products": {
+        "slope": 1.0998,
+        "intercept": -0.1037,
+        "proportional_bias": false
+      },
+      "per_activity": {
+        "General aerobics video": {
+          "n": 53,
+          "n_participants": 18,
+          "mae": 1.098,
+          "rmse": 1.377,
+          "mape": 27.55,
+          "bias": -0.416,
+          "loa95": [
+            -3.012,
+            2.18
+          ],
+          "least_products": {
+            "slope": 0.9487,
+            "intercept": 0.62,
+            "proportional_bias": false
+          }
+        },
+        "Lying down while doing nothing": {
+          "n": 59,
+          "n_participants": 20,
+          "mae": 0.168,
+          "rmse": 0.258,
+          "mape": 20.14,
+          "bias": 0.046,
+          "loa95": [
+            -0.455,
+            0.547
+          ],
+          "least_products": {
+            "slope": -1.7929,
+            "intercept": 2.4239,
+            "proportional_bias": true
+          }
+        },
+        "Reading a book or magazine while reclining": {
+          "n": 66,
+          "n_participants": 22,
+          "mae": 0.126,
+          "rmse": 0.157,
+          "mape": 16.48,
+          "bias": 0.046,
+          "loa95": [
+            -0.251,
+            0.343
+          ],
+          "least_products": {
+            "slope": 2.5613,
+            "intercept": -1.4339,
+            "proportional_bias": true
+          }
+        },
+        "Rest": {
+          "n": 775,
+          "n_participants": 22,
+          "mae": 0.155,
+          "rmse": 0.207,
+          "mape": 17.91,
+          "bias": 0.003,
+          "loa95": [
+            -0.403,
+            0.408
+          ],
+          "least_products": {
+            "slope": 1.754,
+            "intercept": -0.681,
+            "proportional_bias": true
+          }
+        },
+        "Standing while fidgeting": {
+          "n": 36,
+          "n_participants": 12,
+          "mae": 0.145,
+          "rmse": 0.183,
+          "mape": 17.1,
+          "bias": 0.011,
+          "loa95": [
+            -0.352,
+            0.374
+          ],
+          "least_products": {
+            "slope": 1.9339,
+            "intercept": -0.8452,
+            "proportional_bias": true
+          }
+        },
+        "Sweeping slowly": {
+          "n": 66,
+          "n_participants": 22,
+          "mae": 0.482,
+          "rmse": 0.59,
+          "mape": 24.12,
+          "bias": 0.03,
+          "loa95": [
+            -1.133,
+            1.193
+          ],
+          "least_products": {
+            "slope": 0.7554,
+            "intercept": 0.4906,
+            "proportional_bias": true
+          }
+        },
+        "Typing on a computer while seated": {
+          "n": 63,
+          "n_participants": 21,
+          "mae": 0.148,
+          "rmse": 0.175,
+          "mape": 19.4,
+          "bias": 0.053,
+          "loa95": [
+            -0.278,
+            0.383
+          ],
+          "least_products": {
+            "slope": 3.4632,
+            "intercept": -2.2449,
+            "proportional_bias": true
+          }
+        }
+      },
+      "per_subject": {
+        "P1000": {
+          "n": 51,
+          "mae": 0.087,
+          "bias": 0.021
+        },
+        "P1002": {
+          "n": 45,
+          "mae": 0.129,
+          "bias": -0.057
+        },
+        "P1003": {
+          "n": 48,
+          "mae": 0.169,
+          "bias": 0.062
+        },
+        "P1004": {
+          "n": 51,
+          "mae": 0.346,
+          "bias": -0.125
+        },
+        "P1005": {
+          "n": 39,
+          "mae": 0.194,
+          "bias": -0.105
+        },
+        "P1006": {
+          "n": 51,
+          "mae": 0.191,
+          "bias": -0.007
+        },
+        "P1008": {
+          "n": 54,
+          "mae": 0.188,
+          "bias": -0.117
+        },
+        "P1010": {
+          "n": 51,
+          "mae": 0.139,
+          "bias": -0.033
+        },
+        "P1012": {
+          "n": 51,
+          "mae": 0.192,
+          "bias": -0.008
+        },
+        "P1013": {
+          "n": 47,
+          "mae": 0.157,
+          "bias": -0.032
+        },
+        "P1015": {
+          "n": 51,
+          "mae": 0.21,
+          "bias": 0.121
+        },
+        "P1016": {
+          "n": 49,
+          "mae": 0.162,
+          "bias": 0.081
+        },
+        "P1017": {
+          "n": 54,
+          "mae": 0.234,
+          "bias": -0.211
+        },
+        "P1018": {
+          "n": 47,
+          "mae": 0.319,
+          "bias": 0.294
+        },
+        "P1019": {
+          "n": 54,
+          "mae": 0.323,
+          "bias": -0.16
+        },
+        "P1020": {
+          "n": 54,
+          "mae": 0.301,
+          "bias": -0.147
+        },
+        "P1021": {
+          "n": 54,
+          "mae": 0.212,
+          "bias": 0.08
+        },
+        "P1022": {
+          "n": 54,
+          "mae": 0.195,
+          "bias": 0.082
+        },
+        "P1023": {
+          "n": 54,
+          "mae": 0.348,
+          "bias": 0.348
+        },
+        "P1024": {
+          "n": 51,
+          "mae": 0.121,
+          "bias": -0.03
+        },
+        "P1025": {
+          "n": 54,
+          "mae": 0.317,
+          "bias": -0.065
+        },
+        "P1026": {
+          "n": 54,
+          "mae": 0.214,
+          "bias": -0.14
+        }
+      }
+    },
+    "ridge_loco_oracle": {
+      "n": 199,
+      "n_participants": 20,
+      "mae": 0.839,
+      "rmse": 1.136,
+      "mape": 21.29,
+      "bias": -0.088,
+      "name": "ridge_loco_oracle",
+      "eval_kind": "oracle_family",
+      "loa95": [
+        -2.313,
+        2.136
+      ],
+      "least_products": {
+        "slope": 1.0071,
+        "intercept": 0.0602,
+        "proportional_bias": false
+      },
+      "per_activity": {
+        "Chester Step Test (0.25 m step at a rate of 30 steps per minute)": {
+          "n": 35,
+          "n_participants": 13,
+          "mae": 1.302,
+          "rmse": 1.672,
+          "mape": 23.85,
+          "bias": -0.748,
+          "loa95": [
+            -3.721,
+            2.225
+          ],
+          "least_products": {
+            "slope": 0.7605,
+            "intercept": 1.9022,
+            "proportional_bias": true
+          }
+        },
+        "Running 4 mph on a treadmill": {
+          "n": 44,
+          "n_participants": 15,
+          "mae": 1.125,
+          "rmse": 1.454,
+          "mape": 23.33,
+          "bias": -0.429,
+          "loa95": [
+            -3.183,
+            2.325
+          ],
+          "least_products": {
+            "slope": 0.601,
+            "intercept": 2.1464,
+            "proportional_bias": true
+          }
+        },
+        "Walking 2 mph on treadmill": {
+          "n": 60,
+          "n_participants": 20,
+          "mae": 0.589,
+          "rmse": 0.712,
+          "mape": 21.64,
+          "bias": 0.411,
+          "loa95": [
+            -0.739,
+            1.561
+          ],
+          "least_products": {
+            "slope": 0.6191,
+            "intercept": 0.8896,
+            "proportional_bias": true
+          }
+        },
+        "Walking 3.5 mph on treadmill": {
+          "n": 60,
+          "n_participants": 20,
+          "mae": 0.609,
+          "rmse": 0.769,
+          "mape": 17.95,
+          "bias": 0.047,
+          "loa95": [
+            -1.47,
+            1.563
+          ],
+          "least_products": {
+            "slope": 0.9741,
+            "intercept": 0.0503,
+            "proportional_bias": false
+          }
+        }
+      },
+      "per_subject": {
+        "P1000": {
+          "n": 9,
+          "mae": 0.512,
+          "bias": -0.322
+        },
+        "P1004": {
+          "n": 6,
+          "mae": 0.538,
+          "bias": -0.066
+        },
+        "P1005": {
+          "n": 6,
+          "mae": 0.404,
+          "bias": 0.378
+        },
+        "P1006": {
+          "n": 12,
+          "mae": 0.712,
+          "bias": 0.22
+        },
+        "P1008": {
+          "n": 9,
+          "mae": 0.756,
+          "bias": -0.024
+        },
+        "P1010": {
+          "n": 12,
+          "mae": 0.84,
+          "bias": -0.426
+        },
+        "P1012": {
+          "n": 6,
+          "mae": 0.75,
+          "bias": 0.75
+        },
+        "P1013": {
+          "n": 11,
+          "mae": 0.566,
+          "bias": 0.274
+        },
+        "P1015": {
+          "n": 12,
+          "mae": 0.879,
+          "bias": 0.235
+        },
+        "P1016": {
+          "n": 12,
+          "mae": 0.307,
+          "bias": 0.211
+        },
+        "P1017": {
+          "n": 12,
+          "mae": 0.523,
+          "bias": 0.523
+        },
+        "P1018": {
+          "n": 7,
+          "mae": 0.82,
+          "bias": 0.82
+        },
+        "P1019": {
+          "n": 12,
+          "mae": 2.574,
+          "bias": -2.574
+        },
+        "P1020": {
+          "n": 12,
+          "mae": 1.131,
+          "bias": -0.945
+        },
+        "P1021": {
+          "n": 10,
+          "mae": 1.006,
+          "bias": 1.006
+        },
+        "P1022": {
+          "n": 9,
+          "mae": 0.169,
+          "bias": 0.123
+        },
+        "P1023": {
+          "n": 9,
+          "mae": 0.935,
+          "bias": 0.935
+        },
+        "P1024": {
+          "n": 9,
+          "mae": 0.423,
+          "bias": 0.35
+        },
+        "P1025": {
+          "n": 12,
+          "mae": 1.36,
+          "bias": -1.145
+        },
+        "P1026": {
+          "n": 12,
+          "mae": 0.809,
+          "bias": -0.462
+        }
+      }
+    },
+    "habits_reference_corrected_two_stage": {
+      "n": 1317,
+      "n_participants": 22,
+      "mae": 0.347,
+      "rmse": 0.679,
+      "mape": 20.51,
+      "bias": -0.039,
+      "name": "habits_reference_corrected_two_stage",
+      "eval_kind": "oracle_family",
+      "loa95": [
+        -1.368,
+        1.291
+      ],
+      "least_products": {
+        "slope": 1.0968,
+        "intercept": -0.109,
+        "proportional_bias": false
+      },
+      "per_activity": {
+        "Chester Step Test (0.25 m step at a rate of 30 steps per minute)": {
+          "n": 35,
+          "n_participants": 13,
+          "mae": 1.705,
+          "rmse": 2.043,
+          "mape": 30.04,
+          "bias": -1.66,
+          "loa95": [
+            -4.029,
+            0.709
+          ],
+          "least_products": {
+            "slope": 0.9766,
+            "intercept": 1.7513,
+            "proportional_bias": false
+          }
+        },
+        "General aerobics video": {
+          "n": 53,
+          "n_participants": 18,
+          "mae": 1.256,
+          "rmse": 1.685,
+          "mape": 31.07,
+          "bias": -0.235,
+          "loa95": [
+            -3.537,
+            3.068
+          ],
+          "least_products": {
+            "slope": 0.8247,
+            "intercept": 0.9636,
+            "proportional_bias": true
+          }
+        },
+        "Lying down while doing nothing": {
+          "n": 59,
+          "n_participants": 20,
+          "mae": 0.162,
+          "rmse": 0.231,
+          "mape": 19.22,
+          "bias": 0.03,
+          "loa95": [
+            -0.421,
+            0.482
+          ],
+          "least_products": {
+            "slope": 3.3723,
+            "intercept": -2.0911,
+            "proportional_bias": true
+          }
+        },
+        "Reading a book or magazine while reclining": {
+          "n": 66,
+          "n_participants": 22,
+          "mae": 0.117,
+          "rmse": 0.151,
+          "mape": 15.47,
+          "bias": 0.045,
+          "loa95": [
+            -0.24,
+            0.33
+          ],
+          "least_products": {
+            "slope": 2.6628,
+            "intercept": -1.5216,
+            "proportional_bias": true
+          }
+        },
+        "Rest": {
+          "n": 775,
+          "n_participants": 22,
+          "mae": 0.164,
+          "rmse": 0.252,
+          "mape": 18.51,
+          "bias": 0.006,
+          "loa95": [
+            -0.489,
+            0.501
+          ],
+          "least_products": {
+            "slope": 0.9971,
+            "intercept": -0.0034,
+            "proportional_bias": false
+          }
+        },
+        "Running 4 mph on a treadmill": {
+          "n": 44,
+          "n_participants": 15,
+          "mae": 1.228,
+          "rmse": 1.622,
+          "mape": 25.02,
+          "bias": -0.956,
+          "loa95": [
+            -3.554,
+            1.643
+          ],
+          "least_products": {
+            "slope": 0.8611,
+            "intercept": 1.4803,
+            "proportional_bias": true
+          }
+        },
+        "Standing while fidgeting": {
+          "n": 36,
+          "n_participants": 12,
+          "mae": 0.143,
+          "rmse": 0.182,
+          "mape": 16.46,
+          "bias": -0.018,
+          "loa95": [
+            -0.378,
+            0.341
+          ],
+          "least_products": {
+            "slope": 2.0866,
+            "intercept": -0.9196,
+            "proportional_bias": true
+          }
+        },
+        "Sweeping slowly": {
+          "n": 66,
+          "n_participants": 22,
+          "mae": 0.874,
+          "rmse": 1.094,
+          "mape": 44.08,
+          "bias": 0.692,
+          "loa95": [
+            -0.983,
+            2.366
+          ],
+          "least_products": {
+            "slope": 0.4891,
+            "intercept": 0.7333,
+            "proportional_bias": true
+          }
+        },
+        "Typing on a computer while seated": {
+          "n": 63,
+          "n_participants": 21,
+          "mae": 0.141,
+          "rmse": 0.171,
+          "mape": 18.49,
+          "bias": 0.046,
+          "loa95": [
+            -0.281,
+            0.372
+          ],
+          "least_products": {
+            "slope": 5.1978,
+            "intercept": -3.7513,
+            "proportional_bias": true
+          }
+        },
+        "Walking 2 mph on treadmill": {
+          "n": 60,
+          "n_participants": 20,
+          "mae": 0.468,
+          "rmse": 0.63,
+          "mape": 17.42,
+          "bias": 0.077,
+          "loa95": [
+            -1.16,
+            1.314
+          ],
+          "least_products": {
+            "slope": 0.5134,
+            "intercept": 1.4219,
+            "proportional_bias": true
+          }
+        },
+        "Walking 3.5 mph on treadmill": {
+          "n": 60,
+          "n_participants": 20,
+          "mae": 0.545,
+          "rmse": 0.765,
+          "mape": 16.68,
+          "bias": -0.006,
+          "loa95": [
+            -1.518,
+            1.506
+          ],
+          "least_products": {
+            "slope": 0.7376,
+            "intercept": 0.9721,
+            "proportional_bias": true
+          }
+        }
+      }
+    },
+    "ridge_sed_gyro": {
+      "n": 963,
+      "n_participants": 22,
+      "mae": 0.148,
+      "rmse": 0.195,
+      "mape": 17.34,
+      "bias": -0.001,
+      "name": "ridge_sed_gyro",
+      "eval_kind": "oracle_family",
+      "loa95": [
+        -0.383,
+        0.38
+      ],
+      "least_products": {
+        "slope": 2.693,
+        "intercept": -1.496,
+        "proportional_bias": true
+      },
+      "per_activity": {
+        "Lying down while doing nothing": {
+          "n": 59,
+          "n_participants": 20,
+          "mae": 0.162,
+          "rmse": 0.234,
+          "mape": 19.23,
+          "bias": 0.027,
+          "loa95": [
+            -0.432,
+            0.487
+          ],
+          "least_products": {
+            "slope": 2.9595,
+            "intercept": -1.7233,
+            "proportional_bias": true
+          }
+        },
+        "Reading a book or magazine while reclining": {
+          "n": 66,
+          "n_participants": 22,
+          "mae": 0.118,
+          "rmse": 0.151,
+          "mape": 15.58,
+          "bias": 0.042,
+          "loa95": [
+            -0.244,
+            0.328
+          ],
+          "least_products": {
+            "slope": 2.7058,
+            "intercept": -1.551,
+            "proportional_bias": true
+          }
+        },
+        "Rest": {
+          "n": 775,
+          "n_participants": 22,
+          "mae": 0.15,
+          "rmse": 0.196,
+          "mape": 17.17,
+          "bias": -0.012,
+          "loa95": [
+            -0.396,
+            0.372
+          ],
+          "least_products": {
+            "slope": 2.6193,
+            "intercept": -1.4211,
+            "proportional_bias": true
+          }
+        },
+        "Typing on a computer while seated": {
+          "n": 63,
+          "n_participants": 21,
+          "mae": 0.147,
+          "rmse": 0.177,
+          "mape": 19.46,
+          "bias": 0.058,
+          "loa95": [
+            -0.271,
+            0.387
+          ],
+          "least_products": {
+            "slope": 3.9082,
+            "intercept": -2.6614,
+            "proportional_bias": true
+          }
+        }
+      },
+      "per_subject": {
+        "P1000": {
+          "n": 45,
+          "mae": 0.077,
+          "bias": 0.012
+        },
+        "P1002": {
+          "n": 42,
+          "mae": 0.085,
+          "bias": -0.029
+        },
+        "P1003": {
+          "n": 42,
+          "mae": 0.116,
+          "bias": 0.048
+        },
+        "P1004": {
+          "n": 45,
+          "mae": 0.285,
+          "bias": -0.281
+        },
+        "P1005": {
+          "n": 33,
+          "mae": 0.127,
+          "bias": -0.077
+        },
+        "P1006": {
+          "n": 45,
+          "mae": 0.156,
+          "bias": 0.01
+        },
+        "P1008": {
+          "n": 45,
+          "mae": 0.153,
+          "bias": -0.138
+        },
+        "P1010": {
+          "n": 45,
+          "mae": 0.083,
+          "bias": 0.019
+        },
+        "P1012": {
+          "n": 45,
+          "mae": 0.134,
+          "bias": -0.109
+        },
+        "P1013": {
+          "n": 42,
+          "mae": 0.113,
+          "bias": -0.059
+        },
+        "P1015": {
+          "n": 45,
+          "mae": 0.136,
+          "bias": 0.121
+        },
+        "P1016": {
+          "n": 46,
+          "mae": 0.135,
+          "bias": 0.098
+        },
+        "P1017": {
+          "n": 45,
+          "mae": 0.216,
+          "bias": -0.21
+        },
+        "P1018": {
+          "n": 38,
+          "mae": 0.255,
+          "bias": 0.242
+        },
+        "P1019": {
+          "n": 45,
+          "mae": 0.087,
+          "bias": 0.066
+        },
+        "P1020": {
+          "n": 45,
+          "mae": 0.189,
+          "bias": 0.003
+        },
+        "P1021": {
+          "n": 45,
+          "mae": 0.124,
+          "bias": 0.097
+        },
+        "P1022": {
+          "n": 45,
+          "mae": 0.139,
+          "bias": 0.1
+        },
+        "P1023": {
+          "n": 45,
+          "mae": 0.262,
+          "bias": 0.262
+        },
+        "P1024": {
+          "n": 45,
+          "mae": 0.096,
+          "bias": -0.066
+        },
+        "P1025": {
+          "n": 45,
+          "mae": 0.174,
+          "bias": -0.041
+        },
+        "P1026": {
+          "n": 45,
+          "mae": 0.122,
+          "bias": -0.082
+        }
+      }
+    }
+  },
+  "transfer": {
+    "weee_to_habits_ridge_core": {
+      "n": 1317,
+      "n_participants": 22,
+      "mae": 1.269,
+      "rmse": 1.451,
+      "mape": 125.24,
+      "bias": 1.073,
+      "name": "weee\u2192habits",
+      "eval_kind": "oracle_family",
+      "loa95": [
+        -0.841,
+        2.987
+      ],
+      "least_products": {
+        "slope": 1.2212,
+        "intercept": -1.6564,
+        "proportional_bias": true
+      },
+      "per_activity": {
+        "Chester Step Test (0.25 m step at a rate of 30 steps per minute)": {
+          "n": 35,
+          "n_participants": 13,
+          "mae": 1.37,
+          "rmse": 1.734,
+          "mape": 24.02,
+          "bias": -1.076,
+          "loa95": [
+            -3.78,
+            1.628
+          ],
+          "least_products": {
+            "slope": 1.0738,
+            "intercept": 0.7446,
+            "proportional_bias": false
+          }
+        },
+        "General aerobics video": {
+          "n": 53,
+          "n_participants": 18,
+          "mae": 1.543,
+          "rmse": 1.861,
+          "mape": 45.35,
+          "bias": 0.684,
+          "loa95": [
+            -2.742,
+            4.11
+          ],
+          "least_products": {
+            "slope": 0.956,
+            "intercept": -0.4604,
+            "proportional_bias": false
+          }
+        },
+        "Lying down while doing nothing": {
+          "n": 59,
+          "n_participants": 20,
+          "mae": 1.197,
+          "rmse": 1.311,
+          "mape": 153.28,
+          "bias": 1.197,
+          "loa95": [
+            0.144,
+            2.251
+          ],
+          "least_products": {
+            "slope": 0.4327,
+            "intercept": -0.0425,
+            "proportional_bias": true
+          }
+        },
+        "Reading a book or magazine while reclining": {
+          "n": 66,
+          "n_participants": 22,
+          "mae": 1.145,
+          "rmse": 1.212,
+          "mape": 143.37,
+          "bias": 1.145,
+          "loa95": [
+            0.362,
+            1.929
+          ],
+          "least_products": {
+            "slope": 0.4056,
+            "intercept": 0.0363,
+            "proportional_bias": true
+          }
+        },
+        "Rest": {
+          "n": 775,
+          "n_participants": 22,
+          "mae": 1.233,
+          "rmse": 1.323,
+          "mape": 145.4,
+          "bias": 1.233,
+          "loa95": [
+            0.29,
+            2.176
+          ],
+          "least_products": {
+            "slope": 0.3988,
+            "intercept": 0.0474,
+            "proportional_bias": true
+          }
+        },
+        "Running 4 mph on a treadmill": {
+          "n": 44,
+          "n_participants": 15,
+          "mae": 0.941,
+          "rmse": 1.134,
+          "mape": 19.49,
+          "bias": -0.744,
+          "loa95": [
+            -2.441,
+            0.953
+          ],
+          "least_products": {
+            "slope": 0.9926,
+            "intercept": 0.7734,
+            "proportional_bias": false
+          }
+        },
+        "Standing while fidgeting": {
+          "n": 36,
+          "n_participants": 12,
+          "mae": 1.097,
+          "rmse": 1.235,
+          "mape": 129.83,
+          "bias": 1.097,
+          "loa95": [
+            -0.031,
+            2.225
+          ],
+          "least_products": {
+            "slope": 0.2948,
+            "intercept": 0.2986,
+            "proportional_bias": true
+          }
+        },
+        "Sweeping slowly": {
+          "n": 66,
+          "n_participants": 22,
+          "mae": 2.715,
+          "rmse": 2.903,
+          "mape": 138.72,
+          "bias": 2.678,
+          "loa95": [
+            0.467,
+            4.889
+          ],
+          "least_products": {
+            "slope": 0.413,
+            "intercept": 0.125,
+            "proportional_bias": true
+          }
+        },
+        "Typing on a computer while seated": {
+          "n": 63,
+          "n_participants": 21,
+          "mae": 1.699,
+          "rmse": 1.742,
+          "mape": 214.27,
+          "bias": 1.699,
+          "loa95": [
+            0.941,
+            2.458
+          ],
+          "least_products": {
+            "slope": 0.464,
+            "intercept": -0.3398,
+            "proportional_bias": true
+          }
+        },
+        "Walking 2 mph on treadmill": {
+          "n": 60,
+          "n_participants": 20,
+          "mae": 0.627,
+          "rmse": 0.765,
+          "mape": 22.76,
+          "bias": 0.413,
+          "loa95": [
+            -0.859,
+            1.686
+          ],
+          "least_products": {
+            "slope": 0.6908,
+            "intercept": 0.6429,
+            "proportional_bias": true
+          }
+        },
+        "Walking 3.5 mph on treadmill": {
+          "n": 60,
+          "n_participants": 20,
+          "mae": 0.582,
+          "rmse": 0.739,
+          "mape": 16.03,
+          "bias": -0.043,
+          "loa95": [
+            -1.501,
+            1.416
+          ],
+          "least_products": {
+            "slope": 1.1595,
+            "intercept": -0.5387,
+            "proportional_bias": true
+          }
+        }
+      },
+      "per_subject": {
+        "P1000": {
+          "n": 60,
+          "mae": 1.249,
+          "bias": 1.047
+        },
+        "P1002": {
+          "n": 45,
+          "mae": 1.225,
+          "bias": 1.225
+        },
+        "P1003": {
+          "n": 48,
+          "mae": 1.369,
+          "bias": 1.364
+        },
+        "P1004": {
+          "n": 57,
+          "mae": 1.344,
+          "bias": 1.245
+        },
+        "P1005": {
+          "n": 45,
+          "mae": 1.495,
+          "bias": 1.495
+        },
+        "P1006": {
+          "n": 63,
+          "mae": 1.317,
+          "bias": 0.936
+        },
+        "P1008": {
+          "n": 63,
+          "mae": 1.119,
+          "bias": 0.862
+        },
+        "P1010": {
+          "n": 63,
+          "mae": 1.377,
+          "bias": 0.671
+        },
+        "P1012": {
+          "n": 57,
+          "mae": 1.245,
+          "bias": 1.245
+        },
+        "P1013": {
+          "n": 58,
+          "mae": 1.224,
+          "bias": 1.066
+        },
+        "P1015": {
+          "n": 63,
+          "mae": 1.361,
+          "bias": 1.248
+        },
+        "P1016": {
+          "n": 61,
+          "mae": 1.119,
+          "bias": 1.016
+        },
+        "P1017": {
+          "n": 66,
+          "mae": 0.933,
+          "bias": 0.893
+        },
+        "P1018": {
+          "n": 54,
+          "mae": 1.558,
+          "bias": 1.558
+        },
+        "P1019": {
+          "n": 66,
+          "mae": 1.088,
+          "bias": 0.239
+        },
+        "P1020": {
+          "n": 66,
+          "mae": 1.505,
+          "bias": 0.953
+        },
+        "P1021": {
+          "n": 64,
+          "mae": 1.325,
+          "bias": 1.315
+        },
+        "P1022": {
+          "n": 63,
+          "mae": 1.093,
+          "bias": 1.085
+        },
+        "P1023": {
+          "n": 63,
+          "mae": 1.341,
+          "bias": 1.341
+        },
+        "P1024": {
+          "n": 60,
+          "mae": 1.182,
+          "bias": 1.115
+        },
+        "P1025": {
+          "n": 66,
+          "mae": 1.563,
+          "bias": 1.294
+        },
+        "P1026": {
+          "n": 66,
+          "mae": 1.004,
+          "bias": 0.78
+        }
+      }
+    },
+    "habits_to_weee_ridge_core": {
+      "n": 407,
+      "n_participants": 17,
+      "mae": 1.47,
+      "rmse": 2.17,
+      "mape": 44.81,
+      "bias": -1.036,
+      "name": "habits\u2192weee",
+      "eval_kind": "oracle_family",
+      "loa95": [
+        -4.778,
+        2.707
+      ],
+      "least_products": {
+        "slope": 1.2879,
+        "intercept": 0.5197,
+        "proportional_bias": true
+      },
+      "per_activity": {
+        "cycle1": {
+          "n": 72,
+          "n_participants": 16,
+          "mae": 1.401,
+          "rmse": 1.646,
+          "mape": 54.78,
+          "bias": -1.365,
+          "loa95": [
+            -3.18,
+            0.45
+          ],
+          "least_products": {
+            "slope": -4.7308,
+            "intercept": 6.8817,
+            "proportional_bias": true
+          }
+        },
+        "cycle2": {
+          "n": 77,
+          "n_participants": 16,
+          "mae": 2.773,
+          "rmse": 3.265,
+          "mape": 62.52,
+          "bias": -2.695,
+          "loa95": [
+            -6.331,
+            0.942
+          ],
+          "least_products": {
+            "slope": 3.1868,
+            "intercept": -0.3468,
+            "proportional_bias": true
+          }
+        },
+        "run1": {
+          "n": 69,
+          "n_participants": 15,
+          "mae": 2.32,
+          "rmse": 2.76,
+          "mape": 54.6,
+          "bias": -0.849,
+          "loa95": [
+            -6.035,
+            4.336
+          ],
+          "least_products": {
+            "slope": -0.6981,
+            "intercept": 7.7553,
+            "proportional_bias": true
+          }
+        },
+        "run2": {
+          "n": 33,
+          "n_participants": 11,
+          "mae": 2.798,
+          "rmse": 3.289,
+          "mape": 82.95,
+          "bias": -1.612,
+          "loa95": [
+            -7.317,
+            4.094
+          ],
+          "least_products": {
+            "slope": -1.1214,
+            "intercept": 9.6486,
+            "proportional_bias": true
+          }
+        },
+        "sit": {
+          "n": 69,
+          "n_participants": 16,
+          "mae": 0.114,
+          "rmse": 0.159,
+          "mape": 14.46,
+          "bias": 0.059,
+          "loa95": [
+            -0.232,
+            0.35
+          ],
+          "least_products": {
+            "slope": 1.3346,
+            "intercept": -0.3616,
+            "proportional_bias": true
+          }
+        },
+        "stand": {
+          "n": 87,
+          "n_participants": 16,
+          "mae": 0.272,
+          "rmse": 0.437,
+          "mape": 22.74,
+          "bias": -0.093,
+          "loa95": [
+            -0.935,
+            0.75
+          ],
+          "least_products": {
+            "slope": 3.2592,
+            "intercept": -2.1153,
+            "proportional_bias": true
+          }
+        }
+      },
+      "per_subject": {
+        "P01": {
+          "n": 29,
+          "mae": 1.951,
+          "bias": -1.944
+        },
+        "P02": {
+          "n": 27,
+          "mae": 1.378,
+          "bias": -0.889
+        },
+        "P03": {
+          "n": 20,
+          "mae": 0.814,
+          "bias": 0.072
+        },
+        "P04": {
+          "n": 27,
+          "mae": 1.702,
+          "bias": -1.671
+        },
+        "P05": {
+          "n": 24,
+          "mae": 1.845,
+          "bias": -1.836
+        },
+        "P06": {
+          "n": 25,
+          "mae": 1.734,
+          "bias": 1.454
+        },
+        "P07": {
+          "n": 27,
+          "mae": 0.847,
+          "bias": -0.659
+        },
+        "P08": {
+          "n": 27,
+          "mae": 0.491,
+          "bias": -0.174
+        },
+        "P09": {
+          "n": 22,
+          "mae": 1.673,
+          "bias": -1.635
+        },
+        "P10": {
+          "n": 21,
+          "mae": 1.354,
+          "bias": -0.219
+        },
+        "P11": {
+          "n": 27,
+          "mae": 1.085,
+          "bias": -0.851
+        },
+        "P12": {
+          "n": 28,
+          "mae": 2.075,
+          "bias": -1.802
+        },
+        "P13": {
+          "n": 28,
+          "mae": 1.039,
+          "bias": -0.862
+        },
+        "P14": {
+          "n": 5,
+          "mae": 0.124,
+          "bias": -0.124
+        },
+        "P15": {
+          "n": 27,
+          "mae": 2.061,
+          "bias": -1.891
+        },
+        "P16": {
+          "n": 19,
+          "mae": 1.458,
+          "bias": -1.388
+        },
+        "P17": {
+          "n": 24,
+          "mae": 2.203,
+          "bias": -2.128
+        }
+      }
+    },
+    "weee_to_habits_ridge_sed": {
+      "n": 963,
+      "n_participants": 22,
+      "mae": 0.3,
+      "rmse": 0.434,
+      "mape": 35.99,
+      "bias": 0.223,
+      "name": "weee\u2192habits sed",
+      "eval_kind": "oracle_family",
+      "loa95": [
+        -0.507,
+        0.952
+      ],
+      "least_products": {
+        "slope": 0.5553,
+        "intercept": 0.2702,
+        "proportional_bias": true
+      },
+      "per_activity": {
+        "Lying down while doing nothing": {
+          "n": 59,
+          "n_participants": 20,
+          "mae": 0.266,
+          "rmse": 0.374,
+          "mape": 32.63,
+          "bias": 0.146,
+          "loa95": [
+            -0.536,
+            0.827
+          ],
+          "least_products": {
+            "slope": 0.8046,
+            "intercept": 0.0467,
+            "proportional_bias": true
+          }
+        },
+        "Reading a book or magazine while reclining": {
+          "n": 66,
+          "n_participants": 22,
+          "mae": 0.243,
+          "rmse": 0.321,
+          "mape": 31.39,
+          "bias": 0.216,
+          "loa95": [
+            -0.253,
+            0.685
+          ],
+          "least_products": {
+            "slope": 0.6484,
+            "intercept": 0.156,
+            "proportional_bias": true
+          }
+        },
+        "Rest": {
+          "n": 775,
+          "n_participants": 22,
+          "mae": 0.263,
+          "rmse": 0.382,
+          "mape": 30.87,
+          "bias": 0.18,
+          "loa95": [
+            -0.481,
+            0.84
+          ],
+          "least_products": {
+            "slope": 0.6049,
+            "intercept": 0.2456,
+            "proportional_bias": true
+          }
+        },
+        "Typing on a computer while seated": {
+          "n": 63,
+          "n_participants": 21,
+          "mae": 0.833,
+          "rmse": 0.917,
+          "mape": 106.99,
+          "bias": 0.827,
+          "loa95": [
+            0.043,
+            1.61
+          ],
+          "least_products": {
+            "slope": 0.4606,
+            "intercept": 0.0708,
+            "proportional_bias": true
+          }
+        }
+      },
+      "per_subject": {
+        "P1000": {
+          "n": 45,
+          "mae": 0.142,
+          "bias": 0.091
+        },
+        "P1002": {
+          "n": 42,
+          "mae": 0.26,
+          "bias": 0.21
+        },
+        "P1003": {
+          "n": 42,
+          "mae": 0.244,
+          "bias": 0.201
+        },
+        "P1004": {
+          "n": 45,
+          "mae": 0.332,
+          "bias": -0.065
+        },
+        "P1005": {
+          "n": 33,
+          "mae": 0.548,
+          "bias": 0.537
+        },
+        "P1006": {
+          "n": 45,
+          "mae": 0.347,
+          "bias": 0.259
+        },
+        "P1008": {
+          "n": 45,
+          "mae": 0.248,
+          "bias": 0.07
+        },
+        "P1010": {
+          "n": 45,
+          "mae": 0.302,
+          "bias": 0.29
+        },
+        "P1012": {
+          "n": 45,
+          "mae": 0.185,
+          "bias": 0.002
+        },
+        "P1013": {
+          "n": 42,
+          "mae": 0.375,
+          "bias": 0.36
+        },
+        "P1015": {
+          "n": 45,
+          "mae": 0.421,
+          "bias": 0.412
+        },
+        "P1016": {
+          "n": 46,
+          "mae": 0.263,
+          "bias": 0.218
+        },
+        "P1017": {
+          "n": 45,
+          "mae": 0.242,
+          "bias": 0.057
+        },
+        "P1018": {
+          "n": 38,
+          "mae": 0.417,
+          "bias": 0.411
+        },
+        "P1019": {
+          "n": 45,
+          "mae": 0.073,
+          "bias": 0.039
+        },
+        "P1020": {
+          "n": 45,
+          "mae": 0.442,
+          "bias": 0.373
+        },
+        "P1021": {
+          "n": 45,
+          "mae": 0.371,
+          "bias": 0.361
+        },
+        "P1022": {
+          "n": 45,
+          "mae": 0.279,
+          "bias": 0.258
+        },
+        "P1023": {
+          "n": 45,
+          "mae": 0.363,
+          "bias": 0.361
+        },
+        "P1024": {
+          "n": 45,
+          "mae": 0.157,
+          "bias": 0.091
+        },
+        "P1025": {
+          "n": 45,
+          "mae": 0.408,
+          "bias": 0.354
+        },
+        "P1026": {
+          "n": 45,
+          "mae": 0.255,
+          "bias": 0.126
+        }
+      }
+    },
+    "habits_to_weee_ridge_sed": {
+      "n": 156,
+      "n_participants": 17,
+      "mae": 0.201,
+      "rmse": 0.354,
+      "mape": 17.2,
+      "bias": -0.115,
+      "name": "habits\u2192weee sed",
+      "eval_kind": "oracle_family",
+      "loa95": [
+        -0.773,
+        0.543
+      ],
+      "least_products": {
+        "slope": 5.0791,
+        "intercept": -3.3766,
+        "proportional_bias": true
+      },
+      "per_activity": {
+        "sit": {
+          "n": 69,
+          "n_participants": 16,
+          "mae": 0.106,
+          "rmse": 0.137,
+          "mape": 12.66,
+          "bias": -0.014,
+          "loa95": [
+            -0.283,
+            0.255
+          ],
+          "least_products": {
+            "slope": -3.3683,
+            "intercept": 3.649,
+            "proportional_bias": true
+          }
+        },
+        "stand": {
+          "n": 87,
+          "n_participants": 16,
+          "mae": 0.277,
+          "rmse": 0.458,
+          "mape": 20.8,
+          "bias": -0.195,
+          "loa95": [
+            -1.012,
+            0.622
+          ],
+          "least_products": {
+            "slope": 5.275,
+            "intercept": -3.5453,
+            "proportional_bias": true
+          }
+        }
+      },
+      "per_subject": {
+        "P01": {
+          "n": 9,
+          "mae": 0.233,
+          "bias": -0.233
+        },
+        "P02": {
+          "n": 10,
+          "mae": 0.122,
+          "bias": 0.119
+        },
+        "P03": {
+          "n": 11,
+          "mae": 0.184,
+          "bias": -0.17
+        },
+        "P04": {
+          "n": 10,
+          "mae": 0.137,
+          "bias": -0.121
+        },
+        "P05": {
+          "n": 9,
+          "mae": 0.126,
+          "bias": -0.122
+        },
+        "P06": {
+          "n": 6,
+          "mae": 0.258,
+          "bias": 0.258
+        },
+        "P07": {
+          "n": 10,
+          "mae": 0.246,
+          "bias": -0.237
+        },
+        "P08": {
+          "n": 9,
+          "mae": 0.091,
+          "bias": 0.065
+        },
+        "P09": {
+          "n": 9,
+          "mae": 0.137,
+          "bias": -0.137
+        },
+        "P10": {
+          "n": 4,
+          "mae": 0.391,
+          "bias": -0.289
+        },
+        "P11": {
+          "n": 11,
+          "mae": 0.172,
+          "bias": -0.105
+        },
+        "P12": {
+          "n": 10,
+          "mae": 0.247,
+          "bias": -0.188
+        },
+        "P13": {
+          "n": 12,
+          "mae": 0.267,
+          "bias": -0.26
+        },
+        "P14": {
+          "n": 5,
+          "mae": 0.18,
+          "bias": -0.18
+        },
+        "P15": {
+          "n": 12,
+          "mae": 0.327,
+          "bias": -0.102
+        },
+        "P16": {
+          "n": 10,
+          "mae": 0.166,
+          "bias": -0.104
+        },
+        "P17": {
+          "n": 9,
+          "mae": 0.203,
+          "bias": -0.103
+        }
+      }
+    },
+    "weee_to_habits_ridge_adl_oracle": {
+      "n": 1118,
+      "n_participants": 22,
+      "mae": 0.475,
+      "rmse": 0.896,
+      "mape": 38.43,
+      "bias": 0.065,
+      "name": "weee\u2192habits adl oracle",
+      "eval_kind": "oracle_family",
+      "loa95": [
+        -1.688,
+        1.818
+      ],
+      "least_products": {
+        "slope": 0.9242,
+        "intercept": 0.0247,
+        "proportional_bias": false
+      },
+      "per_activity": {
+        "General aerobics video": {
+          "n": 53,
+          "n_participants": 18,
+          "mae": 2.885,
+          "rmse": 3.354,
+          "mape": 66.36,
+          "bias": -1.301,
+          "loa95": [
+            -7.419,
+            4.816
+          ],
+          "least_products": {
+            "slope": 0.3867,
+            "intercept": 3.1969,
+            "proportional_bias": true
+          }
+        },
+        "Lying down while doing nothing": {
+          "n": 59,
+          "n_participants": 20,
+          "mae": 0.266,
+          "rmse": 0.374,
+          "mape": 32.63,
+          "bias": 0.146,
+          "loa95": [
+            -0.536,
+            0.827
+          ],
+          "least_products": {
+            "slope": 0.8046,
+            "intercept": 0.0467,
+            "proportional_bias": true
+          }
+        },
+        "Reading a book or magazine while reclining": {
+          "n": 66,
+          "n_participants": 22,
+          "mae": 0.243,
+          "rmse": 0.321,
+          "mape": 31.39,
+          "bias": 0.216,
+          "loa95": [
+            -0.253,
+            0.685
+          ],
+          "least_products": {
+            "slope": 0.6484,
+            "intercept": 0.156,
+            "proportional_bias": true
+          }
+        },
+        "Rest": {
+          "n": 775,
+          "n_participants": 22,
+          "mae": 0.263,
+          "rmse": 0.382,
+          "mape": 30.87,
+          "bias": 0.18,
+          "loa95": [
+            -0.481,
+            0.84
+          ],
+          "least_products": {
+            "slope": 0.6049,
+            "intercept": 0.2456,
+            "proportional_bias": true
+          }
+        },
+        "Standing while fidgeting": {
+          "n": 36,
+          "n_participants": 12,
+          "mae": 0.273,
+          "rmse": 0.408,
+          "mape": 30.78,
+          "bias": 0.155,
+          "loa95": [
+            -0.595,
+            0.906
+          ],
+          "least_products": {
+            "slope": 0.4453,
+            "intercept": 0.4199,
+            "proportional_bias": true
+          }
+        },
+        "Sweeping slowly": {
+          "n": 66,
+          "n_participants": 22,
+          "mae": 1.212,
+          "rmse": 1.32,
+          "mape": 55.71,
+          "bias": -1.178,
+          "loa95": [
+            -2.352,
+            -0.005
+          ],
+          "least_products": {
+            "slope": -1.384,
+            "intercept": 3.3693,
+            "proportional_bias": true
+          }
+        },
+        "Typing on a computer while seated": {
+          "n": 63,
+          "n_participants": 21,
+          "mae": 0.833,
+          "rmse": 0.917,
+          "mape": 106.99,
+          "bias": 0.827,
+          "loa95": [
+            0.043,
+            1.61
+          ],
+          "least_products": {
+            "slope": 0.4606,
+            "intercept": 0.0708,
+            "proportional_bias": true
+          }
+        }
+      },
+      "per_subject": {
+        "P1000": {
+          "n": 51,
+          "mae": 0.277,
+          "bias": 0.05
+        },
+        "P1002": {
+          "n": 45,
+          "mae": 0.269,
+          "bias": 0.217
+        },
+        "P1003": {
+          "n": 48,
+          "mae": 0.465,
+          "bias": 0.075
+        },
+        "P1004": {
+          "n": 51,
+          "mae": 0.485,
+          "bias": -0.25
+        },
+        "P1005": {
+          "n": 39,
+          "mae": 0.625,
+          "bias": 0.297
+        },
+        "P1006": {
+          "n": 51,
+          "mae": 0.605,
+          "bias": 0.007
+        },
+        "P1008": {
+          "n": 54,
+          "mae": 0.483,
+          "bias": -0.103
+        },
+        "P1010": {
+          "n": 51,
+          "mae": 0.575,
+          "bias": 0.403
+        },
+        "P1012": {
+          "n": 51,
+          "mae": 0.408,
+          "bias": -0.243
+        },
+        "P1013": {
+          "n": 47,
+          "mae": 0.652,
+          "bias": 0.433
+        },
+        "P1015": {
+          "n": 51,
+          "mae": 0.618,
+          "bias": 0.289
+        },
+        "P1016": {
+          "n": 49,
+          "mae": 0.316,
+          "bias": 0.136
+        },
+        "P1017": {
+          "n": 54,
+          "mae": 0.444,
+          "bias": -0.189
+        },
+        "P1018": {
+          "n": 47,
+          "mae": 0.414,
+          "bias": 0.302
+        },
+        "P1019": {
+          "n": 54,
+          "mae": 0.306,
+          "bias": -0.207
+        },
+        "P1020": {
+          "n": 54,
+          "mae": 0.665,
+          "bias": 0.066
+        },
+        "P1021": {
+          "n": 54,
+          "mae": 0.521,
+          "bias": 0.091
+        },
+        "P1022": {
+          "n": 54,
+          "mae": 0.447,
+          "bias": 0.004
+        },
+        "P1023": {
+          "n": 54,
+          "mae": 0.536,
+          "bias": 0.279
+        },
+        "P1024": {
+          "n": 51,
+          "mae": 0.205,
+          "bias": 0.014
+        },
+        "P1025": {
+          "n": 54,
+          "mae": 0.618,
+          "bias": 0.117
+        },
+        "P1026": {
+          "n": 54,
+          "mae": 0.517,
+          "bias": -0.181
+        }
+      }
+    },
+    "habits_to_weee_ridge_adl_oracle": {
+      "n": 156,
+      "n_participants": 17,
+      "mae": 0.194,
+      "rmse": 0.326,
+      "mape": 17.24,
+      "bias": -0.098,
+      "name": "habits\u2192weee adl oracle",
+      "eval_kind": "oracle_family",
+      "loa95": [
+        -0.709,
+        0.514
+      ],
+      "least_products": {
+        "slope": 2.6473,
+        "intercept": -1.3413,
+        "proportional_bias": true
+      },
+      "per_activity": {
+        "sit": {
+          "n": 69,
+          "n_participants": 16,
+          "mae": 0.107,
+          "rmse": 0.14,
+          "mape": 12.72,
+          "bias": -0.018,
+          "loa95": [
+            -0.291,
+            0.256
+          ],
+          "least_products": {
+            "slope": 2.1594,
+            "intercept": -0.9427,
+            "proportional_bias": true
+          }
+        },
+        "stand": {
+          "n": 87,
+          "n_participants": 16,
+          "mae": 0.263,
+          "rmse": 0.419,
+          "mape": 20.83,
+          "bias": -0.161,
+          "loa95": [
+            -0.923,
+            0.601
+          ],
+          "least_products": {
+            "slope": 2.6766,
+            "intercept": -1.3636,
+            "proportional_bias": true
+          }
+        }
+      },
+      "per_subject": {
+        "P01": {
+          "n": 9,
+          "mae": 0.239,
+          "bias": -0.239
+        },
+        "P02": {
+          "n": 10,
+          "mae": 0.129,
+          "bias": 0.119
+        },
+        "P03": {
+          "n": 11,
+          "mae": 0.168,
+          "bias": -0.15
+        },
+        "P04": {
+          "n": 10,
+          "mae": 0.128,
+          "bias": -0.111
+        },
+        "P05": {
+          "n": 9,
+          "mae": 0.118,
+          "bias": -0.118
+        },
+        "P06": {
+          "n": 6,
+          "mae": 0.292,
+          "bias": 0.292
+        },
+        "P07": {
+          "n": 10,
+          "mae": 0.206,
+          "bias": -0.192
+        },
+        "P08": {
+          "n": 9,
+          "mae": 0.078,
+          "bias": 0.078
+        },
+        "P09": {
+          "n": 9,
+          "mae": 0.126,
+          "bias": -0.126
+        },
+        "P10": {
+          "n": 4,
+          "mae": 0.367,
+          "bias": -0.285
+        },
+        "P11": {
+          "n": 11,
+          "mae": 0.186,
+          "bias": -0.013
+        },
+        "P12": {
+          "n": 10,
+          "mae": 0.248,
+          "bias": -0.193
+        },
+        "P13": {
+          "n": 12,
+          "mae": 0.259,
+          "bias": -0.242
+        },
+        "P14": {
+          "n": 5,
+          "mae": 0.177,
+          "bias": -0.177
+        },
+        "P15": {
+          "n": 12,
+          "mae": 0.324,
+          "bias": -0.083
+        },
+        "P16": {
+          "n": 10,
+          "mae": 0.165,
+          "bias": -0.107
+        },
+        "P17": {
+          "n": 9,
+          "mae": 0.168,
+          "bias": -0.086
+        }
+      }
+    },
+    "weee_to_habits_rf_adl_oracle": {
+      "n": 1118,
+      "n_participants": 22,
+      "mae": 0.405,
+      "rmse": 0.754,
+      "mape": 34.06,
+      "bias": 0.047,
+      "name": "weee\u2192habits rf adl",
+      "eval_kind": "oracle_family",
+      "loa95": [
+        -1.428,
+        1.522
+      ],
+      "least_products": {
+        "slope": 2.5317,
+        "intercept": -1.8396,
+        "proportional_bias": true
+      },
+      "per_activity": {
+        "General aerobics video": {
+          "n": 53,
+          "n_participants": 18,
+          "mae": 2.723,
+          "rmse": 2.992,
+          "mape": 58.59,
+          "bias": -2.687,
+          "loa95": [
+            -5.29,
+            -0.083
+          ],
+          "least_products": {
+            "slope": 7.1783,
+            "intercept": -7.8478,
+            "proportional_bias": true
+          }
+        },
+        "Lying down while doing nothing": {
+          "n": 59,
+          "n_participants": 20,
+          "mae": 0.239,
+          "rmse": 0.342,
+          "mape": 29.51,
+          "bias": 0.148,
+          "loa95": [
+            -0.46,
+            0.757
+          ],
+          "least_products": {
+            "slope": 1.0098,
+            "intercept": -0.1582,
+            "proportional_bias": false
+          }
+        },
+        "Reading a book or magazine while reclining": {
+          "n": 66,
+          "n_participants": 22,
+          "mae": 0.235,
+          "rmse": 0.31,
+          "mape": 29.56,
+          "bias": 0.213,
+          "loa95": [
+            -0.231,
+            0.658
+          ],
+          "least_products": {
+            "slope": 0.6315,
+            "intercept": 0.1758,
+            "proportional_bias": true
+          }
+        },
+        "Rest": {
+          "n": 775,
+          "n_participants": 22,
+          "mae": 0.262,
+          "rmse": 0.351,
+          "mape": 31.25,
+          "bias": 0.199,
+          "loa95": [
+            -0.367,
+            0.765
+          ],
+          "least_products": {
+            "slope": 0.6975,
+            "intercept": 0.1322,
+            "proportional_bias": true
+          }
+        },
+        "Standing while fidgeting": {
+          "n": 36,
+          "n_participants": 12,
+          "mae": 0.219,
+          "rmse": 0.302,
+          "mape": 25.62,
+          "bias": 0.121,
+          "loa95": [
+            -0.43,
+            0.671
+          ],
+          "least_products": {
+            "slope": 0.6451,
+            "intercept": 0.2352,
+            "proportional_bias": true
+          }
+        },
+        "Sweeping slowly": {
+          "n": 66,
+          "n_participants": 22,
+          "mae": 0.458,
+          "rmse": 0.588,
+          "mape": 20.17,
+          "bias": -0.368,
+          "loa95": [
+            -1.273,
+            0.537
+          ],
+          "least_products": {
+            "slope": 2.5823,
+            "intercept": -2.3682,
+            "proportional_bias": true
+          }
+        },
+        "Typing on a computer while seated": {
+          "n": 63,
+          "n_participants": 21,
+          "mae": 0.597,
+          "rmse": 0.642,
+          "mape": 76.28,
+          "bias": 0.597,
+          "loa95": [
+            0.131,
+            1.063
+          ],
+          "least_products": {
+            "slope": 0.7209,
+            "intercept": -0.1965,
+            "proportional_bias": true
+          }
+        }
+      },
+      "per_subject": {
+        "P1000": {
+          "n": 51,
+          "mae": 0.202,
+          "bias": 0.093
+        },
+        "P1002": {
+          "n": 45,
+          "mae": 0.189,
+          "bias": 0.146
+        },
+        "P1003": {
+          "n": 48,
+          "mae": 0.409,
+          "bias": -0.077
+        },
+        "P1004": {
+          "n": 51,
+          "mae": 0.409,
+          "bias": -0.034
+        },
+        "P1005": {
+          "n": 39,
+          "mae": 0.405,
+          "bias": 0.231
+        },
+        "P1006": {
+          "n": 51,
+          "mae": 0.574,
+          "bias": 0.043
+        },
+        "P1008": {
+          "n": 54,
+          "mae": 0.44,
+          "bias": -0.064
+        },
+        "P1010": {
+          "n": 51,
+          "mae": 0.479,
+          "bias": -0.062
+        },
+        "P1012": {
+          "n": 51,
+          "mae": 0.299,
+          "bias": -0.125
+        },
+        "P1013": {
+          "n": 47,
+          "mae": 0.472,
+          "bias": 0.038
+        },
+        "P1015": {
+          "n": 51,
+          "mae": 0.487,
+          "bias": 0.121
+        },
+        "P1016": {
+          "n": 49,
+          "mae": 0.286,
+          "bias": 0.218
+        },
+        "P1017": {
+          "n": 54,
+          "mae": 0.307,
+          "bias": -0.155
+        },
+        "P1018": {
+          "n": 47,
+          "mae": 0.377,
+          "bias": 0.377
+        },
+        "P1019": {
+          "n": 54,
+          "mae": 0.406,
+          "bias": -0.034
+        },
+        "P1020": {
+          "n": 54,
+          "mae": 0.729,
+          "bias": -0.029
+        },
+        "P1021": {
+          "n": 54,
+          "mae": 0.443,
+          "bias": 0.197
+        },
+        "P1022": {
+          "n": 54,
+          "mae": 0.316,
+          "bias": 0.077
+        },
+        "P1023": {
+          "n": 54,
+          "mae": 0.425,
+          "bias": 0.229
+        },
+        "P1024": {
+          "n": 51,
+          "mae": 0.138,
+          "bias": 0.056
+        },
+        "P1025": {
+          "n": 54,
+          "mae": 0.6,
+          "bias": -0.003
+        },
+        "P1026": {
+          "n": 54,
+          "mae": 0.458,
+          "bias": -0.11
+        }
+      }
+    },
+    "weee_to_habits_orient": {
+      "n": 1317,
+      "n_participants": 22,
+      "mae": 1.063,
+      "rmse": 1.368,
+      "mape": 100.48,
+      "bias": 0.642,
+      "name": "weee\u2192habits orient",
+      "eval_kind": "oracle_family",
+      "loa95": [
+        -1.726,
+        3.01
+      ],
+      "least_products": {
+        "slope": 1.1867,
+        "intercept": -1.0537,
+        "proportional_bias": true
+      },
+      "per_activity": {
+        "Chester Step Test (0.25 m step at a rate of 30 steps per minute)": {
+          "n": 35,
+          "n_participants": 13,
+          "mae": 1.996,
+          "rmse": 2.299,
+          "mape": 33.88,
+          "bias": -1.979,
+          "loa95": [
+            -4.307,
+            0.35
+          ],
+          "least_products": {
+            "slope": 1.6503,
+            "intercept": -0.3552,
+            "proportional_bias": true
+          }
+        },
+        "General aerobics video": {
+          "n": 53,
+          "n_participants": 18,
+          "mae": 1.176,
+          "rmse": 1.461,
+          "mape": 33.01,
+          "bias": 0.28,
+          "loa95": [
+            -2.559,
+            3.118
+          ],
+          "least_products": {
+            "slope": 1.0635,
+            "intercept": -0.5764,
+            "proportional_bias": false
+          }
+        },
+        "Lying down while doing nothing": {
+          "n": 59,
+          "n_participants": 20,
+          "mae": 1.079,
+          "rmse": 1.373,
+          "mape": 139.3,
+          "bias": 1.047,
+          "loa95": [
+            -0.709,
+            2.802
+          ],
+          "least_products": {
+            "slope": 0.2515,
+            "intercept": 0.3641,
+            "proportional_bias": true
+          }
+        },
+        "Reading a book or magazine while reclining": {
+          "n": 66,
+          "n_participants": 22,
+          "mae": 0.611,
+          "rmse": 0.943,
+          "mape": 70.52,
+          "bias": 0.538,
+          "loa95": [
+            -0.991,
+            2.067
+          ],
+          "least_products": {
+            "slope": 0.2012,
+            "intercept": 0.5647,
+            "proportional_bias": true
+          }
+        },
+        "Rest": {
+          "n": 775,
+          "n_participants": 22,
+          "mae": 0.945,
+          "rmse": 1.237,
+          "mape": 112.95,
+          "bias": 0.878,
+          "loa95": [
+            -0.831,
+            2.587
+          ],
+          "least_products": {
+            "slope": 0.2315,
+            "intercept": 0.4859,
+            "proportional_bias": true
+          }
+        },
+        "Running 4 mph on a treadmill": {
+          "n": 44,
+          "n_participants": 15,
+          "mae": 1.452,
+          "rmse": 1.678,
+          "mape": 30.6,
+          "bias": -1.452,
+          "loa95": [
+            -3.118,
+            0.213
+          ],
+          "least_products": {
+            "slope": 0.8786,
+            "intercept": 1.8505,
+            "proportional_bias": true
+          }
+        },
+        "Standing while fidgeting": {
+          "n": 36,
+          "n_participants": 12,
+          "mae": 0.838,
+          "rmse": 1.078,
+          "mape": 100.89,
+          "bias": 0.793,
+          "loa95": [
+            -0.659,
+            2.244
+          ],
+          "least_products": {
+            "slope": 0.2369,
+            "intercept": 0.4851,
+            "proportional_bias": true
+          }
+        },
+        "Sweeping slowly": {
+          "n": 66,
+          "n_participants": 22,
+          "mae": 1.787,
+          "rmse": 2.002,
+          "mape": 92.85,
+          "bias": 1.787,
+          "loa95": [
+            0.007,
+            3.567
+          ],
+          "least_products": {
+            "slope": 0.5379,
+            "intercept": 0.0078,
+            "proportional_bias": true
+          }
+        },
+        "Typing on a computer while seated": {
+          "n": 63,
+          "n_participants": 21,
+          "mae": 1.89,
+          "rmse": 1.953,
+          "mape": 237.61,
+          "bias": 1.89,
+          "loa95": [
+            0.922,
+            2.858
+          ],
+          "least_products": {
+            "slope": 0.3569,
+            "intercept": -0.1363,
+            "proportional_bias": true
+          }
+        },
+        "Walking 2 mph on treadmill": {
+          "n": 60,
+          "n_participants": 20,
+          "mae": 0.691,
+          "rmse": 0.91,
+          "mape": 23.11,
+          "bias": -0.487,
+          "loa95": [
+            -2.007,
+            1.033
+          ],
+          "least_products": {
+            "slope": 0.6063,
+            "intercept": 1.4777,
+            "proportional_bias": true
+          }
+        },
+        "Walking 3.5 mph on treadmill": {
+          "n": 60,
+          "n_participants": 20,
+          "mae": 0.989,
+          "rmse": 1.222,
+          "mape": 25.43,
+          "bias": -0.842,
+          "loa95": [
+            -2.592,
+            0.907
+          ],
+          "least_products": {
+            "slope": 1.2631,
+            "intercept": 0.0935,
+            "proportional_bias": true
+          }
+        }
+      },
+      "per_subject": {
+        "P1000": {
+          "n": 60,
+          "mae": 1.08,
+          "bias": 0.46
+        },
+        "P1002": {
+          "n": 45,
+          "mae": 1.16,
+          "bias": 1.13
+        },
+        "P1003": {
+          "n": 48,
+          "mae": 0.896,
+          "bias": 0.868
+        },
+        "P1004": {
+          "n": 57,
+          "mae": 1.255,
+          "bias": 0.989
+        },
+        "P1005": {
+          "n": 45,
+          "mae": 0.982,
+          "bias": 0.771
+        },
+        "P1006": {
+          "n": 63,
+          "mae": 1.093,
+          "bias": 0.413
+        },
+        "P1008": {
+          "n": 63,
+          "mae": 0.947,
+          "bias": 0.372
+        },
+        "P1010": {
+          "n": 63,
+          "mae": 1.098,
+          "bias": -0.043
+        },
+        "P1012": {
+          "n": 57,
+          "mae": 1.079,
+          "bias": 0.991
+        },
+        "P1013": {
+          "n": 58,
+          "mae": 0.606,
+          "bias": -0.032
+        },
+        "P1015": {
+          "n": 63,
+          "mae": 1.076,
+          "bias": 0.538
+        },
+        "P1016": {
+          "n": 61,
+          "mae": 1.285,
+          "bias": 0.868
+        },
+        "P1017": {
+          "n": 66,
+          "mae": 1.142,
+          "bias": 0.785
+        },
+        "P1018": {
+          "n": 54,
+          "mae": 1.513,
+          "bias": 1.473
+        },
+        "P1019": {
+          "n": 66,
+          "mae": 1.492,
+          "bias": 1.034
+        },
+        "P1020": {
+          "n": 66,
+          "mae": 1.403,
+          "bias": 0.855
+        },
+        "P1021": {
+          "n": 64,
+          "mae": 0.828,
+          "bias": 0.558
+        },
+        "P1022": {
+          "n": 63,
+          "mae": 0.761,
+          "bias": 0.458
+        },
+        "P1023": {
+          "n": 63,
+          "mae": 1.053,
+          "bias": 0.996
+        },
+        "P1024": {
+          "n": 60,
+          "mae": 0.561,
+          "bias": 0.098
+        },
+        "P1025": {
+          "n": 66,
+          "mae": 1.307,
+          "bias": 0.805
+        },
+        "P1026": {
+          "n": 66,
+          "mae": 0.74,
+          "bias": 0.052
+        }
+      }
+    },
+    "weee_to_habits_ridge_loco_oracle": {
+      "n": 199,
+      "n_participants": 20,
+      "mae": 1.073,
+      "rmse": 1.372,
+      "mape": 27.91,
+      "bias": -0.158,
+      "name": "weee\u2192habits loco oracle",
+      "eval_kind": "oracle_family",
+      "loa95": [
+        -2.836,
+        2.52
+      ],
+      "least_products": {
+        "slope": 1.4914,
+        "intercept": -1.7516,
+        "proportional_bias": true
+      },
+      "per_activity": {
+        "Chester Step Test (0.25 m step at a rate of 30 steps per minute)": {
+          "n": 35,
+          "n_participants": 13,
+          "mae": 1.514,
+          "rmse": 1.846,
+          "mape": 26.58,
+          "bias": -1.057,
+          "loa95": [
+            -4.066,
+            1.952
+          ],
+          "least_products": {
+            "slope": -1.405,
+            "intercept": 11.9042,
+            "proportional_bias": true
+          }
+        },
+        "Running 4 mph on a treadmill": {
+          "n": 44,
+          "n_participants": 15,
+          "mae": 1.119,
+          "rmse": 1.362,
+          "mape": 22.57,
+          "bias": -1.088,
+          "loa95": [
+            -2.713,
+            0.537
+          ],
+          "least_products": {
+            "slope": 1.1708,
+            "intercept": 0.4653,
+            "proportional_bias": true
+          }
+        },
+        "Walking 2 mph on treadmill": {
+          "n": 60,
+          "n_participants": 20,
+          "mae": 1.035,
+          "rmse": 1.312,
+          "mape": 37.43,
+          "bias": 0.883,
+          "loa95": [
+            -1.036,
+            2.801
+          ],
+          "least_products": {
+            "slope": -0.5319,
+            "intercept": 5.0704,
+            "proportional_bias": true
+          }
+        },
+        "Walking 3.5 mph on treadmill": {
+          "n": 60,
+          "n_participants": 20,
+          "mae": 0.82,
+          "rmse": 1.084,
+          "mape": 23.09,
+          "bias": 0.008,
+          "loa95": [
+            -2.133,
+            2.15
+          ],
+          "least_products": {
+            "slope": -1.0756,
+            "intercept": 7.6661,
+            "proportional_bias": true
+          }
+        }
+      },
+      "per_subject": {
+        "P1000": {
+          "n": 9,
+          "mae": 0.966,
+          "bias": -0.12
+        },
+        "P1004": {
+          "n": 6,
+          "mae": 1.19,
+          "bias": -0.369
+        },
+        "P1005": {
+          "n": 6,
+          "mae": 1.676,
+          "bias": 1.676
+        },
+        "P1006": {
+          "n": 12,
+          "mae": 1.357,
+          "bias": -1.357
+        },
+        "P1008": {
+          "n": 9,
+          "mae": 1.092,
+          "bias": -0.785
+        },
+        "P1010": {
+          "n": 12,
+          "mae": 1.548,
+          "bias": -1.315
+        },
+        "P1012": {
+          "n": 6,
+          "mae": 0.457,
+          "bias": 0.102
+        },
+        "P1013": {
+          "n": 11,
+          "mae": 1.289,
+          "bias": -0.331
+        },
+        "P1015": {
+          "n": 12,
+          "mae": 0.9,
+          "bias": -0.152
+        },
+        "P1016": {
+          "n": 12,
+          "mae": 0.771,
+          "bias": 0.258
+        },
+        "P1017": {
+          "n": 12,
+          "mae": 0.641,
+          "bias": 0.22
+        },
+        "P1018": {
+          "n": 7,
+          "mae": 3.102,
+          "bias": 3.102
+        },
+        "P1019": {
+          "n": 12,
+          "mae": 0.783,
+          "bias": -0.479
+        },
+        "P1020": {
+          "n": 12,
+          "mae": 1.536,
+          "bias": -1.131
+        },
+        "P1021": {
+          "n": 10,
+          "mae": 0.724,
+          "bias": 0.154
+        },
+        "P1022": {
+          "n": 9,
+          "mae": 0.404,
+          "bias": -0.225
+        },
+        "P1023": {
+          "n": 9,
+          "mae": 0.672,
+          "bias": -0.057
+        },
+        "P1024": {
+          "n": 9,
+          "mae": 0.389,
+          "bias": -0.23
+        },
+        "P1025": {
+          "n": 12,
+          "mae": 1.372,
+          "bias": -0.209
+        },
+        "P1026": {
+          "n": 12,
+          "mae": 0.988,
+          "bias": 0.271
+        }
+      }
+    },
+    "habits_to_weee_ridge_loco_oracle": {
+      "n": 102,
+      "n_participants": 15,
+      "mae": 2.0,
+      "rmse": 2.373,
+      "mape": 56.31,
+      "bias": 0.378,
+      "name": "habits\u2192weee loco oracle",
+      "eval_kind": "oracle_family",
+      "loa95": [
+        -4.237,
+        4.993
+      ],
+      "least_products": {
+        "slope": 0.9483,
+        "intercept": -0.096,
+        "proportional_bias": false
+      },
+      "per_activity": {
+        "run1": {
+          "n": 69,
+          "n_participants": 15,
+          "mae": 1.781,
+          "rmse": 2.076,
+          "mape": 43.37,
+          "bias": 0.376,
+          "loa95": [
+            -3.655,
+            4.406
+          ],
+          "least_products": {
+            "slope": 0.8755,
+            "intercept": 0.2829,
+            "proportional_bias": true
+          }
+        },
+        "run2": {
+          "n": 33,
+          "n_participants": 11,
+          "mae": 2.458,
+          "rmse": 2.899,
+          "mape": 83.36,
+          "bias": 0.382,
+          "loa95": [
+            -5.337,
+            6.101
+          ],
+          "least_products": {
+            "slope": -1.0481,
+            "intercept": 11.4606,
+            "proportional_bias": true
+          }
+        }
+      },
+      "per_subject": {
+        "P01": {
+          "n": 10,
+          "mae": 2.181,
+          "bias": -2.181
+        },
+        "P02": {
+          "n": 9,
+          "mae": 1.182,
+          "bias": 0.323
+        },
+        "P03": {
+          "n": 4,
+          "mae": 2.761,
+          "bias": 2.761
+        },
+        "P04": {
+          "n": 8,
+          "mae": 1.635,
+          "bias": -1.635
+        },
+        "P05": {
+          "n": 6,
+          "mae": 3.076,
+          "bias": -3.076
+        },
+        "P06": {
+          "n": 10,
+          "mae": 3.568,
+          "bias": 3.568
+        },
+        "P07": {
+          "n": 6,
+          "mae": 0.772,
+          "bias": 0.587
+        },
+        "P08": {
+          "n": 8,
+          "mae": 0.972,
+          "bias": 0.77
+        },
+        "P09": {
+          "n": 3,
+          "mae": 2.92,
+          "bias": -2.92
+        },
+        "P10": {
+          "n": 8,
+          "mae": 2.804,
+          "bias": 2.804
+        },
+        "P11": {
+          "n": 6,
+          "mae": 0.945,
+          "bias": 0.704
+        },
+        "P12": {
+          "n": 8,
+          "mae": 1.237,
+          "bias": 0.53
+        },
+        "P13": {
+          "n": 7,
+          "mae": 3.015,
+          "bias": 3.015
+        },
+        "P15": {
+          "n": 3,
+          "mae": 0.834,
+          "bias": -0.06
+        },
+        "P17": {
+          "n": 6,
+          "mae": 1.747,
+          "bias": -1.747
+        }
+      }
+    }
+  },
+  "rejected": [
+    {
+      "features": [
+        "gravity_z_mean",
+        "ax_ay_corr",
+        "tilt_estimate"
+      ],
+      "reason": "orientation features isolated: device axes are not a common frame",
+      "core_mae": 1.269,
+      "orient_mae": 1.063
+    },
+    {
+      "model": "random_forest",
+      "reason": "RF is slightly better on ADL transfer but not decisive; runtime stays family ridge",
+      "ridge_adl_transfer_mae": 0.475,
+      "rf_adl_transfer_mae": 0.405
+    },
+    {
+      "model": "neural_temporal",
+      "reason": "not trained: ridge/RF already compared; neural only allowed if both held-out AND transfer improve"
+    },
+    {
+      "family": "walking",
+      "reason": "no defensible walking model; runtime router falls back to V1"
+    },
+    {
+      "family": "daily_activity",
+      "reason": "not independently validated for the learned ADL ridge; runtime V1"
+    }
+  ],
+  "selected": {
+    "runtime": "ridge per activity family; walking and daily_activity are V1 at runtime",
+    "families": [
+      "imu_sedentary",
+      "hr_imu_locomotion",
+      "hr_cycling"
+    ],
+    "gyro_optional_families": [
+      "imu_sedentary"
+    ],
+    "artifact": "backend/energy/v3/artifact/energy-v3-runtime.json",
+    "eval_kind_warning": "oracle_family numbers below are NOT end-to-end V3"
+  },
+  "leakage_sentinel": {
+    "ok": true,
+    "train_enmo_mean": 0.0515,
+    "all_enmo_mean": 106060.64467500005
+  },
+  "mims_verdict": {
+    "feature": "bandpass_motion_auc_20hz",
+    "is_nhanes_mims": false,
+    "reason": "1-pole 0.2\u20135 Hz at 20 Hz; no 100 Hz cubic spline, no 4th-order Butterworth, no per-axis integrated MIMS, no monitor-independence claim"
+  },
+  "target": {
+    "criterion_vo2_ml_kg_min": "WEEE DataAverage VO2[mL/kg/min]; HAbits MetCart 60s VO2/kg column",
+    "criterion_met": "criterion_vo2_ml_kg_min / 3.5",
+    "pooled": true,
+    "pool_reason": "both datasets are oxygen MET (VO2 ml/kg/min / 3.5); HAbits printer METS is rounded VO2/kg/3.5, not Weir",
+    "not_used": [
+      "Ainsworth",
+      "Google Fit",
+      "public in-lab.py clamp-below-1.0",
+      "Weir VCO2 formula",
+      "5 kcal/L O2 as a training target"
+    ],
+    "production_kcal_convention": {
+      "kcal_per_litre_o2": 5.0,
+      "role": "production conversion approximation after MET; not mixed into the training target"
+    },
+    "sync": {
+      "weee": "VO2 DataAverage absolute Time aligned to E4 ACC unix after UTC+8 site offset; 60 s bins from segment start",
+      "habits": "MetCart 60s clock in America/Chicago vs acc_resample Time; first 2 activity minutes dropped as warmup (protocol, not residual)"
+    }
+  }
+}

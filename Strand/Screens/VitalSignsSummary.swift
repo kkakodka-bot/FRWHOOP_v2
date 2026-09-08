@@ -100,7 +100,7 @@ struct BodyVitalReading: Identifiable {
         case .noopComputed:
             // Live pipeline stores ±°C vs personal baseline (#622) — not absolute wrist °C.
             if key == "skin" { return String(localized: "vs baseline") }
-            return String(localized: "NOOP computed")
+            return String(localized: "NARA computed")
         case .appleHealth:
             return String(localized: "Apple Health")
         case .localCache:
@@ -188,7 +188,7 @@ enum BodyVitalSigns {
             }.sorted { $0.day < $1.day }
             : []
         // WHOOP 4.0 raw SpO₂: the (red + IR) / 2 ADC mean per night, present only when both channels
-        // decoded for the day. On-device only, so this resolves to the NOOP-computed row. (#93)
+        // decoded for the day. On-device only, so this resolves to the NARA-computed row. (#93)
         let spo2rawPoints = points(key: "spo2raw") { m in
             guard let r = m.spo2Red, let i = m.spo2Ir else { return nil }
             return (Double(r) + Double(i)) / 2.0
@@ -212,8 +212,8 @@ enum BodyVitalSigns {
         let hrvRow = latest(hrvPoints)
         let skinRowDeviation = latest(skinPoints)
         // #1118: mark HRV "unverified" when this night's in-sleep R-R was over-counted — the WHOOP 4.0
-        // two-optical-channel artifact that inflates R-R and contaminates RMSSD, so NOOP's HRV won't match
-        // WHOOP until the de-dup fix lands. The flag is written only for NOOP's OWN measured capture (an
+        // two-optical-channel artifact that inflates R-R and contaminates RMSSD, so NARA's HRV won't match
+        // WHOOP until the de-dup fix lands. The flag is written only for NARA's OWN measured capture (an
         // imported WHOOP-app night never sets it), so a pure-import night is never caveated. Gated on the
         // flag ALONE — no source check — to stay behaviourally identical to Android, whose DailyMetric
         // carries no per-row source (feature-level parity). (#1118)
@@ -325,7 +325,7 @@ enum BodyVitalSigns {
                 source: spo2Row?.source,
                 // Two different empty states, and conflating them is what sends people to the forums. When
                 // the night HAS raw red/IR counts, the strap's Blood-O₂ sensor plainly worked — only the
-                // calibrated % is missing, because WHOOP derives it in their cloud and NOOP will not
+                // calibrated % is missing, because WHOOP derives it in their cloud and NARA will not
                 // fabricate one (spo2Pct is import-only; see Spo2ReTrace). Saying "No SpO₂ import or Health
                 // value" there reads as "your sensor recorded nothing", next to a Raw SpO₂ tile showing a
                 // live number.

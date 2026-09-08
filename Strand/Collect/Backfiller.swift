@@ -434,7 +434,7 @@ final class Backfiller {
     /// to the Android twin. No em-dash (project rule).
     nonisolated static func futureRtcLine(endUnix: Int, wallNowUnix: Int) -> String {
         let aheadDays = max(0, (endUnix - wallNowUnix)) / 86_400
-        return "Backfill: the strap reported a record dated about \(aheadDays) day(s) in the FUTURE - its clock (RTC) is corrupt, not a NOOP problem. Those records can't be filed onto the right day. Fully charge the strap to 100% and reconnect so it re-syncs its clock; if it persists, forget and re-pair the strap."
+        return "Backfill: the strap reported a record dated about \(aheadDays) day(s) in the FUTURE - its clock (RTC) is corrupt, not a NARA problem. Those records can't be filed onto the right day. Fully charge the strap to 100% and reconnect so it re-syncs its clock; if it persists, forget and re-pair the strap."
     }
 
     /// #1683: how far BEHIND the wall clock the strap's newest stored record may sit before a sync that
@@ -465,7 +465,7 @@ final class Backfiller {
     /// Byte-identical to the Android twin. No em-dash (project rule).
     nonisolated static func staleRecordLine(newestUnix: Int, wallNowUnix: Int) -> String {
         let ageDays = max(0, wallNowUnix - newestUnix) / 86_400
-        return "Backfill: this sync banked nothing and the strap's newest stored record is about \(ageDays) day(s) old. If you have worn it since then, it has stopped saving history to its flash. NOOP already re-sends the clock on every connect, so charging alone may not be enough: charge to 100% and reconnect, then use Restart strap in Devices, and if that does not help forget and re-pair. If the official WHOOP app is also missing these days, the strap is the cause and not NOOP."
+        return "Backfill: this sync banked nothing and the strap's newest stored record is about \(ageDays) day(s) old. If you have worn it since then, it has stopped saving history to its flash. NARA already re-sends the clock on every connect, so charging alone may not be enough: charge to 100% and reconnect, then use Restart strap in Devices, and if that does not help forget and re-pair. If the official WHOOP app is also missing these days, the strap is the cause and not NARA."
     }
 
 
@@ -482,7 +482,7 @@ final class Backfiller {
     /// both platforms; localizing that surface is its own change. No em-dash (project rule).
     nonisolated static func staleRecordBanner(newestUnix: Int, wallNowUnix: Int) -> String {
         let ageDays = max(0, wallNowUnix - newestUnix) / 86_400
-        return "Synced, but your strap handed over no stored history, and its newest saved record is about \(ageDays) day(s) old. If you have been wearing it since then, it has stopped saving to flash. Charge it to 100% and reconnect; NOOP already re-sets its clock every connect, so if that does not help, try Restart strap in Devices, then forget and re-pair. If the official WHOOP app is missing these days too, the strap is the cause and not NOOP."
+        return "Synced, but your strap handed over no stored history, and its newest saved record is about \(ageDays) day(s) old. If you have been wearing it since then, it has stopped saving to flash. Charge it to 100% and reconnect; NARA already re-sets its clock every connect, so if that does not help, try Restart strap in Devices, then forget and re-pair. If the official WHOOP app is missing these days too, the strap is the cause and not NARA."
     }
 
     /// Commit one HISTORY_END chunk: (persist decoded → enqueueRaw when present) → setCursor → ackTrim.

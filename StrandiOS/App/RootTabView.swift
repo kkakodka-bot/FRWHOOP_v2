@@ -120,9 +120,9 @@ struct RootTabView: View {
             tab(todayTabRoot, "Today", "square.grid.2x2", path: $tabPaths[0], scrollSignal: scrollTop[0]).tag(0)
             tab(TrendsView(), "Trends", "chart.line.uptrend.xyaxis", path: $tabPaths[1], scrollSignal: scrollTop[1]).tag(1)
             tab(SleepView(), "Sleep", "bed.double", path: $tabPaths[2], scrollSignal: scrollTop[2]).tag(2)
-            // K3: Coach promoted to a top-level tab (was behind the More list). The sparkles icon
-            // matches the More-tab row and the macOS sidebar entry.
-            tab(CoachView(), "Coach", "sparkles", path: $tabPaths[3], scrollSignal: scrollTop[3]).tag(3)
+            // Medications holds the fourth tab (the slot Coach had under K3 before moving back to
+            // the More list). The screen is a placeholder: mock doses + a mock vital-response card.
+            tab(MedicationsView(), "Meds", "pills.fill", path: $tabPaths[3], scrollSignal: scrollTop[3]).tag(3)
             moreTab(path: $tabPaths[4], scrollSignal: scrollTop[4]).tag(4)
         }
         .tint(StrandPalette.accent)
@@ -162,6 +162,12 @@ struct RootTabView: View {
             Task.detached(priority: .utility) {
                 await FolderBackup.catchUpIfDue(checkpoint: { await backupRepo.checkpointForBackup() })
             }
+            // Experimental self-hosted push: launch only queues a catch-up when fully configured and enabled.
+            let pushRepo = repo
+            Task.detached(priority: .utility) {
+                guard let writer = await pushRepo.registryWriterForPush() else { return }
+                CloudPushScheduler.enqueueLaunchCatchUp(db: writer)
+            }
         }
         // Quick-action sheet presents with the calm easing (~0.42s) per the README sheet spec —
         // the easing is applied where `quickAction` is set (see `presentQuickAction`), keeping the
@@ -188,11 +194,6 @@ struct RootTabView: View {
                 router.requestedDestination = nil
             case .insightsHub, .labBook, .fusedRecord, .rhythm:
                 routedPillar = dest
-                router.requestedDestination = nil
-            case .coach:
-                // K3: Coach is now a top-level tab (tag 3) — switch to it directly instead of
-                // presenting it as a pillar sheet.
-                withAnimation(.timingCurve(0.22, 1, 0.36, 1, duration: 0.24)) { selectedTab = 3 }
                 router.requestedDestination = nil
             case .trends:
                 // Trends is a primary tab on iPhone (not a pillar sheet) — switch to it.
@@ -275,8 +276,6 @@ struct RootTabView: View {
                 case .fusedRecord: FusedRecordHost()
                 case .rhythm: RhythmHost(onClose: { routedPillar = nil })
                 case .devices: DevicesView()
-                // K5: the scheduled morning-brief notification's tap-through target.
-                case .coach: CoachView()
                 // .trends is never presented as a pillar sheet on iPhone (it's a primary tab — the
                 // requestedDestination handler switches `selectedTab` instead), but the switch must stay
                 // exhaustive. Fall back to Trends inside the sheet host if it ever arrives here.
@@ -419,7 +418,8 @@ struct RootTabView: View {
                 moreSection("Insights") {
                     MoreRow("What Moves You", "wand.and.sparkles", .insightsHub)
                     MoreRow("Intelligence", "brain.head.profile", .intelligence)
-                    // K3: Coach promoted to a top-level tab — no longer listed under More.
+                    // Coach is back in the More list — its K3 top-level tab slot now holds Meds.
+                    MoreRow("Coach", "sparkles", .coach)
                     MoreRow("Insights", "lightbulb.fill", .insights)
                     MoreRow("Explore", "square.grid.2x2.fill", .explore)
                     MoreRow("Compare", "rectangle.split.2x1.fill", .compare)
@@ -441,11 +441,12 @@ struct RootTabView: View {
                     MoreRow("Mi Band", "figure.walk.motion", .miBand)
                     MoreRow("Data Sources", "externaldrive.fill", .dataSources)
                     MoreRow("Backup & Sync", "externaldrive.fill.badge.icloud", .backupSync)
+                    MoreRow("Self-hosted push", "icloud.and.arrow.up.fill", .selfHostedPush)
                     // #155: HealthKit-free Apple Health path for sideloaded installs (Siri Shortcut
                     // reads the opt-in Documents/noop_sync.txt drop file).
                     MoreRow("Shortcuts Export", "square.and.arrow.up.fill", .shortcutsExport)
-                    // The plain 4.0 vs 5.0/MG capability grid — what NOOP reads live off each strap.
-                    MoreRow("NOOP Limitations", "list.bullet.rectangle", .noopLimitations)
+                    // The plain 4.0 vs 5.0/MG capability grid — what NARA reads live off each strap.
+                    MoreRow("NARA Limitations", "list.bullet.rectangle", .noopLimitations)
                 }
                 moreSection("App") {
                     // #805/#811: the v7.3.1 #766 alarm consolidation moved Smart Alarm under a single
@@ -551,7 +552,7 @@ struct RootTabView: View {
 private enum MoreDestination: Hashable {
     case insightsHub, intelligence, coach, insights, explore, compare
     case live, workouts, health, labBook, stress, breathe, intervals, rhythm
-    case fusedRecord, appleHealth, miBand, dataSources, backupSync, shortcutsExport, noopLimitations
+    case fusedRecord, appleHealth, miBand, dataSources, backupSync, selfHostedPush, shortcutsExport, noopLimitations
     case alarms, automations, testCentre, siriShortcuts, powerSaving, settings
 
     @ViewBuilder var destination: some View {
@@ -576,6 +577,7 @@ private enum MoreDestination: Hashable {
         case .dataSources:     DataSourcesView()
         case .noopLimitations: NoopLimitationsView()
         case .backupSync:      BackupSyncView()
+        case .selfHostedPush:  CloudPushView()
         case .shortcutsExport: ShortcutExportSettingsView()
         case .alarms:          SmartAlarmView()
         case .automations:     AutomationsView()

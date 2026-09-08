@@ -270,6 +270,15 @@ fun SelfHostedPushScreen() {
                     },
                 )
                 SettingsToggleRow(
+                    title = stringResource(R.string.push_binary_objects),
+                    detail = stringResource(R.string.push_binary_objects_detail),
+                    checked = snapshot.binaryObjectsEnabled,
+                    onCheckedChange = { requested ->
+                        settings.setBinaryObjectsEnabled(requested)
+                        snapshot = settings.snapshot()
+                    },
+                )
+                SettingsToggleRow(
                     title = stringResource(R.string.push_enabled),
                     detail = stringResource(R.string.push_enabled_detail),
                     checked = snapshot.enabled,
@@ -289,8 +298,22 @@ fun SelfHostedPushScreen() {
                     text = stringResource(R.string.push_export_now),
                     kind = NoopButtonKind.Secondary,
                     fullWidth = true,
-                    enabled = snapshot.ready,
+                    enabled = endpointValid && tokenAvailable && snapshot.enabled,
                     onClick = {
+                        if (!persistDestinationForExport(
+                                context = context,
+                                settings = settings,
+                                endpoint = endpoint,
+                                token = token,
+                                onEndpointSaved = { endpoint = it },
+                                onTokenCleared = { token = "" },
+                                onValidation = { validationMessage = it },
+                            )
+                        ) {
+                            snapshot = settings.snapshot()
+                            return@NoopButton
+                        }
+                        snapshot = settings.snapshot()
                         SelfHostedPushScheduler.enqueueManualCatchUp(context)
                         snapshot = settings.snapshot()
                     },
@@ -340,6 +363,33 @@ fun SelfHostedPushScreen() {
             snapshot.lastError?.let {
                 Text(stringResource(R.string.push_last_error, it), style = NoopType.footnote, color = Palette.statusWarning)
             }
+        }
+    }
+}
+
+private fun persistDestinationForExport(
+    context: android.content.Context,
+    settings: SelfHostedPushSettings,
+    endpoint: String,
+    token: String,
+    onEndpointSaved: (String) -> Unit,
+    onTokenCleared: () -> Unit,
+    onValidation: (String) -> Unit,
+): Boolean {
+    when (val result = settings.saveEndpoint(endpoint)) {
+        is PushEndpointPolicy.Result.Invalid -> {
+            onValidation(pushEndpointProblemMessage(context, result.problem))
+            return false
+        }
+        is PushEndpointPolicy.Result.Valid -> {
+            onEndpointSaved(result.endpoint.url)
+            if (token.isNotBlank()) settings.saveToken(token)
+            onTokenCleared()
+            if (!settings.setEnabled(true)) {
+                onValidation(context.getString(R.string.push_config_required))
+                return false
+            }
+            return settings.snapshot().ready
         }
     }
 }

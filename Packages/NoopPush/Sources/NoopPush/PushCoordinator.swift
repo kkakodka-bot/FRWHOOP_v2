@@ -1,0 +1,726 @@
+import Foundation
+
+/// Coordinates bounded DB snapshots and transport without holding a database read across network I/O.
+public struct PushCoordinator: Sendable {
+    private let source: any PushSnapshotSource
+    private let transport: any PushTransport
+    private let progress: any PushProgressStore
+    private let sourceId: String
+    private let today: @Sendable () -> Date
+    private let calendar: Calendar
+    private let destinationStillCurrent: @Sendable () -> Bool
+
+    public init(
+        source: any PushSnapshotSource,
+        transport: any PushTransport,
+        progress: any PushProgressStore,
+        sourceId: String,
+        today: @escaping @Sendable () -> Date = { Date() },
+        calendar: Calendar = .current,
+        destinationStillCurrent: @escaping @Sendable () -> Bool = { true }
+    ) {
+        self.source = source
+        self.transport = transport
+        self.progress = progress
+        self.sourceId = sourceId
+        self.today = today
+        self.calendar = calendar
+        self.destinationStillCurrent = destinationStillCurrent
+    }
+
+    public func pushAppend(_ table: PushAppendTable, deviceId: String) async -> PushResult {
+        let stored: PushCursor?
+        do {
+            stored = try await progress.cursor(table: table, deviceId: deviceId)
+        } catch {
+            return .rejected(reason: PushFailure(code: .localDatabase).safeCode, retryable: true, failure: PushFailure(code: .localDatabase))
+        }
+
+        let effective: PushCursor?
+        if let stored, stored.rowId > 0 {
+            do {
+                let atCursor = try await source.appendRecordAt(table: table, deviceId: deviceId, rowId: stored.rowId)
+                let fingerprint = atCursor.flatMap { try? PushProtocol.keyFingerprint(table: table, deviceId: deviceId, key: $0.key) }
+                effective = fingerprint == stored.naturalKeyFingerprint ? stored : nil
+            } catch is PushProtocolException {
+                return .rejected(reason: PushFailure(code: .localData).safeCode, retryable: false, failure: PushFailure(code: .localData))
+            } catch {
+                return .rejected(reason: PushFailure(code: .localDatabase).safeCode, retryable: true, failure: PushFailure(code: .localDatabase))
+            }
+        } else {
+            effective = nil
+        }
+
+        let rows: [PushAppendRecord]
+        do {
+            rows = try await source.appendRows(
+                table: table,
+                deviceId: deviceId,
+                afterRowId: effective?.rowId ?? 0,
+                limit: PushProtocolLimits.maxRecords + 1
+            )
+        } catch let error as PushProtocolException {
+            return .rejected(reason: PushFailure(code: .localData).safeCode, retryable: false, failure: PushFailure(code: .localData))
+        } catch {
+            return .rejected(reason: PushFailure(code: .localDatabase).safeCode, retryable: true, failure: PushFailure(code: .localDatabase))
+        }
+
+        guard !rows.isEmpty else { return .noData }
+
+        let batch: PushBatch
+        do {
+            batch = try PushProtocol.appendBatch(table: table, sourceId: sourceId, deviceId: deviceId, startCursor: effective, records: rows)
+        } catch {
+            return .rejected(reason: PushFailure(code: .localData).safeCode, retryable: false, failure: PushFailure(code: .localData))
+        }
+
+        let accepted = await deliver(batch)
+        guard case .accepted(let batchId, let recordCount, _, let batchCount) = accepted else { return accepted }
+        guard let end = batch.endCursor else {
+            return .rejected(reason: PushFailure(code: .localData).safeCode, retryable: false, failure: PushFailure(code: .localData))
+        }
+        do {
+            try await progress.saveCursor(table: table, deviceId: deviceId, cursor: end)
+            return .accepted(batchId: batchId, recordCount: recordCount, hasMore: rows.count > batch.recordCount, batchCount: batchCount)
+        } catch let error as PushProtocolException {
+            return .rejected(reason: PushFailure(code: .localData).safeCode, retryable: false, failure: PushFailure(code: .localData))
+        } catch {
+            return .rejected(reason: PushFailure(code: .localDatabase).safeCode, retryable: true, failure: PushFailure(code: .localDatabase))
+        }
+    }
+
+    public func pushMutable(_ table: PushMutableTable, deviceId: String) async -> PushResult {
+        let fullWindow = PushWindow.ending(today: today(), calendar: calendar)
+        let rows: [PushMutableRecord]
+        do {
+            rows = try await source.mutableRows(
+                table: table,
+                deviceId: deviceId,
+                window: fullWindow,
+                limit: PushProtocolLimits.maxMutableSnapshotRecords + 1
+            )
+        } catch let error as PushProtocolException {
+            return .rejected(reason: PushFailure(code: .localData).safeCode, retryable: false, failure: PushFailure(code: .localData))
+        } catch {
+            return .rejected(reason: PushFailure(code: .localDatabase).safeCode, retryable: true, failure: PushFailure(code: .localDatabase))
+        }
+
+        if rows.count > PushProtocolLimits.maxMutableSnapshotRecords {
+            return .rejected(reason: PushFailure(code: .localData).safeCode, retryable: false, failure: PushFailure(code: .localData))
+        }
+
+        var encodedBytes = 0
+        let days = enumerateDays(from: fullWindow.fromDay, to: fullWindow.toDay)
+        var recordsByDay = Dictionary(uniqueKeysWithValues: days.map { ($0, [PushMutableRecord]()) })
+        for record in rows {
+            let size: Int
+            do {
+                size = try PushProtocol.mutableRecordEncodedSize(table: table, record: record)
+            } catch {
+                return .rejected(reason: PushFailure(code: .localData).safeCode, retryable: false, failure: PushFailure(code: .localData))
+            }
+            encodedBytes += size
+            if encodedBytes > PushProtocolLimits.maxMutableSnapshotEncodedBytes {
+                return .rejected(reason: PushFailure(code: .localData).safeCode, retryable: false, failure: PushFailure(code: .localData))
+            }
+            let day: String
+            do {
+                day = try mutableRecordDay(table: table, record: record)
+            } catch {
+                return .rejected(reason: PushFailure(code: .localData).safeCode, retryable: false, failure: PushFailure(code: .localData))
+            }
+            guard recordsByDay[day] != nil else {
+                return .rejected(reason: PushFailure(code: .localData).safeCode, retryable: false, failure: PushFailure(code: .localData))
+            }
+            recordsByDay[day, default: []].append(record)
+        }
+
+        let currentHashes: [String: String]
+        do {
+            var hashes: [String: String] = [:]
+            for (day, dayRows) in recordsByDay {
+                hashes[day] = try PushProtocol.mutableSnapshotHash(table: table, records: dayRows)
+            }
+            currentHashes = hashes
+        } catch {
+            return .rejected(reason: PushFailure(code: .localData).safeCode, retryable: false, failure: PushFailure(code: .localData))
+        }
+
+        let previousHashes: [String: String]
+        do {
+            previousHashes = try await progress.window(table: table, deviceId: deviceId)?.dayHashes ?? [:]
+        } catch {
+            return .rejected(reason: PushFailure(code: .localDatabase).safeCode, retryable: true, failure: PushFailure(code: .localDatabase))
+        }
+
+        let changedDays = days.filter { previousHashes[$0] != currentHashes[$0] }
+        if changedDays.isEmpty { return .noData }
+
+        guard let firstChanged = changedDays.first, let lastChanged = changedDays.last else { return .noData }
+        let window = PushWindow.days(
+            from: parseDay(firstChanged) ?? today(),
+            to: parseDay(lastChanged) ?? today(),
+            calendar: calendar
+        )
+        let changedRows = days.filter { $0 >= firstChanged && $0 <= lastChanged }
+            .flatMap { recordsByDay[$0] ?? [] }
+
+        let batches: [PushBatch]
+        do {
+            batches = try PushProtocol.mutableBatches(table: table, sourceId: sourceId, deviceId: deviceId, window: window, records: changedRows)
+        } catch {
+            return .rejected(reason: PushFailure(code: .localData).safeCode, retryable: false, failure: PushFailure(code: .localData))
+        }
+
+        for batch in batches {
+            let accepted = await deliver(batch)
+            guard case .accepted = accepted else { return accepted }
+        }
+
+        let replacementId = batches.first?.replacementId ?? batches.first?.batchId ?? ""
+        do {
+            try await progress.saveWindow(
+                table: table,
+                deviceId: deviceId,
+                progress: PushWindowProgress(window: fullWindow, batchId: replacementId, dayHashes: currentHashes)
+            )
+            return .accepted(
+                batchId: replacementId,
+                recordCount: changedRows.count,
+                hasMore: false,
+                batchCount: batches.count
+            )
+        } catch {
+            return .rejected(reason: PushFailure(code: .localDatabase).safeCode, retryable: true, failure: PushFailure(code: .localDatabase))
+        }
+    }
+
+    public func pushBinary(_ table: PushBinaryTable, deviceId: String) async -> PushResult {
+        let stored: PushCursor?
+        do {
+            stored = try await progress.binaryCursor(table: table, deviceId: deviceId)
+        } catch {
+            return .rejected(reason: PushFailure(code: .localDatabase).safeCode, retryable: true, failure: PushFailure(code: .localDatabase))
+        }
+
+        let effective: PushCursor?
+        if table == .rawBatch {
+            effective = nil
+        } else if let stored, stored.rowId > 0 {
+            do {
+                let atCursor = try await source.binaryRecordAt(table: table, deviceId: deviceId, rowId: stored.rowId)
+                let fingerprint = atCursor.flatMap { try? PushProtocol.binaryKeyFingerprint(table: table, deviceId: deviceId, row: $0) }
+                effective = fingerprint == stored.naturalKeyFingerprint ? stored : nil
+            } catch is PushProtocolException {
+                return .rejected(reason: PushFailure(code: .localData).safeCode, retryable: false, failure: PushFailure(code: .localData))
+            } catch {
+                return .rejected(reason: PushFailure(code: .localDatabase).safeCode, retryable: true, failure: PushFailure(code: .localDatabase))
+            }
+        } else {
+            effective = nil
+        }
+
+        let limit = table == .rawBatch ? 1 : PushProtocolLimits.maxRecords + 1
+        let rows: [PushBinaryRow]
+        do {
+            rows = try await source.binaryRows(
+                table: table,
+                deviceId: deviceId,
+                afterRowId: effective?.rowId ?? 0,
+                limit: limit
+            )
+        } catch is PushProtocolException {
+            return .rejected(reason: PushFailure(code: .localData).safeCode, retryable: false, failure: PushFailure(code: .localData))
+        } catch {
+            return .rejected(reason: PushFailure(code: .localDatabase).safeCode, retryable: true, failure: PushFailure(code: .localDatabase))
+        }
+
+        guard !rows.isEmpty else { return .noData }
+
+        let batch: PushBinaryBatch
+        do {
+            batch = try PushProtocol.binaryObjectBatch(
+                table: table, sourceId: sourceId, deviceId: deviceId, startCursor: effective, rows: rows
+            )
+        } catch {
+            return .rejected(reason: PushFailure(code: .localData).safeCode, retryable: false, failure: PushFailure(code: .localData))
+        }
+
+        let accepted = await deliverBinary(batch)
+        guard case .accepted(let batchId, let recordCount, _, let batchCount) = accepted else { return accepted }
+
+        do {
+            if let end = batch.endCursor {
+                try await progress.saveBinaryCursor(table: table, deviceId: deviceId, cursor: end)
+            }
+            try await source.acknowledgeBinary(table: table, deviceId: deviceId, rows: rows)
+            let hasMore = table != .rawBatch && rows.count > batch.sampleCount
+            return .accepted(batchId: batchId, recordCount: recordCount, hasMore: hasMore, batchCount: batchCount)
+        } catch is PushProtocolException {
+            return .rejected(reason: PushFailure(code: .localData).safeCode, retryable: false, failure: PushFailure(code: .localData))
+        } catch {
+            return .rejected(reason: PushFailure(code: .localDatabase).safeCode, retryable: true, failure: PushFailure(code: .localDatabase))
+        }
+    }
+
+    /// Object-lane push (protocol 1.2): build → compress → intent → PUT direct to bucket →
+    /// complete → advance cursor, only on a matching ack. Raw rows move exclusively through this
+    /// lane; when the receiver advertises no lane the rows stay local.
+    public func pushObjects(_ table: PushBinaryTable, deviceId: String, lane: PushObjectLane) async -> PushResult {
+        let stored: PushCursor?
+        do {
+            stored = try await progress.binaryCursor(table: table, deviceId: deviceId)
+        } catch {
+            return .rejected(reason: PushFailure(code: .localDatabase).safeCode, retryable: true, failure: PushFailure(code: .localDatabase))
+        }
+
+        let effective: PushCursor?
+        if table == .rawBatch {
+            effective = nil
+        } else if let stored, stored.rowId > 0 {
+            do {
+                let atCursor = try await source.binaryRecordAt(table: table, deviceId: deviceId, rowId: stored.rowId)
+                let fingerprint = atCursor.flatMap { try? PushProtocol.binaryKeyFingerprint(table: table, deviceId: deviceId, row: $0) }
+                effective = fingerprint == stored.naturalKeyFingerprint ? stored : nil
+            } catch is PushProtocolException {
+                return .rejected(reason: PushFailure(code: .localData).safeCode, retryable: false, failure: PushFailure(code: .localData))
+            } catch {
+                return .rejected(reason: PushFailure(code: .localDatabase).safeCode, retryable: true, failure: PushFailure(code: .localDatabase))
+            }
+        } else {
+            effective = nil
+        }
+
+        let limit = table == .rawBatch ? 1 : PushProtocolLimits.maxRecords + 1
+        let rows: [PushBinaryRow]
+        do {
+            rows = try await source.binaryRows(
+                table: table,
+                deviceId: deviceId,
+                afterRowId: effective?.rowId ?? 0,
+                limit: limit
+            )
+        } catch is PushProtocolException {
+            return .rejected(reason: PushFailure(code: .localData).safeCode, retryable: false, failure: PushFailure(code: .localData))
+        } catch {
+            return .rejected(reason: PushFailure(code: .localDatabase).safeCode, retryable: true, failure: PushFailure(code: .localDatabase))
+        }
+
+        guard !rows.isEmpty else { return .noData }
+
+        let batch: PushBinaryBatch
+        do {
+            batch = try PushProtocol.binaryObjectBatch(
+                table: table, sourceId: sourceId, deviceId: deviceId, startCursor: effective, rows: rows,
+                protocolVersion: PushProtocol.objectVersion,
+                decodedLimit: PushProtocolLimits.maxObjectDecodedBytes
+            )
+        } catch {
+            return .rejected(reason: PushFailure(code: .localData).safeCode, retryable: false, failure: PushFailure(code: .localData))
+        }
+
+        // The negotiated ceiling is enforced before any network I/O; an object too large for the
+        // advertised lane can never succeed, so do not burn an intent on it.
+        guard Int64(batch.payload.count) <= lane.maxObjectBytes else {
+            return .rejected(reason: PushFailure(code: .localData).safeCode, retryable: false, failure: PushFailure(code: .localData))
+        }
+
+        let accepted = await deliverObject(batch, lane: lane)
+        guard case .accepted(let batchId, let recordCount, _, let batchCount) = accepted else { return accepted }
+
+        do {
+            if let end = batch.endCursor {
+                try await progress.saveBinaryCursor(table: table, deviceId: deviceId, cursor: end)
+            }
+            try await source.acknowledgeBinary(table: table, deviceId: deviceId, rows: rows)
+            let hasMore = table != .rawBatch && rows.count > batch.sampleCount
+            return .accepted(batchId: batchId, recordCount: recordCount, hasMore: hasMore, batchCount: batchCount)
+        } catch is PushProtocolException {
+            return .rejected(reason: PushFailure(code: .localData).safeCode, retryable: false, failure: PushFailure(code: .localData))
+        } catch {
+            return .rejected(reason: PushFailure(code: .localDatabase).safeCode, retryable: true, failure: PushFailure(code: .localDatabase))
+        }
+    }
+
+    public func pushKnownDevices(
+        startDeviceIndex: Int = 0,
+        maxDevices: Int = .max,
+        capabilities: PushCapabilities = .all,
+        binaryEnabled: Bool = false
+    ) async -> PushRunResult {
+        precondition(startDeviceIndex >= 0)
+        precondition(maxDevices > 0)
+        let ndjsonEnabled = !capabilities.appendTables.isEmpty || !capabilities.mutableTables.isEmpty
+        let binaryAllowed = binaryEnabled && !capabilities.binaryTables.isEmpty
+        if capabilities.isEmpty || (!ndjsonEnabled && !binaryAllowed) {
+            return PushRunResult(acceptedBatches: 0, rejectedBatches: 0, hasMoreAppendRows: false)
+        }
+
+        let devices: [String]
+        do {
+            let live = try await source.knownDeviceIds(capabilities: capabilities).filter { !$0.isBlank }.uniqued()
+            for id in live { try await progress.rememberDeviceId(id) }
+            let known = try await progress.knownDeviceIds()
+            devices = (live + known).filter { !$0.isBlank }.uniqued().sorted()
+        } catch {
+            let failure = PushFailure(code: .localDatabase)
+            return PushRunResult(
+                acceptedBatches: 0, rejectedBatches: 1, hasMoreAppendRows: false,
+                hasRetryableFailure: true, failure: failure
+            )
+        }
+
+        guard !devices.isEmpty else {
+            return PushRunResult(acceptedBatches: 0, rejectedBatches: 0, hasMoreAppendRows: false)
+        }
+
+        let start = startDeviceIndex % devices.count
+        let selectedCount = min(maxDevices, devices.count)
+        let selectedDevices = (0..<selectedCount).map { devices[(start + $0) % devices.count] }
+        let nextDeviceIndex = (start + selectedCount) % devices.count
+
+        var accepted = 0
+        var acceptedRecords = 0
+        var rejected = 0
+        var more = false
+        var binaryMore = false
+        var retryableFailure = false
+        var selectedFailure: PushFailure?
+
+        for deviceId in selectedDevices {
+            if ndjsonEnabled {
+                for table in PushAppendTable.allCases where capabilities.appendTables.contains(table) {
+                    switch await pushAppend(table, deviceId: deviceId) {
+                    case .accepted(_, let records, let hasMore, let batchCount):
+                        accepted += batchCount
+                        acceptedRecords += records
+                        more = more || hasMore
+                    case .rejected(_, let retryable, let failure):
+                        rejected += 1
+                        if selectedFailure == nil || (retryable && !retryableFailure) {
+                            selectedFailure = failure
+                        }
+                        retryableFailure = retryableFailure || retryable
+                    case .noData:
+                        break
+                    }
+                }
+                for table in PushMutableTable.allCases where capabilities.mutableTables.contains(table) {
+                    switch await pushMutable(table, deviceId: deviceId) {
+                    case .accepted(_, let records, _, let batchCount):
+                        accepted += batchCount
+                        acceptedRecords += records
+                    case .rejected(_, let retryable, let failure):
+                        rejected += 1
+                        if selectedFailure == nil || (retryable && !retryableFailure) {
+                            selectedFailure = failure
+                        }
+                        retryableFailure = retryableFailure || retryable
+                    case .noData:
+                        break
+                    }
+                }
+            }
+            if binaryAllowed {
+                for table in PushBinaryTable.allCases where capabilities.binaryTables.contains(table) {
+                    // Raw streams move only over the advertised object lane. With no lane the rows
+                    // stay local: the inline endpoint refuses them with `use_object_lane` and a
+                    // retry loop would burn battery on a refusal the client cannot act on.
+                    guard let lane = capabilities.objectLane, lane.streams.contains(table) else { continue }
+                    switch await pushObjects(table, deviceId: deviceId, lane: lane) {
+                    case .accepted(_, let records, let hasMore, let batchCount):
+                        accepted += batchCount
+                        acceptedRecords += records
+                        binaryMore = binaryMore || hasMore
+                    case .rejected(_, let retryable, let failure):
+                        rejected += 1
+                        if selectedFailure == nil || (retryable && !retryableFailure) {
+                            selectedFailure = failure
+                        }
+                        retryableFailure = retryableFailure || retryable
+                    case .noData:
+                        break
+                    }
+                }
+            }
+        }
+
+        return PushRunResult(
+            acceptedBatches: accepted,
+            rejectedBatches: rejected,
+            hasMoreAppendRows: more,
+            hasMoreBinaryRows: binaryMore,
+            acceptedRecords: acceptedRecords,
+            hasRetryableFailure: retryableFailure,
+            nextDeviceIndex: nextDeviceIndex,
+            hasMoreDevices: devices.count > selectedCount,
+            failure: selectedFailure
+        )
+    }
+
+    private func deliverBinary(_ batch: PushBinaryBatch) async -> PushResult {
+        guard destinationStillCurrent() else {
+            return .rejected(reason: "cancelled", retryable: true, failure: nil)
+        }
+        let response: PushTransportResponse
+        do {
+            response = try await transport.postBinary(batch)
+        } catch let error as PushTransportException {
+            return .rejected(reason: error.failure.safeCode, retryable: error.failure.retryable, failure: error.failure)
+        } catch {
+            return .rejected(reason: PushFailure(code: .networkIO).safeCode, retryable: true, failure: PushFailure(code: .networkIO))
+        }
+
+        if response.body.count > PushProtocolLimits.maxAckBytes {
+            return .rejected(reason: PushFailure(code: .ackInvalid).safeCode, retryable: false, failure: PushFailure(code: .ackInvalid))
+        }
+        if response.statusCode < 200 || response.statusCode > 299 {
+            let failure = PushFailure.http(
+                status: response.statusCode,
+                receiverCode: PushError.parseCode(response.body, expectedVersion: batch.protocolVersion)
+            )
+            return .rejected(reason: failure.safeCode, retryable: failure.retryable, failure: failure)
+        }
+        let ack: PushAck
+        do {
+            ack = try PushAck.parse(response.body)
+        } catch {
+            return .rejected(reason: PushFailure(code: .ackInvalid).safeCode, retryable: false, failure: PushFailure(code: .ackInvalid))
+        }
+        guard ack.exactlyMatches(batch) else {
+            return .rejected(reason: PushFailure(code: .ackInvalid).safeCode, retryable: false, failure: PushFailure(code: .ackInvalid))
+        }
+        return .accepted(batchId: batch.batchId, recordCount: batch.sampleCount, hasMore: false)
+    }
+
+    private func deliverObject(_ batch: PushBinaryBatch, lane: PushObjectLane) async -> PushResult {
+        guard destinationStillCurrent() else {
+            return .rejected(reason: "cancelled", retryable: true, failure: nil)
+        }
+
+        var manifest = PushObjectManifest(batch: batch)
+        var uploaded = false
+        var expectedKey: String? = nil
+
+        // Resume bookkeeping for an interrupted attempt. A persisted record whose identity no
+        // longer matches the rebuilt object is stale (local data changed) and is dropped; a
+        // matching one lets us skip straight to complete when the PUT already landed.
+        do {
+            if let inFlight = try await progress.inFlightObject(table: batch.table, deviceId: batch.deviceId) {
+                if inFlight.objectId == manifest.objectId && inFlight.contentSha256 == manifest.contentSha256 {
+                    uploaded = inFlight.uploaded
+                    expectedKey = inFlight.objectKey
+                } else {
+                    try await progress.saveInFlightObject(table: batch.table, deviceId: batch.deviceId, object: nil)
+                }
+            }
+        } catch {
+            return .rejected(reason: PushFailure(code: .localDatabase).safeCode, retryable: true, failure: PushFailure(code: .localDatabase))
+        }
+
+        if !uploaded {
+            let intent: PushObjectIntent
+            do {
+                intent = try await transport.createObjectIntent(manifest, lane: lane)
+            } catch let error as PushTransportException where error.failure.receiverCode == "object_id_conflict" {
+                // Same id, different bytes: the id is burned server-side. Mint a fresh one and
+                // retry exactly once; a second conflict means something is deeply wrong.
+                manifest = manifest.replacingObjectId(PushProtocol.freshObjectId())
+                do {
+                    intent = try await transport.createObjectIntent(manifest, lane: lane)
+                } catch {
+                    return objectLaneFailure(error)
+                }
+            } catch {
+                return objectLaneFailure(error)
+            }
+
+            guard intent.objectId == manifest.objectId else {
+                return .rejected(reason: PushFailure(code: .ackInvalid).safeCode, retryable: false, failure: PushFailure(code: .ackInvalid))
+            }
+            if intent.duplicate {
+                // Already archived under this id: success without a PUT or complete.
+                try? await progress.saveInFlightObject(table: batch.table, deviceId: batch.deviceId, object: nil)
+                return .accepted(batchId: batch.batchId, recordCount: batch.sampleCount, hasMore: false)
+            }
+            if let resumedKey = expectedKey, intent.objectKey != resumedKey {
+                // The receiver moved an incomplete object to a new key; resume must not fork.
+                return .rejected(reason: PushFailure(code: .ackInvalid).safeCode, retryable: false, failure: PushFailure(code: .ackInvalid))
+            }
+            expectedKey = intent.objectKey
+
+            // Persist before the PUT so a kill mid-upload resumes onto the same objectKey.
+            do {
+                try await progress.saveInFlightObject(
+                    table: batch.table, deviceId: batch.deviceId,
+                    object: PushInFlightObject(
+                        objectId: manifest.objectId, objectKey: intent.objectKey,
+                        contentSha256: manifest.contentSha256, uploaded: false
+                    )
+                )
+            } catch {
+                return .rejected(reason: PushFailure(code: .localDatabase).safeCode, retryable: true, failure: PushFailure(code: .localDatabase))
+            }
+
+            guard destinationStillCurrent() else {
+                return .rejected(reason: "cancelled", retryable: true, failure: nil)
+            }
+            do {
+                try await transport.uploadObject(intent, body: batch.payload)
+            } catch {
+                // Keep the in-flight record: the next run re-intents for a fresh URL onto the
+                // same objectKey rather than minting a new object.
+                return objectLaneFailure(error)
+            }
+            do {
+                try await progress.saveInFlightObject(
+                    table: batch.table, deviceId: batch.deviceId,
+                    object: PushInFlightObject(
+                        objectId: manifest.objectId, objectKey: intent.objectKey,
+                        contentSha256: manifest.contentSha256, uploaded: true
+                    )
+                )
+            } catch {
+                return .rejected(reason: PushFailure(code: .localDatabase).safeCode, retryable: true, failure: PushFailure(code: .localDatabase))
+            }
+        }
+
+        var reuploaded = false
+        while true {
+            let ack: PushObjectAck
+            do {
+                ack = try await transport.completeObject(objectId: manifest.objectId, lane: lane)
+            } catch let error as PushTransportException {
+                let code = error.failure.receiverCode
+                if !reuploaded, code == "size_mismatch" || code == "object_missing" {
+                    // The bytes at the bucket are missing or short of what the intent committed:
+                    // re-sign the same objectId and re-PUT exactly once.
+                    reuploaded = true
+                    do {
+                        let refreshed = try await transport.createObjectIntent(manifest, lane: lane)
+                        if refreshed.duplicate { continue } // became ready meanwhile → complete again
+                        guard refreshed.objectId == manifest.objectId else {
+                            return .rejected(reason: PushFailure(code: .ackInvalid).safeCode, retryable: false, failure: PushFailure(code: .ackInvalid))
+                        }
+                        try await transport.uploadObject(refreshed, body: batch.payload)
+                        expectedKey = refreshed.objectKey
+                    } catch {
+                        return objectLaneFailure(error)
+                    }
+                    continue
+                }
+                return objectLaneFailure(error)
+            } catch {
+                return objectLaneFailure(error)
+            }
+
+            guard ack.objectId == manifest.objectId, ack.releasesLocalRows else {
+                return .rejected(reason: PushFailure(code: .ackInvalid).safeCode, retryable: false, failure: PushFailure(code: .ackInvalid))
+            }
+            if let expectedKey, ack.objectKey != expectedKey {
+                return .rejected(reason: PushFailure(code: .ackInvalid).safeCode, retryable: false, failure: PushFailure(code: .ackInvalid))
+            }
+            try? await progress.saveInFlightObject(table: batch.table, deviceId: batch.deviceId, object: nil)
+            return .accepted(batchId: batch.batchId, recordCount: batch.sampleCount, hasMore: false)
+        }
+    }
+
+    private func objectLaneFailure(_ error: Error) -> PushResult {
+        if let error = error as? PushTransportException {
+            return .rejected(reason: error.failure.safeCode, retryable: error.failure.retryable, failure: error.failure)
+        }
+        return .rejected(reason: PushFailure(code: .networkIO).safeCode, retryable: true, failure: PushFailure(code: .networkIO))
+    }
+
+    private func deliver(_ batch: PushBatch) async -> PushResult {
+        guard destinationStillCurrent() else {
+            return .rejected(reason: "cancelled", retryable: true, failure: nil)
+        }
+        let response: PushTransportResponse
+        do {
+            response = try await transport.post(batch)
+        } catch let error as PushTransportException {
+            return .rejected(reason: error.failure.safeCode, retryable: error.failure.retryable, failure: error.failure)
+        } catch {
+            return .rejected(reason: PushFailure(code: .networkIO).safeCode, retryable: true, failure: PushFailure(code: .networkIO))
+        }
+
+        if response.body.count > PushProtocolLimits.maxAckBytes {
+            return .rejected(reason: PushFailure(code: .ackInvalid).safeCode, retryable: false, failure: PushFailure(code: .ackInvalid))
+        }
+        if response.statusCode < 200 || response.statusCode > 299 {
+            let failure = PushFailure.http(
+                status: response.statusCode,
+                receiverCode: PushError.parseCode(response.body, expectedVersion: batch.protocolVersion)
+            )
+            return .rejected(reason: failure.safeCode, retryable: failure.retryable, failure: failure)
+        }
+        let ack: PushAck
+        do {
+            ack = try PushAck.parse(response.body)
+        } catch {
+            return .rejected(reason: PushFailure(code: .ackInvalid).safeCode, retryable: false, failure: PushFailure(code: .ackInvalid))
+        }
+        guard ack.exactlyMatches(batch) else {
+            return .rejected(reason: PushFailure(code: .ackInvalid).safeCode, retryable: false, failure: PushFailure(code: .ackInvalid))
+        }
+        return .accepted(batchId: batch.batchId, recordCount: batch.recordCount, hasMore: false)
+    }
+
+    private func mutableRecordDay(table: PushMutableTable, record: PushMutableRecord) throws -> String {
+        switch table {
+        case .dailyMetric, .journal:
+            guard case .string(let day) = record.key["day"], !day.isEmpty else {
+                throw PushProtocolException("mutable day key is not a string")
+            }
+            guard parseDay(day) != nil else {
+                throw PushProtocolException("mutable day key is invalid")
+            }
+            return day
+        case .sleepSession, .workout:
+            guard let timestamp = record.key["startTs"]?.int64Value else {
+                throw PushProtocolException("mutable startTs key is not an integer")
+            }
+            let date = Date(timeIntervalSince1970: TimeInterval(timestamp))
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.dateFormat = "yyyy-MM-dd"
+            formatter.timeZone = calendar.timeZone
+            return formatter.string(from: date)
+        }
+    }
+
+    private func enumerateDays(from: String, to: String) -> [String] {
+        guard var current = parseDay(from), let end = parseDay(to) else { return [] }
+        var days: [String] = []
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        while current <= end {
+            days.append(formatter.string(from: current))
+            guard let next = Calendar(identifier: .gregorian).date(byAdding: .day, value: 1, to: current) else { break }
+            current = next
+        }
+        return days
+    }
+
+    private func parseDay(_ day: String) -> Date? {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        return formatter.date(from: day)
+    }
+}
+
+private extension String {
+    var isBlank: Bool { trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+}
+
+private extension Array where Element: Hashable {
+    func uniqued() -> [Element] {
+        var seen = Set<Element>()
+        return filter { seen.insert($0).inserted }
+    }
+}

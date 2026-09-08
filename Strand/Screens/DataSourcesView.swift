@@ -30,7 +30,7 @@ struct DataSourcesView: View {
     @State private var activityFileFailed = false
     // Wearable export (Oura / Fitbit / Garmin own-data export) import state — same lightweight,
     // self-contained pattern: parse the file, upsert daily metrics + sleep sessions under the brand's
-    // own source, refresh. The brand's own scores are stored as reference only, never NOOP scores.
+    // own source, refresh. The brand's own scores are stored as reference only, never NARA scores.
     @State private var wearableImporting = false
     @State private var wearableSummary: String?
     @State private var wearableFailed = false
@@ -50,8 +50,8 @@ struct DataSourcesView: View {
     @State private var confirmDeleteAppleHealth = false
     @State private var appleHealthDeletedSummary: String?
 
-    // "Broadcast heart rate" (opt-in, OFF by default): make NOOP a standard BLE Heart Rate peripheral
-    // (0x180D / 0x2A37) so a gym treadmill / Zwift / Peloton can read the live strap HR NOOP receives.
+    // "Broadcast heart rate" (opt-in, OFF by default): make NARA a standard BLE Heart Rate peripheral
+    // (0x180D / 0x2A37) so a gym treadmill / Zwift / Peloton can read the live strap HR NARA receives.
     // LOCAL Bluetooth only — nothing leaves the device. The toggle is persisted; the broadcaster is owned
     // here (a pure consumer of LiveState, isolated from the WHOOP/central path).
     @AppStorage(HrBroadcaster.defaultsKey) private var broadcastHrEnabled = false
@@ -644,7 +644,7 @@ struct DataSourcesView: View {
 
     /// Parse a user's own Oura / Fitbit / Garmin data export and upsert it under the brand's own source
     /// (daily metrics + sleep sessions + reference-only metric series). The brand's own readiness/sleep
-    /// score is NEVER mapped to a NOOP Charge/Effort/Rest — NOOP recomputes its own from the raw inputs.
+    /// score is NEVER mapped to a NARA Charge/Effort/Rest — NARA recomputes its own from the raw inputs.
     private func importWearable(url: URL) {
         wearableImporting = true
         wearableSummary = nil
@@ -831,13 +831,13 @@ struct DataSourcesView: View {
             .onChangeCompat(of: broadcastHrEnabled) { on in
                 if on { hrBroadcaster.start() } else { hrBroadcaster.stop() }
             }
-            Text("Acts as a standard Bluetooth heart-rate strap. Pair NOOP from your treadmill, bike or app to see your strap's heart rate there.")
+            Text("Acts as a standard Bluetooth heart-rate strap. Pair NARA from your treadmill, bike or app to see your strap's heart rate there.")
                 .font(StrandFont.footnote)
                 .foregroundStyle(StrandPalette.textTertiary)
                 .fixedSize(horizontal: false, vertical: true)
 
             // FI-2 (#490) — the 4.0-vs-5.0 explainer. Broadcast works for BOTH strap generations because it
-            // re-shares whatever LIVE heart rate NOOP already has off the strap; it doesn't depend on the
+            // re-shares whatever LIVE heart rate NARA already has off the strap; it doesn't depend on the
             // 5/MG-only deep-data path. The honest distinction is WHERE that live HR comes from (4.0 = the
             // strap's standard HR characteristic; 5/MG = PPG-derived once connected), not whether broadcast
             // works at all. Stated plainly so a 4.0 owner knows this is for them too.
@@ -880,7 +880,7 @@ struct DataSourcesView: View {
             generationRow(title: "WHOOP 4.0",
                           detail: String(localized: "Broadcasts the strap's own live heart rate over Bluetooth."))
             generationRow(title: "WHOOP 5.0 & MG",
-                          detail: String(localized: "Broadcasts the live heart rate NOOP derives from the strap once connected."))
+                          detail: String(localized: "Broadcasts the live heart rate NARA derives from the strap once connected."))
         }
         .padding(.top, 2)
         .padding(.horizontal, 10).padding(.vertical, 8)

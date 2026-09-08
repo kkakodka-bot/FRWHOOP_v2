@@ -23,7 +23,7 @@ struct CaffeineLogCard: View {
     private let quickHoursAgo: [Int] = [0, 1, 2, 3]
 
     // PR#566 (mvanhorn) — caffeine cutoff window + late-intake nudge. OPT-IN (default OFF, manual-first):
-    // when enabled, NOOP works back from the user's bedtime by the dose's decay lead and flags any logged
+    // when enabled, NARA works back from the user's bedtime by the dose's decay lead and flags any logged
     // intake that lands past that cutoff, with a calm inline nudge. Keys MIRROR the Android prefs
     // (KEY_CAFFEINE_CUTOFF / KEY_CAFFEINE_BEDTIME_MIN, default 23:00) so a layout reads the same on both.
     @AppStorage(Self.cutoffEnabledKey) private var cutoffEnabled = false
@@ -36,7 +36,7 @@ struct CaffeineLogCard: View {
             SectionHeader("Caffeine", overline: "Log")
             NoopCard(tint: StrandPalette.accent) {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("Log a coffee, tea, or energy drink and NOOP shows a rough estimate of how much may still be active. It's a guide based on a typical 5 to 6 hour half-life, not a measurement.")
+                    Text("Log a coffee, tea, or energy drink and NARA shows a rough estimate of how much may still be active. It's a guide based on a typical 5 to 6 hour half-life, not a measurement.")
                         .font(StrandFont.footnote)
                         .foregroundStyle(StrandPalette.textTertiary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -278,7 +278,7 @@ struct CaffeineLogCard: View {
                 Spacer()
                 // No remove control on an imported intake (#949): the next sync re-reads the same window
                 // from Apple Health and would bring it straight back, so offering the button would be
-                // offering something NOOP cannot honour. Remove it where it was logged.
+                // offering something NARA cannot honour. Remove it where it was logged.
                 if intake.isImported {
                     Text("Apple Health")
                         .font(StrandFont.caption)

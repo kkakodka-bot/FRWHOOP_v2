@@ -1,0 +1,43 @@
+{
+  "name": "backend",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js",
+    "test": "node --test 'tests/**/*.test.js'",
+    "validate:runtime": "node bin/validate-runtime.mjs",
+    "health": "node bin/watch-ingest.mjs",
+    "supervisor:install": "node bin/install-ingest-supervisor.mjs",
+    "audit:packet54": "node bin/packet54-audit.mjs",
+    "check:workout-e2e": "node tests/workoutE2E.check.mjs",
+    "eval:energy": "node energy/evaluate.js",
+    "eval:energy:rolling": "node energy/rollingOrigin.js",
+    "eval:weee": "node energy/weeeExperiment.mjs",
+    "eval:weee:uncertainty": "node energy/uncertaintyExperiment.mjs",
+    "eval:weee:currency": "node energy/currencyExperiment.mjs",
+    "eval:baseline": "node eval/run-suite.mjs --live --variant baseline",
+    "eval:full": "node eval/run-suite.mjs --live --variant full",
+    "eval:memory": "node eval/memory-bench.mjs",
+    "eval:retrieval": "node eval/retrieval-bench.mjs",
+    "eval:tools": "node eval/tool-bench.mjs",
+    "eval:longconv": "node eval/longconv.mjs",
+    "eval:summarize": "node eval/summarize.mjs",
+    "eval:weee:ablation": "node energy/ablationExperiment.mjs"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@pinecone-database/pinecone": "^6.0.1",
+    "axios": "^1.9.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.5.0",
+    "express": "^5.1.0",
+    "openai": "^4.103.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

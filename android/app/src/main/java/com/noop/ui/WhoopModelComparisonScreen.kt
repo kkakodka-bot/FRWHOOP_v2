@@ -60,7 +60,7 @@ private val CAPABILITIES: List<CapabilityRow> = listOf(
     CapabilityRow(
         "Live heart rate",
         Support.YES, Support.YES,
-        "Both stream live HR to NOOP over Bluetooth.",
+        "Both stream live HR to NARA over Bluetooth.",
     ),
     CapabilityRow(
         "Sleep, recovery & strain history",
@@ -69,10 +69,10 @@ private val CAPABILITIES: List<CapabilityRow> = listOf(
             "deeper history is still being mapped.",
     ),
     CapabilityRow(
-        "NOOP re-broadcasts your HR (gym / Zwift / Garmin)",
+        "NARA re-broadcasts your HR (gym / Zwift / Garmin)",
         Support.YES, Support.YES,
         "Data Sources → \"Broadcast heart rate\" turns your PHONE into a standard BLE HR sensor using " +
-            "whatever HR NOOP is reading, so this works on a 4.0 too. It's local Bluetooth; nothing leaves " +
+            "whatever HR NARA is reading, so this works on a 4.0 too. It's local Bluetooth; nothing leaves " +
             "your phone.",
     ),
     CapabilityRow(
@@ -84,8 +84,8 @@ private val CAPABILITIES: List<CapabilityRow> = listOf(
     CapabilityRow(
         "Steps",
         Support.PARTIAL, Support.YES,
-        "A 4.0 sends no step count, so NOOP ESTIMATES steps from motion, calibrated to your phone " +
-            "(Settings → Profile → Steps estimate). A 5/MG reports a motion counter NOOP reads directly.",
+        "A 4.0 sends no step count, so NARA ESTIMATES steps from motion, calibrated to your phone " +
+            "(Settings → Profile → Steps estimate). A 5/MG reports a motion counter NARA reads directly.",
     ),
     CapabilityRow(
         "Rename the strap's Bluetooth name",

@@ -1,0 +1,28 @@
+syntax = "proto3";
+package frwhoop.storage.v1;
+
+// SensorArchiveV1 — batched immutable wearable archive. One object covers a
+// time range (typically one source-day), never one sample.
+
+message SensorArchiveV1 {
+  uint32 schema_version = 1;
+  string user_uuid = 2;
+  string device_uuid = 3;
+  string source_kind = 4;
+  string device_family = 5;
+  string firmware = 6;
+  int64 capture_start = 7;
+  int64 capture_end = 8;
+  int32 timezone_offset_seconds = 9;
+  int64 created_at = 10;
+  repeated SensorStream streams = 11;
+}
+
+message SensorStream {
+  string name = 1;          // heart_rate, rr_interval, spo2_raw, ...
+  string unit = 2;          // bpm, ms, raw_adc, g — never reinterpret
+  repeated int64 ts = 3;    // unix seconds, parallel to values
+  repeated double values = 4;
+  repeated int32 values_i32 = 5;
+  string quality = 6;
+}

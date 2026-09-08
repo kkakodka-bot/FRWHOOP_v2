@@ -3,6 +3,16 @@ import WhoopProtocol
 import WhoopStore
 import StrandAnalytics
 
+extension UserDefaults {
+    /// FRWHOOP fork: raw capture defaults ON — the research corpus requires the raw stream, and
+    /// patients are treated as fully consented. Upstream NOOP defaults this off. Writing
+    /// `enableRawCapture = false` explicitly still opts out.
+    var noopRawCaptureEnabled: Bool {
+        if object(forKey: "enableRawCapture") == nil { return true }
+        return bool(forKey: "enableRawCapture")
+    }
+}
+
 /// The subset of WhoopStore the Collector needs. A protocol so tests can inject a spy
 /// (WhoopStore is `final`). WhoopStore conforms via the extension below.
 /// Not @MainActor — the WhoopStore actor's async methods satisfy the async requirements;

@@ -1434,9 +1434,9 @@ public final class BLEManager: NSObject, ObservableObject {
         // the `deviceRowForTest` helper), so this is dormant, but still wrong data on disk.
         let registeredName = (try? registry.all())?.first(where: { $0.id == deviceId })?.displayName
         try? await store.upsertDevice(id: deviceId, mac: nil, name: registeredName)
-        // Research toggle — OFF by default. When disabled the app is decoded-only and never
-        // persists raw frames. Flip "enableRawCapture" in UserDefaults to capture raw again.
-        let enableRawCapture = UserDefaults.standard.bool(forKey: "enableRawCapture")
+        // FRWHOOP fork: raw capture defaults ON (the research corpus requires the raw stream);
+        // upstream NOOP defaults it off. Set "enableRawCapture" to false in UserDefaults to opt out.
+        let enableRawCapture = UserDefaults.standard.noopRawCaptureEnabled
         collector = Collector(store: store, deviceId: deviceId,
                               enableRawCapture: enableRawCapture,
                               log: { [weak self] line in self?.log(line) },
@@ -2116,7 +2116,7 @@ public final class BLEManager: NSObject, ObservableObject {
             // Only stop the raw stream if the 24/7 research toggle is OFF.  When it's ON, the
             // continuous stream must keep running — we just flush/upload the bounded window we
             // captured without halting the wider session.
-            if !UserDefaults.standard.bool(forKey: "enableRawCapture") {
+            if !UserDefaults.standard.noopRawCaptureEnabled {
                 self.send(.stopRawData, payload: [0x01], writeType: .withResponse)
                 if self.selectedModel.deviceFamily == .whoop5 {
                     self.send(.toggleIMUMode, payload: [0x01, 0x00], writeType: .withResponse)
@@ -2145,7 +2145,7 @@ public final class BLEManager: NSObject, ObservableObject {
 
     /// Stop and flush the current manually controlled raw-data session.
     public func stopGroundTruthRawCapture() async {
-        if rawCaptureInFlight && !UserDefaults.standard.bool(forKey: "enableRawCapture") {
+        if rawCaptureInFlight && !UserDefaults.standard.noopRawCaptureEnabled {
             send(.stopRawData, payload: [0x01], writeType: .withResponse)
             if selectedModel.deviceFamily == .whoop5 {
                 send(.toggleIMUMode, payload: [0x01, 0x00], writeType: .withResponse)
@@ -2160,7 +2160,7 @@ public final class BLEManager: NSObject, ObservableObject {
     private func stopUnexpectedRealtimeImu(_ frame: [UInt8], isOffload: Bool, now: Date = Date()) {
         guard selectedModel.deviceFamily == .whoop5, !isOffload, frame.count > 8,
               frame[8] == 43 || frame[8] == 51,
-              !rawCaptureInFlight, !UserDefaults.standard.bool(forKey: "enableRawCapture"),
+              !rawCaptureInFlight, !UserDefaults.standard.noopRawCaptureEnabled,
               now.timeIntervalSince(rawCaptureStoppedAt) >= 3,
               now.timeIntervalSince(unexpectedImuStopAt) >= 30 else { return }
         unexpectedImuStopAt = now

@@ -66,6 +66,8 @@ packages:
   # record. The live PMD data path is not wired yet — this is identification/diagnostics only.
   PolarProtocol:
     path: Packages/PolarProtocol
+  NoopPush:
+    path: Packages/NoopPush
   # Compresses the full-database `.noopbak` backup (single-entry deflate ZIP) in DataBackup.swift.
   # Already resolved transitively via StrandImport; linked directly so the app target can
   # `import ZIPFoundation`. Same exact version as StrandImport's, so SPM resolves one copy.
@@ -98,14 +100,14 @@ targets:
     info:
       path: Strand/Resources/Info.plist
       properties:
-        CFBundleName: NOOP
-        CFBundleDisplayName: NOOP
+        CFBundleName: NARA
+        CFBundleDisplayName: NARA
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "198"
         LSMinimumSystemVersion: "13.0"
         LSApplicationCategoryType: public.app-category.healthcare-fitness
-        NSBluetoothAlwaysUsageDescription: "NOOP connects directly to your WHOOP strap over Bluetooth to read heart rate, R-R intervals, battery, and sensor data locally on your Mac. Nothing leaves your device."
-        NSLocationWhenInUseUsageDescription: "NOOP records your route during an outdoor workout to show distance, pace, and a map. The route stays on your device. Nothing leaves it."
+        NSBluetoothAlwaysUsageDescription: "NARA connects directly to your WHOOP strap over Bluetooth to read heart rate, R-R intervals, battery, and sensor data locally on your Mac. Nothing leaves your device."
+        NSLocationWhenInUseUsageDescription: "NARA records your route during an outdoor workout to show distance, pace, and a map. The route stays on your device. Nothing leaves it."
         # The AI Coach's "Custom (OpenAI-compatible)" provider talks to a LOCAL LLM server over plain
         # HTTP on loopback (Ollama / LM Studio / llama.cpp at http://localhost:…). ATS blocks cleartext
         # by default; NSAllowsLocalNetworking exempts loopback/.local/unqualified hosts ONLY — public
@@ -155,6 +157,7 @@ targets:
       - package: ZIPFoundation
       - package: OuraProtocol
       - package: PolarProtocol
+      - package: NoopPush
   StrandTests:
     type: bundle.unit-test
     platform: macOS
@@ -225,8 +228,8 @@ targets:
     info:
       path: StrandiOS/Resources/Info.plist
       properties:
-        CFBundleName: NOOP
-        CFBundleDisplayName: NOOP
+        CFBundleName: NARA
+        CFBundleDisplayName: NARA
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         # Surfaces APP_GROUP_ID to runtime (WidgetSnapshot.suiteName) so the App Group id isn't
@@ -280,23 +283,29 @@ targets:
           # #1538: finishes a re-score that a backgrounded offload started and could not complete. The
           # only BGProcessingTask of the three; the other two are refresh tasks.
           - $(PRODUCT_BUNDLE_IDENTIFIER).rescore
-        NSBluetoothAlwaysUsageDescription: "NOOP connects directly to your WHOOP strap over Bluetooth to read heart rate, R-R intervals, battery, and sensor data locally on your iPhone. Nothing leaves your device."
-        NSLocationWhenInUseUsageDescription: "NOOP records your route during an outdoor workout to show distance, pace, and a map, and keeps recording while the screen is off. The route stays on your device. Nothing leaves it."
-        NSHealthShareUsageDescription: "NOOP reads your own Apple Health data on-device to compute recovery, strain, and sleep. Nothing leaves your device."
-        NSHealthUpdateUsageDescription: "NOOP writes the metrics it computes from your strap back into Apple Health, on-device and only when you allow it."
-        NSMotionUsageDescription: "NOOP reads your iPhone's step count for a walking or running workout to show steps in the activity summary. It stays on your device. Nothing leaves it."
+          - $(PRODUCT_BUNDLE_IDENTIFIER).cloudpush
+        NSBluetoothAlwaysUsageDescription: "NARA connects directly to your WHOOP strap over Bluetooth to read heart rate, R-R intervals, battery, and sensor data locally on your iPhone. Nothing leaves your device."
+        NSLocationWhenInUseUsageDescription: "NARA records your route during an outdoor workout to show distance, pace, and a map, and keeps recording while the screen is off. The route stays on your device. Nothing leaves it."
+        NSHealthShareUsageDescription: "NARA reads your own Apple Health data on-device to compute recovery, strain, and sleep. Nothing leaves your device."
+        NSHealthUpdateUsageDescription: "NARA writes the metrics it computes from your strap back into Apple Health, on-device and only when you allow it."
+        NSMotionUsageDescription: "NARA reads your iPhone's step count for a walking or running workout to show steps in the activity summary. It stays on your device. Nothing leaves it."
         # K4: Coach voice input. Speech is transcribed ON-DEVICE ONLY (requiresOnDeviceRecognition);
         # the mic button is disabled where the locale doesn't support that, never falls back to
         # server transcription. Only the resulting TEXT reaches the provider, via the same channel
         # a typed question already uses.
-        NSSpeechRecognitionUsageDescription: "NOOP transcribes your question on-device so you can ask the coach out loud instead of typing. Audio never leaves your iPhone."
-        NSMicrophoneUsageDescription: "NOOP uses the microphone to let you ask the coach a question by voice. The audio is transcribed on-device and never leaves your iPhone."
+        NSSpeechRecognitionUsageDescription: "NARA transcribes your question on-device so you can ask the coach out loud instead of typing. Audio never leaves your iPhone."
+        NSMicrophoneUsageDescription: "NARA uses the microphone to let you ask the coach a question by voice. The audio is transcribed on-device and never leaves your iPhone."
         # #187: the opt-in AI Coach's "Custom (OpenAI-compatible)" provider can point at a LOCAL LLM on
         # the LAN (Ollama / LM Studio at http://192.168.x.x:11434). ATS blocks cleartext by default;
         # NSAllowsLocalNetworking exempts loopback/.local/private-LAN hosts ONLY — public HTTPS endpoints
         # are unaffected, so cloud providers stay TLS. Mirrors the macOS target.
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
+        # ATS is only half of it: iOS 14+ separately gates every connection to a LAN address behind the
+        # Local Network permission, and without this key the system cannot prompt, so the connection
+        # fails outright rather than asking. Required by the LAN LLM provider above and by the #1314
+        # self-hosted push export; both are user-configured endpoints, neither is a NOOP-operated server.
+        NSLocalNetworkUsageDescription: "NARA connects to a server on your own local network that you configure yourself — a local LLM for the coach, or your own endpoint for the opt-in data export. It contacts nothing else."
         # #155: expose the app's Documents folder to Files/Shortcuts so the user's Siri Shortcut can
         # read the opt-in noop_sync.txt drop file (Apple-Health-free export for sideloaded installs).
         # Both keys are required for the folder to actually appear in Files.
@@ -340,6 +349,7 @@ targets:
       - package: MarkdownUI
       - package: ZIPFoundation
       - package: PolarProtocol
+      - package: NoopPush
       - target: NOOPiOSWidgets
       # Embed the watchOS app so the iPhone app carries it (NOOP.app/Watch/NOOPWatch.app). A watch app
       # installs by riding inside its iOS companion; without this it would never reach a paired watch.
@@ -362,7 +372,7 @@ targets:
     info:
       path: StrandiOSWidgets/Info.plist
       properties:
-        CFBundleDisplayName: NOOP
+        CFBundleDisplayName: NARA
         # Version keys MUST live here in the generated-Info.plist properties — NOT hand-edited into the
         # file — because xcodegen regenerates StrandiOSWidgets/Info.plist on every `xcodegen generate`
         # (which every release runs for the version bump) and would otherwise rewrite them to its
@@ -412,8 +422,8 @@ targets:
     info:
       path: NOOPWatch/Info.plist
       properties:
-        CFBundleName: NOOP
-        CFBundleDisplayName: NOOP
+        CFBundleName: NARA
+        CFBundleDisplayName: NARA
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         # Surfaces APP_GROUP_ID to runtime (WatchScoreStore.suiteName) so the App Group id isn't
@@ -425,8 +435,8 @@ targets:
         # Built from the same $(BUNDLE_ID_PREFIX) rather than $(PRODUCT_BUNDLE_IDENTIFIER) because that
         # build setting would resolve to THIS target's own id, not NOOPiOS's.
         WKCompanionAppBundleIdentifier: $(BUNDLE_ID_PREFIX).noop
-        NSHealthShareUsageDescription: "NOOP reads your heart rate from the Watch sensor to show a live readout on your wrist. It stays on your device."
-        NSHealthUpdateUsageDescription: "NOOP records a basic workout session on your Watch for a higher-fidelity heart rate. The session stays on your device."
+        NSHealthShareUsageDescription: "NARA reads your heart rate from the Watch sensor to show a live readout on your wrist. It stays on your device."
+        NSHealthUpdateUsageDescription: "NARA records a basic workout session on your Watch for a higher-fidelity heart rate. The session stays on your device."
     entitlements:
       path: NOOPWatch/NOOPWatch.entitlements
       properties:
@@ -471,7 +481,7 @@ targets:
     info:
       path: NOOPWatchComplications/Info.plist
       properties:
-        CFBundleDisplayName: NOOP
+        CFBundleDisplayName: NARA
         # Version keys live here as generated-plist properties so xcodegen keeps them lockstep with the
         # parent watch app on every regenerate (mirrors the NOOPiOSWidgets rationale, #416).
         CFBundleShortVersionString: "$(MARKETING_VERSION)"

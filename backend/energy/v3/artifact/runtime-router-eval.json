@@ -1,0 +1,467 @@
+{
+  "eval_kind": "runtime_router",
+  "never_report_oracle_as_e2e_v3": true,
+  "dataset_role": "development_transfer_not_external_validation",
+  "weee": {
+    "label": "weee",
+    "n": 412,
+    "n_participants": 17,
+    "coverage": 0.252,
+    "abstention_fallback_rate": 0.748,
+    "correct_family_rate": 0.252,
+    "confusion": {
+      "imu_sedentary": {
+        "imu_sedentary": 93,
+        "unvalidated_activity_family": 57,
+        "no_lopo_pred_for_family": 4,
+        "walking_unvalidated_model": 6,
+        "ood_or_insufficient_domain": 1
+      },
+      "hr_cycling": {
+        "unvalidated_activity_family": 93,
+        "no_lopo_pred_for_family": 36,
+        "quiet_wrist_elevated_hr_unrouted": 11,
+        "walking_unvalidated_model": 7,
+        "ood_or_insufficient_domain": 2
+      },
+      "hr_imu_locomotion": {
+        "quiet_wrist_elevated_hr_unrouted": 1,
+        "walking_unvalidated_model": 58,
+        "unvalidated_activity_family": 32,
+        "hr_imu_locomotion": 11
+      }
+    },
+    "runtime_router": {
+      "n": 104,
+      "mae": 0.216,
+      "rmse": 0.472,
+      "mape": 14.03,
+      "bias": 0.01
+    },
+    "oracle_family": {
+      "n": 390,
+      "mae": 0.807,
+      "rmse": 1.256,
+      "mape": 31.9,
+      "bias": 0.035
+    },
+    "oracle_vs_routed_delta_mae": 0,
+    "on_routed_minutes": {
+      "runtime": {
+        "n": 104,
+        "mae": 0.216,
+        "rmse": 0.472,
+        "mape": 14.03,
+        "bias": 0.01
+      },
+      "oracle": {
+        "n": 104,
+        "mae": 0.216,
+        "rmse": 0.472,
+        "mape": 14.03,
+        "bias": 0.01
+      },
+      "n": 104
+    },
+    "risk_coverage": [
+      {
+        "coverage": 0.096,
+        "n": 10,
+        "mae": 0.081,
+        "rmse": 0.113,
+        "mape": 9.55,
+        "bias": -0.026
+      },
+      {
+        "coverage": 0.192,
+        "n": 20,
+        "mae": 0.105,
+        "rmse": 0.139,
+        "mape": 13.1,
+        "bias": -0.015
+      },
+      {
+        "coverage": 0.288,
+        "n": 30,
+        "mae": 0.106,
+        "rmse": 0.137,
+        "mape": 13.66,
+        "bias": -0.003
+      },
+      {
+        "coverage": 0.385,
+        "n": 40,
+        "mae": 0.131,
+        "rmse": 0.247,
+        "mape": 13.12,
+        "bias": 0.03
+      },
+      {
+        "coverage": 0.481,
+        "n": 50,
+        "mae": 0.195,
+        "rmse": 0.503,
+        "mape": 14.6,
+        "bias": -0.042
+      },
+      {
+        "coverage": 0.577,
+        "n": 60,
+        "mae": 0.183,
+        "rmse": 0.465,
+        "mape": 13.82,
+        "bias": -0.041
+      },
+      {
+        "coverage": 0.673,
+        "n": 70,
+        "mae": 0.199,
+        "rmse": 0.49,
+        "mape": 14.07,
+        "bias": -0.013
+      },
+      {
+        "coverage": 0.769,
+        "n": 80,
+        "mae": 0.196,
+        "rmse": 0.465,
+        "mape": 14.89,
+        "bias": -0.016
+      },
+      {
+        "coverage": 0.865,
+        "n": 90,
+        "mae": 0.193,
+        "rmse": 0.455,
+        "mape": 14.77,
+        "bias": -0.026
+      },
+      {
+        "coverage": 0.962,
+        "n": 100,
+        "mae": 0.212,
+        "rmse": 0.476,
+        "mape": 14.38,
+        "bias": 0.01
+      },
+      {
+        "coverage": 1,
+        "n": 104,
+        "mae": 0.216,
+        "rmse": 0.472,
+        "mape": 14.03,
+        "bias": 0.01
+      }
+    ],
+    "note": "oracle_family is an estimator upper bound. runtime_router is the production decision."
+  },
+  "habits": {
+    "label": "habits",
+    "n": 1318,
+    "n_participants": 22,
+    "coverage": 0.297,
+    "abstention_fallback_rate": 0.703,
+    "correct_family_rate": 0.297,
+    "confusion": {
+      "imu_sedentary": {
+        "ood_or_insufficient_domain": 11,
+        "unvalidated_activity_family": 503,
+        "imu_sedentary": 391,
+        "walking_unvalidated_model": 58,
+        "no_lopo_pred_for_family": 1
+      },
+      "v1": {
+        "unvalidated_activity_family": 150,
+        "walking_unvalidated_model": 118,
+        "no_lopo_pred_for_family": 42
+      },
+      "hr_imu_locomotion": {
+        "walking_unvalidated_model": 29,
+        "unvalidated_activity_family": 12,
+        "no_lopo_pred_for_family": 3
+      }
+    },
+    "runtime_router": {
+      "n": 391,
+      "mae": 0.131,
+      "rmse": 0.174,
+      "mape": 16.16,
+      "bias": 0.011
+    },
+    "oracle_family": {
+      "n": 963,
+      "mae": 0.151,
+      "rmse": 0.198,
+      "mape": 17.93,
+      "bias": 0.015
+    },
+    "oracle_vs_routed_delta_mae": 0,
+    "on_routed_minutes": {
+      "runtime": {
+        "n": 391,
+        "mae": 0.131,
+        "rmse": 0.174,
+        "mape": 16.16,
+        "bias": 0.011
+      },
+      "oracle": {
+        "n": 391,
+        "mae": 0.131,
+        "rmse": 0.174,
+        "mape": 16.16,
+        "bias": 0.011
+      },
+      "n": 391
+    },
+    "risk_coverage": [
+      {
+        "coverage": 0.1,
+        "n": 39,
+        "mae": 0.139,
+        "rmse": 0.195,
+        "mape": 14.26,
+        "bias": -0.058
+      },
+      {
+        "coverage": 0.199,
+        "n": 78,
+        "mae": 0.135,
+        "rmse": 0.174,
+        "mape": 15.82,
+        "bias": -0.013
+      },
+      {
+        "coverage": 0.299,
+        "n": 117,
+        "mae": 0.142,
+        "rmse": 0.18,
+        "mape": 16.76,
+        "bias": -0.014
+      },
+      {
+        "coverage": 0.399,
+        "n": 156,
+        "mae": 0.139,
+        "rmse": 0.175,
+        "mape": 17.06,
+        "bias": -0.001
+      },
+      {
+        "coverage": 0.499,
+        "n": 195,
+        "mae": 0.137,
+        "rmse": 0.17,
+        "mape": 16.77,
+        "bias": 0.001
+      },
+      {
+        "coverage": 0.598,
+        "n": 234,
+        "mae": 0.129,
+        "rmse": 0.162,
+        "mape": 15.85,
+        "bias": 0.005
+      },
+      {
+        "coverage": 0.698,
+        "n": 273,
+        "mae": 0.131,
+        "rmse": 0.164,
+        "mape": 16.52,
+        "bias": 0.016
+      },
+      {
+        "coverage": 0.798,
+        "n": 312,
+        "mae": 0.135,
+        "rmse": 0.175,
+        "mape": 16.7,
+        "bias": 0.012
+      },
+      {
+        "coverage": 0.898,
+        "n": 351,
+        "mae": 0.136,
+        "rmse": 0.18,
+        "mape": 16.52,
+        "bias": 0.003
+      },
+      {
+        "coverage": 0.997,
+        "n": 390,
+        "mae": 0.132,
+        "rmse": 0.174,
+        "mape": 16.19,
+        "bias": 0.011
+      },
+      {
+        "coverage": 1,
+        "n": 391,
+        "mae": 0.131,
+        "rmse": 0.174,
+        "mape": 16.16,
+        "bias": 0.011
+      }
+    ],
+    "note": "oracle_family is an estimator upper bound. runtime_router is the production decision."
+  },
+  "overall": {
+    "label": "overall",
+    "n": 1730,
+    "n_participants": 39,
+    "coverage": 0.286,
+    "abstention_fallback_rate": 0.714,
+    "correct_family_rate": 0.286,
+    "confusion": {
+      "imu_sedentary": {
+        "imu_sedentary": 484,
+        "unvalidated_activity_family": 560,
+        "no_lopo_pred_for_family": 5,
+        "walking_unvalidated_model": 64,
+        "ood_or_insufficient_domain": 12
+      },
+      "hr_cycling": {
+        "unvalidated_activity_family": 93,
+        "no_lopo_pred_for_family": 36,
+        "quiet_wrist_elevated_hr_unrouted": 11,
+        "walking_unvalidated_model": 7,
+        "ood_or_insufficient_domain": 2
+      },
+      "hr_imu_locomotion": {
+        "quiet_wrist_elevated_hr_unrouted": 1,
+        "walking_unvalidated_model": 87,
+        "unvalidated_activity_family": 44,
+        "hr_imu_locomotion": 11,
+        "no_lopo_pred_for_family": 3
+      },
+      "v1": {
+        "unvalidated_activity_family": 150,
+        "walking_unvalidated_model": 118,
+        "no_lopo_pred_for_family": 42
+      }
+    },
+    "runtime_router": {
+      "n": 495,
+      "mae": 0.149,
+      "rmse": 0.266,
+      "mape": 15.71,
+      "bias": 0.01
+    },
+    "oracle_family": {
+      "n": 1353,
+      "mae": 0.34,
+      "rmse": 0.695,
+      "mape": 21.96,
+      "bias": 0.02
+    },
+    "oracle_vs_routed_delta_mae": 0,
+    "on_routed_minutes": {
+      "runtime": {
+        "n": 495,
+        "mae": 0.149,
+        "rmse": 0.266,
+        "mape": 15.71,
+        "bias": 0.01
+      },
+      "oracle": {
+        "n": 495,
+        "mae": 0.149,
+        "rmse": 0.266,
+        "mape": 15.71,
+        "bias": 0.01
+      },
+      "n": 495
+    },
+    "risk_coverage": [
+      {
+        "coverage": 0.099,
+        "n": 49,
+        "mae": 0.135,
+        "rmse": 0.185,
+        "mape": 14.31,
+        "bias": -0.051
+      },
+      {
+        "coverage": 0.198,
+        "n": 98,
+        "mae": 0.129,
+        "rmse": 0.167,
+        "mape": 15.26,
+        "bias": -0.014
+      },
+      {
+        "coverage": 0.297,
+        "n": 147,
+        "mae": 0.136,
+        "rmse": 0.173,
+        "mape": 16.22,
+        "bias": -0.013
+      },
+      {
+        "coverage": 0.396,
+        "n": 196,
+        "mae": 0.139,
+        "rmse": 0.193,
+        "mape": 16.51,
+        "bias": 0.005
+      },
+      {
+        "coverage": 0.495,
+        "n": 245,
+        "mae": 0.135,
+        "rmse": 0.185,
+        "mape": 16.1,
+        "bias": 0.005
+      },
+      {
+        "coverage": 0.594,
+        "n": 294,
+        "mae": 0.14,
+        "rmse": 0.254,
+        "mape": 15.59,
+        "bias": -0.002
+      },
+      {
+        "coverage": 0.693,
+        "n": 343,
+        "mae": 0.145,
+        "rmse": 0.265,
+        "mape": 16.02,
+        "bias": 0.01
+      },
+      {
+        "coverage": 0.792,
+        "n": 392,
+        "mae": 0.149,
+        "rmse": 0.268,
+        "mape": 16.41,
+        "bias": 0.002
+      },
+      {
+        "coverage": 0.891,
+        "n": 441,
+        "mae": 0.153,
+        "rmse": 0.276,
+        "mape": 16.04,
+        "bias": 0.006
+      },
+      {
+        "coverage": 0.99,
+        "n": 490,
+        "mae": 0.149,
+        "rmse": 0.266,
+        "mape": 15.83,
+        "bias": 0.012
+      },
+      {
+        "coverage": 1,
+        "n": 495,
+        "mae": 0.149,
+        "rmse": 0.266,
+        "mape": 15.71,
+        "bias": 0.01
+      }
+    ],
+    "note": "oracle_family is an estimator upper bound. runtime_router is the production decision."
+  }
+}

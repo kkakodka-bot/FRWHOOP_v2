@@ -1,17 +1,19 @@
-# Self-hosted push protocol
+# Cloud push protocol
 
-This document specifies the wire contract for NOOP's **Experimental**, default-off export to a
-user-owned HTTP(S) endpoint. Protocol version **1.0** covers the Android-first client. It is a
-one-way export protocol: the on-device database is authoritative, the receiver acknowledges writes
-and may advertise only which fixed v1 streams it accepts. NOOP never reads health data, commands,
-URLs, field names, or other configuration back from the receiver.
+This document specifies the wire contract for NOOP's authenticated export to the FRWHOOP cloud
+durability pipeline. Protocol version **1.1** is the FRWHOOP fork registry (full `WhoopStore`
+coverage per [`CLOUD_INGESTION.md`](CLOUD_INGESTION.md)). Version **1.0** remains documented below for
+the upstream Experimental self-hosted export subset.
 
-NOOP does not ship, operate, or endorse a receiver. A receiver is not part of this repository, and
-this contract must not be interpreted as an account, hosted-sync, restore, or two-way-sync API.
+NOOP's on-device database is authoritative. The receiver acknowledges writes after fsync'd WAL
+durability, archives to B2, and upserts Supabase projections. It never decodes BLE frames, never
+recomputes scores, and never sends health data, commands, or configuration back to the client.
+Capability `GET` may report per-stream durability state; that metadata is not a sync or restore API.
 
 ## Transport and authentication
 
-The configured endpoint serves authenticated capabilities on `GET` and accepts one `POST` per batch.
+The configured endpoint serves authenticated capabilities on `GET` and accepts one `POST` per batch
+(or one binary-object upload per object — see [Binary object delivery](#binary-object-delivery)).
 The settings screen may issue this `GET` alone when the user selects **Test connection**; that action
 does not open the health database or send a batch.
 
@@ -19,13 +21,13 @@ does not open the health database or send a batch.
 GET /the/user-configured-path HTTP/1.1
 Accept: application/json
 Authorization: Bearer <user-supplied-token>
-NOOP-Push-Accept-Version: 1.0
+NOOP-Push-Accept-Version: 1.1,1.0
 ```
 
 A successful capability response has these required members:
 
 ```json
-{"type":"capabilities","protocolVersion":"1.0","receiverStateId":"5fc7b9a0-8055-4e49-a308-3a290f98d81a","streams":["hrSample","rrInterval","dailyMetric"]}
+{"type":"capabilities","protocolVersion":"1.1","receiverStateId":"5fc7b9a0-8055-4e49-a308-3a290f98d81a","streams":["hrSample","rrInterval","dailyMetric","labMarker"]}
 ```
 
 `NOOP-Push-Accept-Version` is a comma-separated, sender-preferred list of exact versions it can emit.
@@ -37,13 +39,20 @@ therefore requires the operator to rotate this ID. Rotation starts a new idempot
 receiver retains health records but atomically discards old batch acknowledgements, replacement staging,
 and generation fences so deterministic baseline batch IDs are applied again rather than short-circuited.
 
-`streams` is a duplicate-free subset of the twelve names in the selected v1 registry; array order has
+`streams` is a duplicate-free subset of the names in the negotiated registry (v1.0 or v1.1); array order has
 no semantic meaning. An empty array is valid. Unknown names, duplicate names, a missing required member,
 an unsupported version, malformed JSON, or a response over 16 KiB fail closed before Room is opened or
 health data is encoded. Unknown optional object members are ignored within a supported major version. The
 receiver cannot add tables or fields: the effective registry is always the intersection of its list
-and the client's compiled v1 registry. Android performs no snapshot read and no batch `POST` for an
-unadvertised stream.
+and the client's compiled registry for the selected version. Android performs no snapshot read and no
+batch `POST` for an unadvertised stream.
+
+Optional v1.1 capability members (ignored by v1.0 senders):
+
+| Member | Meaning |
+|---|---|
+| `streamDurability` | Map of `stream` → `pending` \| `ready` \| `verified` last-known server state for UI diagnostics. Not a client cursor. |
+| `userId` | Canonical FRWHOOP user UUID when the bearer resolves to an account. |
 
 Capability changes affect future attempts only. A client retains progress for an unadvertised
 stream, so advertising it again resumes from the existing cursor. Removing a stream from the list
@@ -267,10 +276,89 @@ scope, even when its exact window bounds differ. A receiver rejects late parts o
 generation with `409`. Senders serialize replacement generations for a scope; retries remain safe and
 parts may arrive out of numerical order.
 
-## Version 1 stream registry
+## Binary object delivery
 
-The v1 registry is deliberately finite. A table present in NOOP's database is **not** implicitly part
-of the protocol.
+`ppgWaveformSample`, `v18AuxSample`, and `rawBatch` ship as **binary objects**, not base64 inside
+NDJSON. Each object upload is a separate authenticated `POST` with a manifest sidecar JSON body and a
+binary entity body (or a two-step manifest-then-put flow — the receiver documents which).
+
+### Manifest sidecar
+
+```json
+{"type":"binaryObject","protocolVersion":"1.1","batchId":"e835f32f-60e7-4c93-90a0-51eb6830119a","sourceId":"3a3486dd-5030-4e17-a00d-a781399890f9","deviceId":"strap-local-id","stream":"ppgWaveformSample","objectId":"bf8b735e-f157-4a35-beb2-9b086d10d5bd","startTs":1723939200,"endTs":1723939201,"sampleCount":24,"uncompressedBytes":4096,"contentSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","contentEncoding":"gzip"}
+```
+
+| Member | Meaning |
+|---|---|
+| `type` | Always `"binaryObject"`. |
+| `batchId` | Stable UUID for these exact bytes across retries. |
+| `stream` | `ppgWaveformSample`, `v18AuxSample`, or `rawBatch`. |
+| `objectId` | UUID for the B2 key (`rawObjectKeyV3` in FRWHOOP). |
+| `startTs` / `endTs` | Half-open capture bounds for manifest indexing. |
+| `sampleCount` | Rows or frames covered. |
+| `contentSha256` | Lowercase SHA-256 of the decoded binary payload. |
+| `contentEncoding` | `gzip` or `zstd`. |
+
+The receiver fsyncs a WAL line referencing the manifest, acknowledges with the same strict matching
+rules as NDJSON batches (`protocolVersion`, `batchId`, `stream`, `deviceId`, `status == "accepted"`),
+then uploads to B2 and upserts `object_manifests`. Local `rawBatch` / waveform rows delete only after
+that acknowledgement.
+
+B2 keys follow FRWHOOP `backend/storage/keys.js`:
+
+| Stream | Extension | Retention class |
+|---|---|---|
+| `ppgWaveformSample` | `bin.gz` | `ppg` |
+| `v18AuxSample` | `bin.gz` | `diag` |
+| `rawBatch` | `pb.zst` | `core` |
+
+## Version 1.1 stream registry (FRWHOOP fork)
+
+v1.1 adds every shipped table from [`CLOUD_INGESTION.md`](CLOUD_INGESTION.md). Implementations use
+explicit SQL column lists — no reflection, no `SELECT *`. v1.0 streams keep identical keys and
+semantics; v1.1 only adds streams and optional `dailyMetric` data members.
+
+### v1.1 append streams (new in 1.1)
+
+| `stream` | Natural key | `data` members |
+|---|---|---|
+| `stepSample` | `ts` | `counter`, `activityClass` (nullable) |
+| `sleepStateSample` | `ts` | `state`, `rawByte` |
+| `ppgHrSample` | `ts` | `bpm`, `conf` (nullable) |
+| `appleStepHour` | `ts` | `steps` |
+| `ouraRaw` | `endpoint`, `documentId` | `day` (nullable), `payloadJSON`, `fetchedAt` |
+| `coachMessage` | `id` | `role`, `text`, `provider`, `createdAt`, `orderIndex` |
+
+`coachMessage.id` is a string UUID. `ouraRaw` natural key excludes `deviceId` (batch-scoped). Integer
+and boolean rules match v1.0.
+
+### v1.1 replace-window streams (new in 1.1)
+
+| `stream` | Key | Window selector | `data` members |
+|---|---|---|---|
+| `metricSeries` | `day`, `key` | `day` | `value` |
+| `appleDaily` | `day` | `day` | `steps`, `activeKcal`, `basalKcal`, `vo2max`, `avgHr`, `maxHr`, `walkingHr`, `weightKg` (all nullable) |
+| `scoreInputProvenance` | `day`, `key` | `day` | `sourceId` |
+| `labMarker` | `id` | `day` | `markerKey`, `category`, `day`, `takenAt`, `value`, `valueText`, `unit`, `source`, `note`, `referenceText` |
+| `liveSession` | `startTs` | `startTs` | `endTs`, `chargeAtStart`, `floorBpm`, `ceilingBpm`, `inBandSec`, `belowSec`, `aboveSec`, `pushCount`, `easeCount`, `hrSource` |
+
+`labMarker.id` is a string UUID; `day` appears in both key and data (the projection key and the
+reading's calendar day). `liveSession.endTs` is nullable while in progress.
+
+### v1.1 `dailyMetric` data members (extends v1.0)
+
+v1.1 senders add these nullable members to the existing `dailyMetric` row:
+
+| Member | Type |
+|---|---|
+| `avgSdnn` | finite number |
+| `skinTempC` | finite number |
+| `sleepHrOnly` | boolean |
+
+v1.0 receivers ignore unknown `data` members. v1.1 receivers must accept the full v1.0 set plus these
+three fields.
+
+## Version 1.0 stream registry (upstream subset)
 
 ### Append streams
 
@@ -305,9 +393,9 @@ are integers; metric and measurement fields are finite numbers. See [DATA_MODEL.
 and `android/app/src/main/java/com/noop/data/Entities.kt` for the local meanings and units. The wire
 registry, not automatic reflection over either database, determines what is sent.
 
-Newer tables such as `ppgHrSample`, `stepSample`, `sleepStateSample`, `metricSeries`, raw waveform /
-IMU tables, and any future schema additions are not silently exported by v1. Adding a stream or an
-optional `data` member requires a documented registry update and protocol minor version.
+Tables classified `local_only` in [`CLOUD_INGESTION.md`](CLOUD_INGESTION.md) are never exported.
+Adding a stream or an optional `data` member requires a documented registry update and protocol minor
+version bump in `cloud_ingestion_registry.json`.
 
 ## Acceptance, errors, and retry idempotency
 

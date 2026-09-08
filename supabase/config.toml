@@ -1,0 +1,45 @@
+# Local-first configuration. The canonical schema is supabase/migrations/.
+# For a hosted project run `supabase link --project-ref <your-project-ref>`
+# (stored in ignored supabase/.temp) — no project ref is committed here, and
+# production databases are never reset by these commands.
+
+project_id = "frwhoop"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54322
+shadow_port = 54320
+major_version = 17
+
+[db.migrations]
+schema_paths = []
+
+[auth]
+enabled = true
+site_url = "http://localhost:5173"
+enable_signup = true
+enable_anonymous_sign_ins = false
+# Leaked-password protection is a hosted Auth setting (Dashboard →
+# Authentication → Passwords). CLI 2.75 rejects password_hibp_enabled here.
+
+[auth.email]
+enable_signup = true
+enable_confirmations = true
+max_frequency = "1m0s"
+otp_length = 8
+
+[auth.mfa]
+max_enrolled_factors = 10
+
+[auth.mfa.totp]
+enroll_enabled = true
+verify_enabled = true
+
+[realtime]
+enabled = true

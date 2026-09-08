@@ -7,7 +7,7 @@ import WhoopProtocol   // Whoop5Ecg.WristSelection — the MG ECG wrist-selectio
 
 // MARK: - Devices
 //
-// Pair and manage the bands NOOP reads from. WHOOP-FIRST: the WHOOP is the primary, fully-supported
+// Pair and manage the bands NARA reads from. WHOOP-FIRST: the WHOOP is the primary, fully-supported
 // device; generic heart-rate straps (Polar / Wahoo / Coospo / Garmin HRM …) are an early, in-development
 // addition. The screen is a thin UI over `DeviceRegistry` (the Phase 1A/1B data layer): every mutation
 // goes through a registry op, and the `SourceCoordinator` (already wired in AppModel) reacts to the
@@ -22,7 +22,7 @@ struct DevicesView: View {
 
     var body: some View {
         ScreenScaffold(title: "Devices",
-                       subtitle: "Pair and manage the bands NOOP reads from.",
+                       subtitle: "Pair and manage the bands NARA reads from.",
                        // The day-of-sky liquid backdrop, matching Today / Health / Sleep / Trends: a fixed,
                        // full-bleed time-of-day sky behind the scroll content (it does not scroll).
                        topBackground: liquidScaffoldSky()) {
@@ -33,7 +33,7 @@ struct DevicesView: View {
                 // calm pending note rather than an empty screen in that brief window.
                 DataPendingNote(
                     title: "Getting your devices ready",
-                    message: "NOOP is opening your on-device data. Your paired bands will appear here in a moment.",
+                    message: "NARA is opening your on-device data. Your paired bands will appear here in a moment.",
                     symbol: "badge.plus.radiowaves.right")
             }
         }
@@ -192,7 +192,7 @@ private struct DevicesContent: View {
                     // generic strap, or an FTMS machine all funnel into live.batteryPct). nil otherwise.
                     liveBatteryPct: (device.status == .active && live.connected) ? live.batteryPct.map { Int($0.rounded()) } : nil,
                     liveBatteryMv: (device.status == .active && live.connected) ? live.batteryMv : nil,
-                    // Firmware version for the ACTIVE strap. It's a STABLE property (NOOP can't change a
+                    // Firmware version for the ACTIVE strap. It's a STABLE property (NARA can't change a
                     // strap's firmware), so prefer the live handshake value but fall back to the last-known
                     // persisted firmware (written on connect in FrameRouter) when the live value is momentarily
                     // nil — mid-handshake, or a connection that hasn't re-read GET_HELLO/REPORT_VERSION_INFO
@@ -315,7 +315,7 @@ private struct DevicesContent: View {
             Button("Cancel", role: .cancel) { removeTarget = nil }
             Button("Remove", role: .destructive) { confirmRemove(device) }
         } message: { device in
-            Text("Remove \(device.displayName)? NOOP will stop connecting to it. Its recorded data is kept and you can re-add it any time.")
+            Text("Remove \(device.displayName)? NARA will stop connecting to it. Its recorded data is kept and you can re-add it any time.")
         }
         // Restart strap confirm (#166)
         .alert("Restart this strap?",
@@ -445,7 +445,7 @@ private struct DevicesContent: View {
             Image(systemName: "info.circle")
                 .foregroundStyle(StrandPalette.textTertiary)
                 .accessibilityHidden(true)
-            Text("WHOOP is NOOP's primary, fully-supported band. Other heart-rate straps are an early, in-development addition: they stream live heart rate and HRV, but not WHOOP's deeper sleep and recovery data.")
+            Text("WHOOP is NARA's primary, fully-supported band. Other heart-rate straps are an early, in-development addition: they stream live heart rate and HRV, but not WHOOP's deeper sleep and recovery data.")
                 .font(StrandFont.footnote)
                 .foregroundStyle(StrandPalette.textTertiary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -608,7 +608,7 @@ private struct DevicesContent: View {
     /// so the dialog's choices come from the still-paired devices.
     private func confirmRemove(_ device: PairedDevice) {
         let wasActive = device.status == .active
-        // #78: actually RELEASE the BLE link, not just archive the registry row — otherwise NOOP keeps
+        // #78: actually RELEASE the BLE link, not just archive the registry row — otherwise NARA keeps
         // re-grabbing the strap (reconnect timer + targeted-connect pin + iOS state restoration), holding
         // it connected so it can never enter pairing mode to be re-paired.
         model.ble.forgetDevice(device.peripheralId)
@@ -732,7 +732,7 @@ private struct DeviceCard: View {
     /// #221: the full #78 pairing-refusal guidance (bonded-elsewhere / pairing-mode / Forget This Device
     /// steps), shown on the card when `bondRefused` so the fix is self-service. nil otherwise.
     var pairingHint: String? = nil
-    /// The active strap's link dropped for a user-initiated reboot and NOOP is auto-reconnecting (#166).
+    /// The active strap's link dropped for a user-initiated reboot and NARA is auto-reconnecting (#166).
     /// Drives the transient "Reconnecting…" pill; false for every non-reboot state.
     var isReconnecting: Bool = false
     /// The active+connected device's live battery percent (0–100), surfaced on the card the same way
@@ -812,7 +812,7 @@ private struct DeviceCard: View {
 
                 // Honest local-takeover state row for an adopted Oura ring that is paired but not the
                 // active+connected source right now. States the single-owner reality plainly (if the ring
-                // was reset again or re-claimed in the Oura app, NOOP no longer owns it) without faking a
+                // was reset again or re-claimed in the Oura app, NARA no longer owns it) without faking a
                 // live reading. Suppressed for the active+connected ring and for removed rings.
                 if device.sourceKind == .oura && !isLiveConnected && device.status == .paired {
                     ouraLocalStateNote
@@ -822,7 +822,7 @@ private struct DeviceCard: View {
                 // mislabel e.g. a "Blood oxygen" chip when no SpO₂ % ever comes off the strap).
                 capabilityRow(symbol: "waveform.path.ecg", text: profile.captures,
                               tint: StrandPalette.textSecondary)
-                // What NOOP USES it for — the scores/screens this device drives.
+                // What NARA USES it for — the scores/screens this device drives.
                 capabilityRow(symbol: "bolt.fill", text: profile.powers,
                               tint: StrandPalette.textSecondary)
                 // Honest footnote: the "*" estimates + the SpO₂/steps caveats.
@@ -851,7 +851,7 @@ private struct DeviceCard: View {
 
                 // #987: strap clock state for the active+connected strap - "clock latched" + frame
                 // freshness, with the plain amber 1970/71 warning when the RTC was never set (the strap
-                // banks no history in that state, which otherwise looks like a NOOP sync bug).
+                // banks no history in that state, which otherwise looks like a NARA sync bug).
                 if let clockLine = liveClockLine {
                     Text(clockLine)
                         .font(StrandFont.footnote)
@@ -1114,7 +1114,7 @@ private struct DeviceCard: View {
 
     /// Honest paired-but-not-connected note for a locally-adopted Oura ring. Amber heads-up, no fabricated
     /// reading: re-states the single-owner reality so the user understands why a re-reset / Oura re-claim
-    /// would break NOOP's ownership.
+    /// would break NARA's ownership.
     private var ouraLocalStateNote: some View {
         HStack(alignment: .top, spacing: 6) {
             Image(systemName: "info.circle")
@@ -1122,7 +1122,7 @@ private struct DeviceCard: View {
                 .foregroundStyle(StrandPalette.statusWarning)
                 .frame(width: 14)
                 .accessibilityHidden(true)
-            Text("Paired locally. NOOP owns this ring while it holds the key. If you reset it again or set it up in the Oura app, NOOP no longer owns it and you would re-add it to take it over.")
+            Text("Paired locally. NARA owns this ring while it holds the key. If you reset it again or set it up in the Oura app, NARA no longer owns it and you would re-add it to take it over.")
                 .font(StrandFont.caption)
                 .foregroundStyle(StrandPalette.statusWarning)
                 .fixedSize(horizontal: false, vertical: true)
@@ -1143,19 +1143,19 @@ private struct DeviceCard: View {
 
 // MARK: - Capability profile
 
-/// Honest, per-model summary of what a device captures and what NOOP uses it for — shown on its card.
+/// Honest, per-model summary of what a device captures and what NARA uses it for — shown on its card.
 ///
 /// Derived from brand/model/sourceKind, NOT from the stored capability `Set`. The stored set is generic
 /// across WHOOP models (it would render an identical "Heart rate · HRV · Blood oxygen · Skin temp · …"
 /// line for a 4.0 and a 5/MG alike) and it mislabels: no SpO₂ **percentage** ever comes off any WHOOP
 /// strap (raw red/IR only — a real % exists only from a WHOOP CSV / Apple Health import), skin temp is a
 /// nightly ±°C sleep deviation rather than a live reading, steps are 5/MG-only and a raw motion count,
-/// and Charge/Effort/Rest are NOOP-derived scores. Verdicts are source-verified against the decode +
+/// and Charge/Effort/Rest are NARA-derived scores. Verdicts are source-verified against the decode +
 /// scoring paths (the device-capability audit). `*` in a label = an on-device estimate, not a raw sensor.
 struct DeviceCapabilityProfile {
     let displayModel: String   // clean card subtitle (replaces the redundant "WHOOP · WHOOP")
     let captures: String       // "·"-joined honest capture labels for THIS model
-    let powers: String         // the NOOP scores / screens this device drives
+    let powers: String         // the NARA scores / screens this device drives
     let footnote: String       // one short honest caveat line ("*" estimates + the SpO₂/steps notes)
 
     static func make(for d: PairedDevice) -> DeviceCapabilityProfile {
@@ -1175,10 +1175,10 @@ struct DeviceCapabilityProfile {
                 displayModel: String(localized: "\(d.brand) (experimental)"),
                 captures: String(localized: "Heart rate (live, best-effort)"),
                 powers: String(localized: "Powers the live console + Effort. No Charge, Rest or Sleep"),
-                footnote: String(localized: "Experimental: live heart rate where the band exposes it. Some bands need a pairing we can't do yet. NOOP will say so honestly and never show a made-up number. No sleep, recovery, skin temp, SpO₂ or steps."))
+                footnote: String(localized: "Experimental: live heart rate where the band exposes it. Some bands need a pairing we can't do yet. NARA will say so honestly and never show a made-up number. No sleep, recovery, skin temp, SpO₂ or steps."))
         }
         // EXPERIMENTAL locally-adopted Oura ring (gen 3/4/5). The gen is carried on `model` ("Oura Ring
-        // 3/4/5") and recovered with OuraRingGen.from(model:). NOOP reads the ring's OWN raw signals + open
+        // 3/4/5") and recovered with OuraRingGen.from(model:). NARA reads the ring's OWN raw signals + open
         // HRV/sleep-phase tags and computes its own Charge/Effort/Rest; it NEVER reads Oura's encrypted
         // Readiness/Sleep scores, and claims NO absolute SpO₂ %. Estimates carry "*"; a signal it can't read
         // stays "-". Per-gen copy and the canonical Beta caveat (spec
@@ -1236,7 +1236,7 @@ struct DeviceCapabilityProfile {
                 powers: whoopPowers,
                 footnote: String(localized: "* on-device estimate: skin temp is a nightly ±°C deviation, steps are a raw motion count (#78). No SpO₂ % off the strap; import a WHOOP CSV for a real %."))
         }
-        // WHOOP 4.0 — NOOP's primary band; no steps over BLE.
+        // WHOOP 4.0 — NARA's primary band; no steps over BLE.
         if model.contains("4") {
             return DeviceCapabilityProfile(
                 displayModel: "WHOOP 4.0",
@@ -1358,7 +1358,7 @@ private struct ForgetDeviceSheet: ViewModifier {
                     target = nil
                 }
             } message: { _ in
-                Text("NOOP removes this device from your list and deletes its recorded data here. You can re-pair the strap to pull its recent history back.")
+                Text("NARA removes this device from your list and deletes its recorded data here. You can re-pair the strap to pull its recent history back.")
             }
     }
 }
@@ -1491,7 +1491,7 @@ private struct EcgProbeSheets: ViewModifier {
                 Button("Set which wrist you wear it on…") { target = nil; wristTarget = device }
                 Button("Cancel", role: .cancel) { target = nil }
             } message: { _ in
-                Text("NOOP is not a medical device and this is not an ECG test. It asks your MG to start its ECG subsystem and logs whatever comes back — unvalidated instrumentation for protocol research, never a measurement or a diagnosis, including any heart-rhythm classification the strap happens to send. Don't use it to make a health decision; see a doctor if you have symptoms.\n\nHold the two indents on the clasp with the fingers of your other hand for the whole capture. The MG measures across your wrist AND that clasp, so until you hold it the circuit is open, the strap has nothing to record, and you would see zero packets whatever the firmware did.\n\nNobody has confirmed a strap honours these commands, so the likely outcome is that nothing happens. Everything here is reversible: “Stop” turns the streams back off. Results land in the strap log.")
+                Text("NARA is not a medical device and this is not an ECG test. It asks your MG to start its ECG subsystem and logs whatever comes back — unvalidated instrumentation for protocol research, never a measurement or a diagnosis, including any heart-rhythm classification the strap happens to send. Don't use it to make a health decision; see a doctor if you have symptoms.\n\nHold the two indents on the clasp with the fingers of your other hand for the whole capture. The MG measures across your wrist AND that clasp, so until you hold it the circuit is open, the strap has nothing to record, and you would see zero packets whatever the firmware did.\n\nNobody has confirmed a strap honours these commands, so the likely outcome is that nothing happens. Everything here is reversible: “Stop” turns the streams back off. Results land in the strap log.")
             }
             // Wrist selection: its own step, with its own confirmation and its own warning.
             //
@@ -1745,7 +1745,7 @@ struct DeviceCardCatalog: View {
 
     var body: some View {
         ScreenScaffold(title: "Devices",
-                       subtitle: "What each band captures (and what NOOP uses it for).",
+                       subtitle: "What each band captures (and what NARA uses it for).",
                        topBackground: liquidScaffoldSky()) {
             VStack(spacing: NoopMetrics.gap) {
                 DeviceCard(device: Self.dev("whoop-4d", "WHOOP", "4.0", Self.whoopCaps),
@@ -1762,7 +1762,7 @@ struct DeviceCardCatalog: View {
                 DeviceCard(device: Self.dev("whoop-5-refused", "WHOOP", "5.0 MG",
                                             Self.whoopCaps.union([.steps])),
                            isActive: true, isLiveConnected: true, bondRefused: true,
-                           pairingHint: "NOOP can see your strap but it's refusing to pair - it's likely still bonded to the official WHOOP app, or your phone is holding an old pairing. To fix it: (1) fully close the WHOOP app, (2) on a 5.0/MG, tap the band repeatedly until the LEDs flash blue (pairing mode), (3) if your strap is listed under iPhone Settings → Bluetooth, tap it and choose Forget This Device, then reconnect in NOOP.",
+                           pairingHint: "NARA can see your strap but it's refusing to pair - it's likely still bonded to the official WHOOP app, or your phone is holding an old pairing. To fix it: (1) fully close the WHOOP app, (2) on a 5.0/MG, tap the band repeatedly until the LEDs flash blue (pairing mode), (3) if your strap is listed under iPhone Settings → Bluetooth, tap it and choose Forget This Device, then reconnect in NARA.",
                            onMakeActive: {}, onRename: {}, onRemove: {})
                 DeviceCard(device: Self.dev("strap-d", "Polar", "H10", [.hr, .hrv]),
                            isActive: false, isLiveConnected: false,
@@ -1818,7 +1818,7 @@ struct BondRefusedDemoScreen: View {
                                             capabilities: WhoopLiveCapabilities.metrics(forModel: "5.0 MG"),
                                             status: .active, addedAt: 0, lastSeenAt: 0),
                        isActive: true, isLiveConnected: true, bondRefused: true,
-                       pairingHint: "NOOP can see your strap but it's refusing to pair - it's likely still bonded to the official WHOOP app, or your phone is holding an old pairing. To fix it: (1) fully close the WHOOP app, (2) on a 5.0/MG, tap the band repeatedly until the LEDs flash blue (pairing mode), (3) if your strap is listed under iPhone Settings → Bluetooth, tap it and choose Forget This Device, then reconnect in NOOP.",
+                       pairingHint: "NARA can see your strap but it's refusing to pair - it's likely still bonded to the official WHOOP app, or your phone is holding an old pairing. To fix it: (1) fully close the WHOOP app, (2) on a 5.0/MG, tap the band repeatedly until the LEDs flash blue (pairing mode), (3) if your strap is listed under iPhone Settings → Bluetooth, tap it and choose Forget This Device, then reconnect in NARA.",
                        onMakeActive: {}, onRename: {}, onRemove: {})
         }
     }

@@ -1,5 +1,5 @@
 //  LiveSessionView.swift
-//  NOOP · Live Sessions (silent guardian) — the in-session screen + summary sheet.
+//  NARA · Live Sessions (silent guardian) — the in-session screen + summary sheet.
 //
 //  Deliberately near-empty: one breathing ring, one line of intent, one honest Charge
 //  sentence that fades, an End button. The ring is the whole language — lit teal and
@@ -171,7 +171,7 @@ struct LiveSessionView: View {
     }
 
     /// Breathing is the "on track" signal: only in band, only once active, never when anything is
-    /// asking for quiet (Reduce Motion, Low Power Mode, or "Reduce motion in NOOP").
+    /// asking for quiet (Reduce Motion, Low Power Mode, or "Reduce motion in NARA").
     private var isBreathing: Bool {
         !motion.poseStill(reduceMotion)
             && runner.output?.status == .active

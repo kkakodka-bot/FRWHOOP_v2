@@ -1,0 +1,36 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.env
+data/user-store.json
+# runtime persistence — never commit (eval/dev write here)
+data/memory/
+data/documents/
+data/live/
+data/sessions/
+data/healthkit/
+metrics/research/cache/
+# durable cloud-sync outbox (local runtime)
+data/sync-queue.json*
+.frwhoop-host-token

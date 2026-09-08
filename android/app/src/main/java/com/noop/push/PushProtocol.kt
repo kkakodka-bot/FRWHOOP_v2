@@ -9,6 +9,10 @@ class PushProtocolException(message: String) : IllegalArgumentException(message)
 /** Deterministic, bounded NDJSON encoder and acknowledgement codec for protocol 1.0. */
 object PushProtocol {
     const val VERSION = "1.0"
+    const val BINARY_VERSION = "1.1"
+    const val OBJECT_VERSION = "1.2"
+    /** Sender-preferred list for capability negotiation (`GET`); see PUSH_PROTOCOL.md. */
+    const val CAPABILITIES_ACCEPT_VERSIONS = "1.2,1.1,1.0"
     const val MAX_RECORDS = 5_000
     /** Hard limit for the decoded UTF-8 NDJSON entity, before optional content coding. */
     const val MAX_BODY_BYTES = 4 * 1024 * 1024
@@ -16,9 +20,11 @@ object PushProtocol {
     const val MAX_WIRE_BODY_BYTES = MAX_BODY_BYTES + 64 * 1024
     const val MAX_ACK_BYTES = 16 * 1024
     internal const val SNAPSHOT_PAGE_SIZE = 5_000
-    // A rolling window may be multipart, but client memory use is fail-closed and independent of DB size.
     internal const val MAX_MUTABLE_SNAPSHOT_RECORDS = 1_000
     internal const val MAX_MUTABLE_SNAPSHOT_ENCODED_BYTES = 2 * 1024 * 1024
+    const val MAX_OBJECT_DECODED_BYTES = 64 * 1024 * 1024
+    const val MAX_OBJECT_WIRE_BYTES = 256 * 1024 * 1024 + 64 * 1024
+    const val MAX_IMU_OBJECT_WINDOW_SECONDS = 3_600L
     internal val FORBIDDEN_REMOTE_CONTROL_MEMBERS = setOf(
         "command", "commands", "endpoint", "url", "cadence", "schema", "fields",
     )
@@ -181,6 +187,154 @@ object PushProtocol {
         return sha256Hex("${table.wireName}\n$deviceId\n${orderedObjectJson(key)}".toByteArray(Charsets.UTF_8))
     }
 
+    fun binaryKeyFingerprint(table: PushBinaryTable, deviceId: String, row: PushBinaryRow): String {
+        val payload = when {
+            table == PushBinaryTable.PPG_WAVEFORM_SAMPLE && row is PushBinaryRow.PpgWaveform ->
+                "ppgWaveformSample\n$deviceId\n${row.record.ts}\n${row.record.burstIndex ?: ""}"
+            table == PushBinaryTable.V18_AUX_SAMPLE && row is PushBinaryRow.V18Aux ->
+                "v18AuxSample\n$deviceId\n${row.record.ts}"
+            table == PushBinaryTable.RAW_BATCH && row is PushBinaryRow.RawBatch ->
+                "rawBatch\n$deviceId\n${row.record.batchId}"
+            table == PushBinaryTable.RAW_IMU_SESSION && row is PushBinaryRow.RawImuSession ->
+                "rawImuSession\n$deviceId\n${row.record.ts}"
+            else -> throw PushProtocolException("binary row kind mismatch")
+        }
+        return sha256Hex(payload.toByteArray(Charsets.UTF_8))
+    }
+
+    fun binaryObjectBatch(
+        table: PushBinaryTable,
+        sourceId: String,
+        deviceId: String,
+        startCursor: PushCursor?,
+        rows: List<PushBinaryRow>,
+        protocolVersion: String = BINARY_VERSION,
+        decodedLimit: Int = MAX_BODY_BYTES,
+    ): PushBinaryBatch {
+        validateUuid(sourceId, "sourceId")
+        if (rows.isEmpty()) throw PushProtocolException("binary object must contain a row")
+
+        val selected = when (table) {
+            PushBinaryTable.RAW_BATCH -> {
+                if (rows.size != 1) throw PushProtocolException("rawBatch upload must contain exactly one row")
+                rows
+            }
+            PushBinaryTable.PPG_WAVEFORM_SAMPLE, PushBinaryTable.V18_AUX_SAMPLE, PushBinaryTable.RAW_IMU_SESSION ->
+                selectBinaryRows(table, rows, decodedLimit)
+        }
+
+        val decoded = PushBinaryCodec.pack(table, selected)
+        if (decoded.size > decodedLimit) {
+            throw PushProtocolException("binary object exceeds the decoded limit")
+        }
+        val contentSha256 = PushBinaryCodec.sha256Hex(decoded)
+        val contentEncoding = table.contentEncoding
+        val payload = if (protocolVersion == OBJECT_VERSION) {
+            PushBinaryCompression.compressObject(decoded, contentEncoding)
+        } else {
+            PushBinaryCompression.compress(decoded, contentEncoding)
+        }
+        val (startTs, endTs, sampleCount) = binaryBounds(table, selected)
+        val endCursor = binaryEndCursor(table, deviceId, selected)
+        val identity = linkedMapOf<String, Any?>(
+            "contentSha256" to contentSha256,
+            "deviceId" to deviceId,
+            "protocolVersion" to protocolVersion,
+            "sampleCount" to sampleCount,
+            "sourceId" to sourceId,
+            "startTs" to startTs,
+            "endTs" to endTs,
+            "stream" to table.wireName,
+            "type" to "binaryObject",
+        )
+        val batchId = stableUuid(identity, listOf(decoded))
+        val objectId = stableUuid(identity + ("batchId" to batchId), listOf(decoded))
+        val manifest = identity + mapOf(
+            "batchId" to batchId,
+            "objectId" to objectId,
+            "uncompressedBytes" to decoded.size,
+            "contentEncoding" to contentEncoding,
+        )
+        return PushBinaryBatch(
+            protocolVersion = protocolVersion,
+            batchId = batchId,
+            sourceId = sourceId,
+            table = table,
+            deviceId = deviceId,
+            objectId = objectId,
+            startTs = startTs,
+            endTs = endTs,
+            sampleCount = sampleCount,
+            uncompressedBytes = decoded.size,
+            contentSha256 = contentSha256,
+            contentEncoding = contentEncoding,
+            endCursor = endCursor,
+            manifestJSON = canonicalJsonMap(manifest).toByteArray(Charsets.UTF_8),
+            payload = payload,
+        )
+    }
+
+    fun freshObjectId(): String = java.util.UUID.randomUUID().toString()
+
+    private fun selectBinaryRows(
+        table: PushBinaryTable,
+        rows: List<PushBinaryRow>,
+        decodedLimit: Int,
+    ): List<PushBinaryRow> {
+        val selected = ArrayList<PushBinaryRow>()
+        var decodedBytes = PushBinaryCodec.packedHeaderSize(table)
+        var windowStartTs: Long? = null
+        for (row in rows.take(MAX_RECORDS)) {
+            if (table == PushBinaryTable.RAW_IMU_SESSION) {
+                val record = (row as? PushBinaryRow.RawImuSession)?.record
+                    ?: throw PushProtocolException("binary row kind mismatch")
+                if (windowStartTs != null && record.ts - windowStartTs >= MAX_IMU_OBJECT_WINDOW_SECONDS) break
+            }
+            val rowSize = PushBinaryCodec.packedRowSize(row)
+            if (decodedBytes + rowSize > decodedLimit) break
+            selected += row
+            decodedBytes += rowSize
+            if (table == PushBinaryTable.RAW_IMU_SESSION && windowStartTs == null) {
+                windowStartTs = (row as PushBinaryRow.RawImuSession).record.ts
+            }
+        }
+        if (selected.isEmpty()) throw PushProtocolException("first binary row exceeds the decoded batch limit")
+        return selected
+    }
+
+    private fun binaryBounds(table: PushBinaryTable, rows: List<PushBinaryRow>): Triple<Long, Long, Int> = when (table) {
+        PushBinaryTable.RAW_BATCH -> {
+            val record = (rows.single() as PushBinaryRow.RawBatch).record
+            Triple(record.startTs, record.endTs, record.frameCount)
+        }
+        PushBinaryTable.PPG_WAVEFORM_SAMPLE, PushBinaryTable.V18_AUX_SAMPLE, PushBinaryTable.RAW_IMU_SESSION -> {
+            val timestamps = rows.map { row ->
+                when (row) {
+                    is PushBinaryRow.PpgWaveform -> row.record.ts
+                    is PushBinaryRow.V18Aux -> row.record.ts
+                    is PushBinaryRow.RawImuSession -> row.record.ts
+                    else -> throw PushProtocolException("binary row kind mismatch")
+                }
+            }
+            Triple(timestamps.minOrNull()!!, timestamps.maxOrNull()!! + 1, rows.size)
+        }
+    }
+
+    private fun binaryEndCursor(table: PushBinaryTable, deviceId: String, rows: List<PushBinaryRow>): PushCursor? =
+        when (table) {
+            PushBinaryTable.RAW_BATCH -> null
+            PushBinaryTable.PPG_WAVEFORM_SAMPLE, PushBinaryTable.V18_AUX_SAMPLE, PushBinaryTable.RAW_IMU_SESSION -> {
+                val last = rows.lastOrNull() ?: return null
+                val rowId = when (last) {
+                    is PushBinaryRow.PpgWaveform -> last.record.rowId
+                    is PushBinaryRow.V18Aux -> last.record.rowId
+                    is PushBinaryRow.RawImuSession -> last.record.rowId
+                    else -> throw PushProtocolException("binary row kind mismatch")
+                }
+                PushCursor(rowId, binaryKeyFingerprint(table, deviceId, last))
+            }
+        }
+
     internal fun mutableRecordEncodedSize(table: PushMutableTable, record: PushMutableRecord): Int {
         validateRecord(table, record.key, record.data)
         return encodeRecordLine(record).size
@@ -202,6 +356,10 @@ object PushProtocol {
     }
 
     internal fun canonicalJson(value: Any?): String = buildString { appendCanonical(value, sortMaps = true) }
+
+    internal fun canonicalJsonMap(value: Map<String, Any?>): String = buildString {
+        appendCanonical(value, sortMaps = true)
+    }
 
     private fun orderedObjectJson(value: Map<String, Any?>): String = buildString {
         appendCanonical(value, sortMaps = false)
@@ -475,6 +633,11 @@ data class PushAck(
         protocolVersion == batch.protocolVersion && batchId == batch.batchId &&
             stream == batch.table.wireName && deviceId == batch.deviceId &&
             endCursor == batch.endCursor && acceptedRows == batch.recordCount && status == "accepted"
+
+    fun exactlyMatches(batch: PushBinaryBatch): Boolean =
+        protocolVersion == batch.protocolVersion && batchId == batch.batchId &&
+            stream == batch.wireName && deviceId == batch.deviceId &&
+            endCursor == batch.endCursor && acceptedRows == batch.sampleCount && status == "accepted"
 
     companion object {
         fun fromBatch(batch: PushBatch): PushAck = PushAck(

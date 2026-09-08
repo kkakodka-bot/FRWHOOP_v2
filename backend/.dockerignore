@@ -1,0 +1,10 @@
+node_modules
+data
+.env
+.frwhoop-host-token
+*.log
+.git
+tests
+docs
+bench
+energy/v3/research

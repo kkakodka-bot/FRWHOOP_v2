@@ -1,0 +1,1182 @@
+[
+  {
+    "scenario": "normal8",
+    "kind": "night",
+    "napsDetected": [],
+    "napFound": false,
+    "detector": "current",
+    "sessions": 1,
+    "detectedMainSpanMin": 430.03,
+    "truthSpanMin": 444,
+    "onsetErrMin": 5,
+    "wakeErrMin": -8.97,
+    "detection": {
+      "sleepSensitivity": 0.99,
+      "wakeSpecificity": 1,
+      "sleepWakeAccuracy": 0.99
+    },
+    "staging": {
+      "overallAccuracy": 0.837,
+      "balancedAccuracy": 0.874,
+      "macroF1": 0.826,
+      "kappa": 0.759,
+      "sleepSensitivity": 0.99,
+      "wakeSpecificity": 1,
+      "confusion": {
+        "wake": {
+          "wake": 18,
+          "light": 0,
+          "deep": 0,
+          "rem": 9
+        },
+        "light": {
+          "wake": 0,
+          "light": 250,
+          "deep": 46,
+          "rem": 0
+        },
+        "deep": {
+          "wake": 0,
+          "light": 26,
+          "deep": 184,
+          "rem": 0
+        },
+        "rem": {
+          "wake": 0,
+          "light": 54,
+          "deep": 10,
+          "rem": 291
+        }
+      },
+      "perStage": {
+        "wake": {
+          "tp": 18,
+          "precision": 0.6666666666666666,
+          "recall": 1,
+          "f1": 0.8
+        },
+        "light": {
+          "tp": 250,
+          "precision": 0.8445945945945946,
+          "recall": 0.7575757575757576,
+          "f1": 0.7987220447284346
+        },
+        "deep": {
+          "tp": 184,
+          "precision": 0.8761904761904762,
+          "recall": 0.7666666666666667,
+          "f1": 0.8177777777777778
+        },
+        "rem": {
+          "tp": 291,
+          "precision": 0.819718309859155,
+          "recall": 0.97,
+          "f1": 0.8885496183206106
+        }
+      },
+      "truthMinutes": {
+        "wake": 9,
+        "light": 165,
+        "deep": 120,
+        "rem": 150
+      },
+      "predictedMinutes": {
+        "wake": 13.5,
+        "light": 148,
+        "deep": 105,
+        "rem": 177.5
+      }
+    }
+  },
+  {
+    "scenario": "short4",
+    "kind": "night",
+    "napsDetected": [],
+    "napFound": false,
+    "detector": "current",
+    "sessions": 1,
+    "detectedMainSpanMin": 189.03,
+    "truthSpanMin": 201,
+    "onsetErrMin": 4,
+    "wakeErrMin": -7.97,
+    "detection": {
+      "sleepSensitivity": 0.977,
+      "wakeSpecificity": 1,
+      "sleepWakeAccuracy": 0.978
+    },
+    "staging": {
+      "overallAccuracy": 0.828,
+      "balancedAccuracy": 0.872,
+      "macroF1": 0.812,
+      "kappa": 0.748,
+      "sleepSensitivity": 0.977,
+      "wakeSpecificity": 1,
+      "confusion": {
+        "wake": {
+          "wake": 14,
+          "light": 9,
+          "deep": 0,
+          "rem": 0
+        },
+        "light": {
+          "wake": 0,
+          "light": 127,
+          "deep": 21,
+          "rem": 0
+        },
+        "deep": {
+          "wake": 0,
+          "light": 12,
+          "deep": 72,
+          "rem": 0
+        },
+        "rem": {
+          "wake": 0,
+          "light": 24,
+          "deep": 3,
+          "rem": 120
+        }
+      },
+      "perStage": {
+        "wake": {
+          "tp": 14,
+          "precision": 0.6086956521739131,
+          "recall": 1,
+          "f1": 0.7567567567567568
+        },
+        "light": {
+          "tp": 127,
+          "precision": 0.8581081081081081,
+          "recall": 0.7383720930232558,
+          "f1": 0.7937500000000001
+        },
+        "deep": {
+          "tp": 72,
+          "precision": 0.8571428571428571,
+          "recall": 0.75,
+          "f1": 0.7999999999999999
+        },
+        "rem": {
+          "tp": 120,
+          "precision": 0.8163265306122449,
+          "recall": 1,
+          "f1": 0.898876404494382
+        }
+      },
+      "truthMinutes": {
+        "wake": 7,
+        "light": 86,
+        "deep": 48,
+        "rem": 60
+      },
+      "predictedMinutes": {
+        "wake": 11.5,
+        "light": 74,
+        "deep": 42,
+        "rem": 73.5
+      }
+    }
+  },
+  {
+    "scenario": "long10",
+    "kind": "night",
+    "napsDetected": [],
+    "napFound": false,
+    "detector": "current",
+    "sessions": 1,
+    "detectedMainSpanMin": 547.03,
+    "truthSpanMin": 561,
+    "onsetErrMin": 5,
+    "wakeErrMin": -8.97,
+    "detection": {
+      "sleepSensitivity": 0.992,
+      "wakeSpecificity": 1,
+      "sleepWakeAccuracy": 0.992
+    },
+    "staging": {
+      "overallAccuracy": 0.792,
+      "balancedAccuracy": 0.85,
+      "macroF1": 0.798,
+      "kappa": 0.692,
+      "sleepSensitivity": 0.992,
+      "wakeSpecificity": 1,
+      "confusion": {
+        "wake": {
+          "wake": 18,
+          "light": 9,
+          "deep": 0,
+          "rem": 0
+        },
+        "light": {
+          "wake": 0,
+          "light": 292,
+          "deep": 56,
+          "rem": 0
+        },
+        "deep": {
+          "wake": 0,
+          "light": 12,
+          "deep": 219,
+          "rem": 0
+        },
+        "rem": {
+          "wake": 0,
+          "light": 143,
+          "deep": 13,
+          "rem": 360
+        }
+      },
+      "perStage": {
+        "wake": {
+          "tp": 18,
+          "precision": 0.6666666666666666,
+          "recall": 1,
+          "f1": 0.8
+        },
+        "light": {
+          "tp": 292,
+          "precision": 0.8390804597701149,
+          "recall": 0.6403508771929824,
+          "f1": 0.72636815920398
+        },
+        "deep": {
+          "tp": 219,
+          "precision": 0.948051948051948,
+          "recall": 0.7604166666666666,
+          "f1": 0.8439306358381503
+        },
+        "rem": {
+          "tp": 360,
+          "precision": 0.6976744186046512,
+          "recall": 1,
+          "f1": 0.8219178082191781
+        }
+      },
+      "truthMinutes": {
+        "wake": 9,
+        "light": 228,
+        "deep": 144,
+        "rem": 180
+      },
+      "predictedMinutes": {
+        "wake": 13.5,
+        "light": 174,
+        "deep": 115.5,
+        "rem": 258
+      }
+    }
+  },
+  {
+    "scenario": "late",
+    "kind": "night",
+    "napsDetected": [],
+    "napFound": false,
+    "detector": "current",
+    "sessions": 1,
+    "detectedMainSpanMin": 353,
+    "truthSpanMin": 367,
+    "onsetErrMin": 5,
+    "wakeErrMin": -9,
+    "detection": {
+      "sleepSensitivity": 0.986,
+      "wakeSpecificity": 1,
+      "sleepWakeAccuracy": 0.986
+    },
+    "staging": {
+      "overallAccuracy": 0.797,
+      "balancedAccuracy": 0.843,
+      "macroF1": 0.79,
+      "kappa": 0.701,
+      "sleepSensitivity": 0.986,
+      "wakeSpecificity": 1,
+      "confusion": {
+        "wake": {
+          "wake": 18,
+          "light": 0,
+          "deep": 0,
+          "rem": 10
+        },
+        "light": {
+          "wake": 0,
+          "light": 170,
+          "deep": 36,
+          "rem": 0
+        },
+        "deep": {
+          "wake": 0,
+          "light": 28,
+          "deep": 147,
+          "rem": 0
+        },
+        "rem": {
+          "wake": 0,
+          "light": 66,
+          "deep": 9,
+          "rem": 250
+        }
+      },
+      "perStage": {
+        "wake": {
+          "tp": 18,
+          "precision": 0.6428571428571429,
+          "recall": 1,
+          "f1": 0.782608695652174
+        },
+        "light": {
+          "tp": 170,
+          "precision": 0.8252427184466019,
+          "recall": 0.6439393939393939,
+          "f1": 0.7234042553191489
+        },
+        "deep": {
+          "tp": 147,
+          "precision": 0.84,
+          "recall": 0.765625,
+          "f1": 0.8010899182561307
+        },
+        "rem": {
+          "tp": 250,
+          "precision": 0.7692307692307693,
+          "recall": 0.9615384615384616,
+          "f1": 0.8547008547008548
+        }
+      },
+      "truthMinutes": {
+        "wake": 9,
+        "light": 132,
+        "deep": 96,
+        "rem": 130
+      },
+      "predictedMinutes": {
+        "wake": 14,
+        "light": 103,
+        "deep": 87.5,
+        "rem": 162.5
+      }
+    }
+  },
+  {
+    "scenario": "early",
+    "kind": "night",
+    "napsDetected": [],
+    "napFound": false,
+    "detector": "current",
+    "sessions": 1,
+    "detectedMainSpanMin": 358.18,
+    "truthSpanMin": 372,
+    "onsetErrMin": 5,
+    "wakeErrMin": -8.82,
+    "detection": {
+      "sleepSensitivity": 0.988,
+      "wakeSpecificity": 1,
+      "sleepWakeAccuracy": 0.988
+    },
+    "staging": {
+      "overallAccuracy": 0.825,
+      "balancedAccuracy": 0.869,
+      "macroF1": 0.817,
+      "kappa": 0.743,
+      "sleepSensitivity": 0.988,
+      "wakeSpecificity": 1,
+      "confusion": {
+        "wake": {
+          "wake": 18,
+          "light": 9,
+          "deep": 0,
+          "rem": 0
+        },
+        "light": {
+          "wake": 0,
+          "light": 210,
+          "deep": 32,
+          "rem": 0
+        },
+        "deep": {
+          "wake": 0,
+          "light": 26,
+          "deep": 146,
+          "rem": 0
+        },
+        "rem": {
+          "wake": 0,
+          "light": 49,
+          "deep": 14,
+          "rem": 240
+        }
+      },
+      "perStage": {
+        "wake": {
+          "tp": 18,
+          "precision": 0.6666666666666666,
+          "recall": 1,
+          "f1": 0.8
+        },
+        "light": {
+          "tp": 210,
+          "precision": 0.8677685950413223,
+          "recall": 0.7142857142857143,
+          "f1": 0.7835820895522388
+        },
+        "deep": {
+          "tp": 146,
+          "precision": 0.8488372093023255,
+          "recall": 0.7604166666666666,
+          "f1": 0.802197802197802
+        },
+        "rem": {
+          "tp": 240,
+          "precision": 0.7920792079207921,
+          "recall": 1,
+          "f1": 0.8839779005524863
+        }
+      },
+      "truthMinutes": {
+        "wake": 9,
+        "light": 147,
+        "deep": 96,
+        "rem": 120
+      },
+      "predictedMinutes": {
+        "wake": 13.5,
+        "light": 121,
+        "deep": 86,
+        "rem": 151.5
+      }
+    }
+  },
+  {
+    "scenario": "fragmented",
+    "kind": "night",
+    "napsDetected": [],
+    "napFound": false,
+    "detector": "current",
+    "sessions": 1,
+    "detectedMainSpanMin": 514.52,
+    "truthSpanMin": 530,
+    "onsetErrMin": 3,
+    "wakeErrMin": -12.48,
+    "detection": {
+      "sleepSensitivity": 0.981,
+      "wakeSpecificity": 0.1,
+      "sleepWakeAccuracy": 0.881
+    },
+    "staging": {
+      "overallAccuracy": 0.666,
+      "balancedAccuracy": 0.663,
+      "macroF1": 0.382,
+      "kappa": 0.281,
+      "sleepSensitivity": 0.981,
+      "wakeSpecificity": 0.658,
+      "confusion": {
+        "wake": {
+          "wake": 79,
+          "light": 18,
+          "deep": 0,
+          "rem": 0
+        },
+        "light": {
+          "wake": 1,
+          "light": 627,
+          "deep": 0,
+          "rem": 0
+        },
+        "deep": {
+          "wake": 0,
+          "light": 214,
+          "deep": 0,
+          "rem": 0
+        },
+        "rem": {
+          "wake": 40,
+          "light": 81,
+          "deep": 0,
+          "rem": 0
+        }
+      },
+      "perStage": {
+        "wake": {
+          "tp": 79,
+          "precision": 0.8144329896907216,
+          "recall": 0.6583333333333333,
+          "f1": 0.728110599078341
+        },
+        "light": {
+          "tp": 627,
+          "precision": 0.9984076433121019,
+          "recall": 0.6670212765957447,
+          "f1": 0.7997448979591836
+        },
+        "deep": {
+          "tp": 0,
+          "precision": 0,
+          "recall": 0,
+          "f1": 0
+        },
+        "rem": {
+          "tp": 0,
+          "precision": 0,
+          "recall": 0,
+          "f1": 0
+        }
+      },
+      "truthMinutes": {
+        "wake": 60,
+        "light": 470,
+        "deep": 0,
+        "rem": 0
+      },
+      "predictedMinutes": {
+        "wake": 48.5,
+        "light": 314,
+        "deep": 107,
+        "rem": 60.5
+      }
+    }
+  },
+  {
+    "scenario": "overnight_wake",
+    "kind": "night",
+    "napsDetected": [
+      {
+        "durationMin": 142,
+        "probability": 0.63,
+        "confidence": "low"
+      },
+      {
+        "durationMin": 18,
+        "probability": 0.63,
+        "confidence": "low"
+      }
+    ],
+    "napFound": true,
+    "detector": "current",
+    "sessions": 2,
+    "detectedMainSpanMin": 252.23,
+    "truthSpanMin": 504,
+    "onsetErrMin": 239,
+    "wakeErrMin": -12.77,
+    "detection": {
+      "sleepSensitivity": 0.969,
+      "wakeSpecificity": 1,
+      "sleepWakeAccuracy": 0.973
+    },
+    "staging": {
+      "overallAccuracy": 0.805,
+      "balancedAccuracy": 0.831,
+      "macroF1": 0.817,
+      "kappa": 0.733,
+      "sleepSensitivity": 0.969,
+      "wakeSpecificity": 1,
+      "confusion": {
+        "wake": {
+          "wake": 138,
+          "light": 0,
+          "deep": 0,
+          "rem": 27
+        },
+        "light": {
+          "wake": 0,
+          "light": 223,
+          "deep": 50,
+          "rem": 0
+        },
+        "deep": {
+          "wake": 0,
+          "light": 24,
+          "deep": 177,
+          "rem": 0
+        },
+        "rem": {
+          "wake": 0,
+          "light": 83,
+          "deep": 13,
+          "rem": 273
+        }
+      },
+      "perStage": {
+        "wake": {
+          "tp": 138,
+          "precision": 0.8363636363636363,
+          "recall": 1,
+          "f1": 0.9108910891089108
+        },
+        "light": {
+          "tp": 223,
+          "precision": 0.8168498168498168,
+          "recall": 0.6757575757575758,
+          "f1": 0.7396351575456053
+        },
+        "deep": {
+          "tp": 177,
+          "precision": 0.8805970149253731,
+          "recall": 0.7375,
+          "f1": 0.8027210884353743
+        },
+        "rem": {
+          "tp": 273,
+          "precision": 0.7398373983739838,
+          "recall": 0.91,
+          "f1": 0.8161434977578476
+        }
+      },
+      "truthMinutes": {
+        "wake": 69,
+        "light": 165,
+        "deep": 120,
+        "rem": 150
+      },
+      "predictedMinutes": {
+        "wake": 82.5,
+        "light": 136.5,
+        "deep": 100.5,
+        "rem": 184.5
+      }
+    }
+  },
+  {
+    "scenario": "athlete",
+    "kind": "night",
+    "napsDetected": [],
+    "napFound": false,
+    "detector": "current",
+    "sessions": 1,
+    "detectedMainSpanMin": 430.03,
+    "truthSpanMin": 444,
+    "onsetErrMin": 5,
+    "wakeErrMin": -8.97,
+    "detection": {
+      "sleepSensitivity": 0.99,
+      "wakeSpecificity": 1,
+      "sleepWakeAccuracy": 0.99
+    },
+    "staging": {
+      "overallAccuracy": 0.837,
+      "balancedAccuracy": 0.874,
+      "macroF1": 0.826,
+      "kappa": 0.759,
+      "sleepSensitivity": 0.99,
+      "wakeSpecificity": 1,
+      "confusion": {
+        "wake": {
+          "wake": 18,
+          "light": 0,
+          "deep": 0,
+          "rem": 9
+        },
+        "light": {
+          "wake": 0,
+          "light": 250,
+          "deep": 46,
+          "rem": 0
+        },
+        "deep": {
+          "wake": 0,
+          "light": 26,
+          "deep": 184,
+          "rem": 0
+        },
+        "rem": {
+          "wake": 0,
+          "light": 54,
+          "deep": 10,
+          "rem": 291
+        }
+      },
+      "perStage": {
+        "wake": {
+          "tp": 18,
+          "precision": 0.6666666666666666,
+          "recall": 1,
+          "f1": 0.8
+        },
+        "light": {
+          "tp": 250,
+          "precision": 0.8445945945945946,
+          "recall": 0.7575757575757576,
+          "f1": 0.7987220447284346
+        },
+        "deep": {
+          "tp": 184,
+          "precision": 0.8761904761904762,
+          "recall": 0.7666666666666667,
+          "f1": 0.8177777777777778
+        },
+        "rem": {
+          "tp": 291,
+          "precision": 0.819718309859155,
+          "recall": 0.97,
+          "f1": 0.8885496183206106
+        }
+      },
+      "truthMinutes": {
+        "wake": 9,
+        "light": 165,
+        "deep": 120,
+        "rem": 150
+      },
+      "predictedMinutes": {
+        "wake": 13.5,
+        "light": 148,
+        "deep": 105,
+        "rem": 177.5
+      }
+    }
+  },
+  {
+    "scenario": "high_resting",
+    "kind": "night",
+    "napsDetected": [],
+    "napFound": false,
+    "detector": "current",
+    "sessions": 1,
+    "detectedMainSpanMin": 430.03,
+    "truthSpanMin": 444,
+    "onsetErrMin": 5,
+    "wakeErrMin": -8.97,
+    "detection": {
+      "sleepSensitivity": 0.99,
+      "wakeSpecificity": 1,
+      "sleepWakeAccuracy": 0.99
+    },
+    "staging": {
+      "overallAccuracy": 0.837,
+      "balancedAccuracy": 0.874,
+      "macroF1": 0.826,
+      "kappa": 0.759,
+      "sleepSensitivity": 0.99,
+      "wakeSpecificity": 1,
+      "confusion": {
+        "wake": {
+          "wake": 18,
+          "light": 0,
+          "deep": 0,
+          "rem": 9
+        },
+        "light": {
+          "wake": 0,
+          "light": 250,
+          "deep": 46,
+          "rem": 0
+        },
+        "deep": {
+          "wake": 0,
+          "light": 26,
+          "deep": 184,
+          "rem": 0
+        },
+        "rem": {
+          "wake": 0,
+          "light": 54,
+          "deep": 10,
+          "rem": 291
+        }
+      },
+      "perStage": {
+        "wake": {
+          "tp": 18,
+          "precision": 0.6666666666666666,
+          "recall": 1,
+          "f1": 0.8
+        },
+        "light": {
+          "tp": 250,
+          "precision": 0.8445945945945946,
+          "recall": 0.7575757575757576,
+          "f1": 0.7987220447284346
+        },
+        "deep": {
+          "tp": 184,
+          "precision": 0.8761904761904762,
+          "recall": 0.7666666666666667,
+          "f1": 0.8177777777777778
+        },
+        "rem": {
+          "tp": 291,
+          "precision": 0.819718309859155,
+          "recall": 0.97,
+          "f1": 0.8885496183206106
+        }
+      },
+      "truthMinutes": {
+        "wake": 9,
+        "light": 165,
+        "deep": 120,
+        "rem": 150
+      },
+      "predictedMinutes": {
+        "wake": 13.5,
+        "light": 148,
+        "deep": 105,
+        "rem": 177.5
+      }
+    }
+  },
+  {
+    "scenario": "motionless_awake",
+    "kind": "night",
+    "napsDetected": [],
+    "napFound": false,
+    "detector": "current",
+    "sessions": 0,
+    "detectedMainSpanMin": 0,
+    "truthSpanMin": 480,
+    "onsetErrMin": null,
+    "wakeErrMin": null,
+    "detection": {
+      "sleepSensitivity": 0,
+      "wakeSpecificity": 1,
+      "sleepWakeAccuracy": 1
+    },
+    "staging": {
+      "overallAccuracy": 1,
+      "balancedAccuracy": 1,
+      "macroF1": 0.25,
+      "kappa": 0,
+      "sleepSensitivity": 0,
+      "wakeSpecificity": 1,
+      "confusion": {
+        "wake": {
+          "wake": 960,
+          "light": 0,
+          "deep": 0,
+          "rem": 0
+        },
+        "light": {
+          "wake": 0,
+          "light": 0,
+          "deep": 0,
+          "rem": 0
+        },
+        "deep": {
+          "wake": 0,
+          "light": 0,
+          "deep": 0,
+          "rem": 0
+        },
+        "rem": {
+          "wake": 0,
+          "light": 0,
+          "deep": 0,
+          "rem": 0
+        }
+      },
+      "perStage": {
+        "wake": {
+          "tp": 960,
+          "precision": 1,
+          "recall": 1,
+          "f1": 1
+        },
+        "light": {
+          "tp": 0,
+          "precision": 0,
+          "recall": 0,
+          "f1": 0
+        },
+        "deep": {
+          "tp": 0,
+          "precision": 0,
+          "recall": 0,
+          "f1": 0
+        },
+        "rem": {
+          "tp": 0,
+          "precision": 0,
+          "recall": 0,
+          "f1": 0
+        }
+      },
+      "truthMinutes": {
+        "wake": 480,
+        "light": 0,
+        "deep": 0,
+        "rem": 0
+      },
+      "predictedMinutes": {
+        "wake": 480,
+        "light": 0,
+        "deep": 0,
+        "rem": 0
+      }
+    }
+  },
+  {
+    "scenario": "nap20",
+    "kind": "nap",
+    "napsDetected": [],
+    "napFound": false,
+    "detector": "current",
+    "sessions": 0,
+    "detectedMainSpanMin": 0,
+    "truthSpanMin": 8.5,
+    "onsetErrMin": null,
+    "wakeErrMin": null,
+    "detection": {
+      "sleepSensitivity": 0,
+      "wakeSpecificity": 1,
+      "sleepWakeAccuracy": 0.412
+    },
+    "staging": {
+      "overallAccuracy": 0.412,
+      "balancedAccuracy": 0.5,
+      "macroF1": 0.146,
+      "kappa": 0,
+      "sleepSensitivity": 0,
+      "wakeSpecificity": 1,
+      "confusion": {
+        "wake": {
+          "wake": 7,
+          "light": 0,
+          "deep": 10,
+          "rem": 0
+        },
+        "light": {
+          "wake": 0,
+          "light": 0,
+          "deep": 0,
+          "rem": 0
+        },
+        "deep": {
+          "wake": 0,
+          "light": 0,
+          "deep": 0,
+          "rem": 0
+        },
+        "rem": {
+          "wake": 0,
+          "light": 0,
+          "deep": 0,
+          "rem": 0
+        }
+      },
+      "perStage": {
+        "wake": {
+          "tp": 7,
+          "precision": 0.4117647058823529,
+          "recall": 1,
+          "f1": 0.5833333333333334
+        },
+        "light": {
+          "tp": 0,
+          "precision": 0,
+          "recall": 0,
+          "f1": 0
+        },
+        "deep": {
+          "tp": 0,
+          "precision": 0,
+          "recall": 0,
+          "f1": 0
+        },
+        "rem": {
+          "tp": 0,
+          "precision": 0,
+          "recall": 0,
+          "f1": 0
+        }
+      },
+      "truthMinutes": {
+        "wake": 3.5,
+        "light": 0,
+        "deep": 5,
+        "rem": 0
+      },
+      "predictedMinutes": {
+        "wake": 8.5,
+        "light": 0,
+        "deep": 0,
+        "rem": 0
+      }
+    }
+  },
+  {
+    "scenario": "nap45",
+    "kind": "nap",
+    "napsDetected": [
+      {
+        "durationMin": 12,
+        "probability": 0.59,
+        "confidence": "medium"
+      }
+    ],
+    "napFound": true,
+    "detector": "current",
+    "sessions": 0,
+    "detectedMainSpanMin": 0,
+    "truthSpanMin": 20.5,
+    "onsetErrMin": null,
+    "wakeErrMin": null,
+    "detection": {
+      "sleepSensitivity": 0,
+      "wakeSpecificity": 1,
+      "sleepWakeAccuracy": 0.268
+    },
+    "staging": {
+      "overallAccuracy": 0.268,
+      "balancedAccuracy": 0.333,
+      "macroF1": 0.106,
+      "kappa": 0,
+      "sleepSensitivity": 0,
+      "wakeSpecificity": 1,
+      "confusion": {
+        "wake": {
+          "wake": 11,
+          "light": 0,
+          "deep": 24,
+          "rem": 6
+        },
+        "light": {
+          "wake": 0,
+          "light": 0,
+          "deep": 0,
+          "rem": 0
+        },
+        "deep": {
+          "wake": 0,
+          "light": 0,
+          "deep": 0,
+          "rem": 0
+        },
+        "rem": {
+          "wake": 0,
+          "light": 0,
+          "deep": 0,
+          "rem": 0
+        }
+      },
+      "perStage": {
+        "wake": {
+          "tp": 11,
+          "precision": 0.2682926829268293,
+          "recall": 1,
+          "f1": 0.4230769230769231
+        },
+        "light": {
+          "tp": 0,
+          "precision": 0,
+          "recall": 0,
+          "f1": 0
+        },
+        "deep": {
+          "tp": 0,
+          "precision": 0,
+          "recall": 0,
+          "f1": 0
+        },
+        "rem": {
+          "tp": 0,
+          "precision": 0,
+          "recall": 0,
+          "f1": 0
+        }
+      },
+      "truthMinutes": {
+        "wake": 5.5,
+        "light": 0,
+        "deep": 12,
+        "rem": 3
+      },
+      "predictedMinutes": {
+        "wake": 20.5,
+        "light": 0,
+        "deep": 0,
+        "rem": 0
+      }
+    }
+  },
+  {
+    "scenario": "nap90",
+    "kind": "nap",
+    "napsDetected": [
+      {
+        "durationMin": 31,
+        "probability": 0.59,
+        "confidence": "medium"
+      }
+    ],
+    "napFound": true,
+    "detector": "current",
+    "sessions": 0,
+    "detectedMainSpanMin": 0,
+    "truthSpanMin": 44,
+    "onsetErrMin": null,
+    "wakeErrMin": null,
+    "detection": {
+      "sleepSensitivity": 0,
+      "wakeSpecificity": 1,
+      "sleepWakeAccuracy": 0.182
+    },
+    "staging": {
+      "overallAccuracy": 0.182,
+      "balancedAccuracy": 0.25,
+      "macroF1": 0.077,
+      "kappa": 0,
+      "sleepSensitivity": 0,
+      "wakeSpecificity": 1,
+      "confusion": {
+        "wake": {
+          "wake": 16,
+          "light": 20,
+          "deep": 30,
+          "rem": 22
+        },
+        "light": {
+          "wake": 0,
+          "light": 0,
+          "deep": 0,
+          "rem": 0
+        },
+        "deep": {
+          "wake": 0,
+          "light": 0,
+          "deep": 0,
+          "rem": 0
+        },
+        "rem": {
+          "wake": 0,
+          "light": 0,
+          "deep": 0,
+          "rem": 0
+        }
+      },
+      "perStage": {
+        "wake": {
+          "tp": 16,
+          "precision": 0.18181818181818182,
+          "recall": 1,
+          "f1": 0.3076923076923077
+        },
+        "light": {
+          "tp": 0,
+          "precision": 0,
+          "recall": 0,
+          "f1": 0
+        },
+        "deep": {
+          "tp": 0,
+          "precision": 0,
+          "recall": 0,
+          "f1": 0
+        },
+        "rem": {
+          "tp": 0,
+          "precision": 0,
+          "recall": 0,
+          "f1": 0
+        }
+      },
+      "truthMinutes": {
+        "wake": 8,
+        "light": 10,
+        "deep": 15,
+        "rem": 11
+      },
+      "predictedMinutes": {
+        "wake": 44,
+        "light": 0,
+        "deep": 0,
+        "rem": 0
+      }
+    }
+  }
+]

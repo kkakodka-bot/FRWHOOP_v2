@@ -260,7 +260,7 @@ struct SleepView: View {
             .sheet(item: $addNap) { seed in
                 SleepTimeEditor(bedTs: seed.bedTs, wakeTs: seed.wakeTs,
                                 title: "Add a nap",
-                                blurb: "Pick when the nap started and ended. NOOP stages it from your data as its own session, separate from the night's sleep.",
+                                blurb: "Pick when the nap started and ended. NARA stages it from your data as its own session, separate from the night's sleep.",
                                 bedLabel: "Nap started", wakeLabel: "Nap ended") { startTs, endTs in
                     await repo.addManualNap(startTs: startTs, endTs: endTs)
                     // Re-score so the day's aggregates pick up the new session, exactly like an edit.
@@ -323,7 +323,7 @@ struct SleepView: View {
         // tombstone, so only it gets the "won't detect ... again" wording. (#65 banner honesty.)
         let message = banner.snapshot.session.userEdited
             ? String(localized: "Sleep deleted.")
-            : String(localized: "Sleep deleted. NOOP won't detect sleep between \(clockTime(banner.displayStart)) and \(clockTime(banner.windowEnd)) again.")
+            : String(localized: "Sleep deleted. NARA won't detect sleep between \(clockTime(banner.displayStart)) and \(clockTime(banner.windowEnd)) again.")
         HStack(alignment: .center, spacing: 10) {
             Image(systemName: "moon.zzz")
                 .font(.system(size: 14, weight: .semibold))
@@ -540,7 +540,7 @@ struct SleepView: View {
     }
 
     /// Whether a SPECIFIC night's sleep-performance score is WHOOP's own imported figure, an Oura
-    /// ring-provided figure, or NOOP's on-device approximation — so the hero is honest about provenance,
+    /// ring-provided figure, or NARA's on-device approximation — so the hero is honest about provenance,
     /// like Today's badges. Keyed by the night's wake-day (matching `performanceScore(for:)`) so a
     /// navigated night's badge tracks ITS OWN score's provenance, not last night's.
     private func heroSource(for night: Night) -> LocalizedStringKey {
@@ -554,7 +554,7 @@ struct SleepView: View {
     /// The REAL per-day merge winner for the DISPLAYED night's sleep numbers, as the same brand wording the
     /// By-Day badge / Today / Intelligence use ("On-device" / "Whoop"). A WHOOP export covering the night's
     /// wake-day wins the dashboard merge (imports win field-by-field, Repository.mergeDaily), so the badge
-    /// says "Whoop"; otherwise the night was scored on-device by NOOP. Keyed by the night's LOCAL wake-day
+    /// says "Whoop"; otherwise the night was scored on-device by NARA. Keyed by the night's LOCAL wake-day
     /// (the `mergeSleep` / importer convention, sleep is filed under the day you woke), so a navigated past
     /// night reads its OWN provenance, not last night's. Honest: never a blanket "on-device". Apple Health
     /// carries no sleep into `importedSleep`, so the sleep merge winner is only ever Whoop vs on-device. (C4)
@@ -563,7 +563,7 @@ struct SleepView: View {
         if repo.importedSleep[wakeDay] != nil { return String(localized: "Whoop") }
         // An Oura ring PROVIDES the night's stages (its own SleepNet hypnogram, banked as the imported
         // session that wins the merge), so name it "Oura" — not the generic "On-device" that implies a
-        // NOOP computation. WHOOP import still wins above; only a night surfaced under a live Oura strap
+        // NARA computation. WHOOP import still wins above; only a night surfaced under a live Oura strap
         // reaches here as "Oura".
         if repo.activeDeviceIsOura { return String(localized: "Oura") }
         return String(localized: "On-device")
@@ -765,8 +765,8 @@ struct SleepView: View {
         let s = night.stages
         let isPersisted = (night.realSegments?.count ?? 0) >= 2
         // An Oura night's stages are the ring's RAW on-device SleepNet classification (decoded off the 0x49
-        // phase stream), NOT a NOOP approximation — so it gets its own honest caption instead of the
-        // "stages approximate (on-device)" one that describes NOOP's own sparse-motion staging.
+        // phase stream), NOT a NARA approximation — so it gets its own honest caption instead of the
+        // "stages approximate (on-device)" one that describes NARA's own sparse-motion staging.
         let stageCaption = repo.activeDeviceIsOura
             ? String(localized: "raw on-device stages")
             : String(localized: "stages approximate (on-device)")
@@ -1035,9 +1035,9 @@ struct SleepView: View {
     /// HONEST-DATA: it reports only what was observed and changes no number. The percentage is floored,
     /// never rounded — 94.8% must not print as "95%" and appear to contradict the gate that flagged it.
     /// The copy names NO cause and offers NO remedy, deliberately: on the 08-29/30 and 08-30/31 captures the
-    /// missing codes DID reach NOOP — the ring reported them unwritten (0xFF), the persist log trimmed
+    /// missing codes DID reach NARA — the ring reported them unwritten (0xFF), the persist log trimmed
     /// exactly as many as the hole is wide — and re-persisting the same night 5 and 8 times left the hole
-    /// intact. "The rest never reached NOOP" and "syncing again can fill in" were both wrong. Nor does the
+    /// intact. "The rest never reached NARA" and "syncing again can fill in" were both wrong. Nor does the
     /// copy point at the totals by DIRECTION: both hosts render this note below the stage-breakdown card
     /// that carries them, so "the totals below" pointed the wrong way on every screen that shipped it.
     private func stagePartialNote(_ coverage: Double) -> some View {
@@ -1311,7 +1311,7 @@ struct SleepView: View {
                 .font(StrandFont.captionNumber)
                 .foregroundStyle(color)
                 .frame(width: 38, alignment: .leading)
-            // The NOOP signature: a segmented PipBar that counts up to the share-of-night fraction,
+            // The NARA signature: a segmented PipBar that counts up to the share-of-night fraction,
             // tinted in the stage colour over the canonical inset track. Flat, crisp, no glow.
             PipBar(value: fraction * 100, segments: 20, tint: color, height: 8)
             Text(durationText(minutes))
@@ -2604,7 +2604,7 @@ private struct SleepFreshnessNote: View {
             SyncingHistoryNote(chunks: live.syncChunksThisSession)
         case .calculating:
             DataPendingNote(title: "Calculating last night's sleep…",
-                            message: "Your strap history is in. NOOP is detecting and staging the night now.",
+                            message: "Your strap history is in. NARA is detecting and staging the night now.",
                             symbol: "waveform.path.ecg")
         case .syncFailed:
             DataPendingNote(title: "Last night's sleep hasn't synced",
@@ -2612,11 +2612,11 @@ private struct SleepFreshnessNote: View {
                             symbol: "exclamationmark.arrow.triangle.2.circlepath")
         case .awaitingSync:
             DataPendingNote(title: "Waiting for last night's sleep",
-                            message: "Connect the strap and sync its history. NOOP will calculate the night when the overnight data arrives.",
+                            message: "Connect the strap and sync its history. NARA will calculate the night when the overnight data arrives.",
                             symbol: "arrow.triangle.2.circlepath")
         case .notDetected:
             DataPendingNote(title: "Last night's sleep wasn't detected",
-                            message: "Sync finished, but NOOP couldn't confidently identify a sleep window. Keep the strap connected and try Sync again; the older night below is still your latest detected sleep.",
+                            message: "Sync finished, but NARA couldn't confidently identify a sleep window. Keep the strap connected and try Sync again; the older night below is still your latest detected sleep.",
                             symbol: "moon.zzz")
         case nil:
             EmptyView()
@@ -2880,7 +2880,7 @@ private struct SleepTimeEditor: View {
             // A detected night is tombstoned so it won't re-detect; a userEdited/nap row writes no
             // tombstone, so its copy drops that (false) promise. Mirrors the undo banner. (#65)
             Text(suppressesReDetection
-                 ? "Removes this recorded sleep and recomputes the day without it. NOOP won't re-detect sleep in this window. You can undo for a few seconds after."
+                 ? "Removes this recorded sleep and recomputes the day without it. NARA won't re-detect sleep in this window. You can undo for a few seconds after."
                  : "Removes this sleep and recomputes the day without it. You can undo for a few seconds after.")
         }
     }

@@ -16,6 +16,7 @@ class SelfHostedPushSettings private constructor(
     data class Snapshot(
         val enabled: Boolean,
         val wifiOnly: Boolean,
+        val binaryObjectsEnabled: Boolean,
         val endpoint: PushEndpointPolicy.ValidEndpoint?,
         val hasToken: Boolean,
         val lastSuccessAt: Long?,
@@ -31,12 +32,13 @@ class SelfHostedPushSettings private constructor(
     }
 
     fun snapshot(): Snapshot {
-        val enabled = prefs.getBoolean(KEY_ENABLED, false)
+        val enabled = prefs.getBoolean(KEY_ENABLED, DEFAULT_ENABLED)
         val endpoint = (PushEndpointPolicy.validate(prefs.getString(KEY_ENDPOINT, "").orEmpty()) as? PushEndpointPolicy.Result.Valid)?.endpoint
         val capabilities = capabilitiesFor(endpoint)
         return Snapshot(
             enabled = enabled,
             wifiOnly = wifiOnly(),
+            binaryObjectsEnabled = binaryObjectsEnabled(),
             endpoint = endpoint,
             hasToken = !secrets.value.getString(KEY_TOKEN, null).isNullOrBlank(),
             lastSuccessAt = prefs.getLong(KEY_LAST_SUCCESS, 0L).takeIf { it > 0 },
@@ -55,6 +57,7 @@ class SelfHostedPushSettings private constructor(
 
     fun endpointText(): String = prefs.getString(KEY_ENDPOINT, "").orEmpty()
     fun wifiOnly(): Boolean = prefs.getBoolean(KEY_WIFI_ONLY, true)
+    fun binaryObjectsEnabled(): Boolean = prefs.getBoolean(KEY_BINARY_OBJECTS, DEFAULT_BINARY_OBJECTS)
 
     fun setWifiOnly(wifiOnly: Boolean) {
         check(prefs.edit().putBoolean(KEY_WIFI_ONLY, wifiOnly).commit()) {
@@ -62,9 +65,15 @@ class SelfHostedPushSettings private constructor(
         }
     }
 
+    fun setBinaryObjectsEnabled(enabled: Boolean) {
+        check(prefs.edit().putBoolean(KEY_BINARY_OBJECTS, enabled).commit()) {
+            "Could not persist push binary export setting"
+        }
+    }
+
     /** Plain-pref gate used by stale workers before opening Room or Android Keystore. */
     fun enabledEndpoint(): PushEndpointPolicy.ValidEndpoint? {
-        if (!prefs.getBoolean(KEY_ENABLED, false)) return null
+        if (!prefs.getBoolean(KEY_ENABLED, DEFAULT_ENABLED)) return null
         return (PushEndpointPolicy.validate(endpointText()) as? PushEndpointPolicy.Result.Valid)?.endpoint
     }
 
@@ -167,7 +176,7 @@ class SelfHostedPushSettings private constructor(
     @Synchronized
     fun recordAcceptedBatches(batches: Int, records: Long = 0L) = synchronized(statusLock) {
         if (batches <= 0 && records <= 0) return
-        if (!prefs.getBoolean(KEY_ENABLED, false)) return
+        if (!prefs.getBoolean(KEY_ENABLED, DEFAULT_ENABLED)) return
         check(prefs.edit()
             .putInt(
                 KEY_ACCEPTED_BATCHES,
@@ -193,7 +202,7 @@ class SelfHostedPushSettings private constructor(
 
     private inline fun updateWhileEnabled(change: (SharedPreferences.Editor) -> SharedPreferences.Editor) =
         synchronized(statusLock) {
-            if (!prefs.getBoolean(KEY_ENABLED, false)) return@synchronized
+            if (!prefs.getBoolean(KEY_ENABLED, DEFAULT_ENABLED)) return@synchronized
             check(change(prefs.edit()).commit()) { "Could not persist push status" }
         }
 
@@ -266,6 +275,9 @@ class SelfHostedPushSettings private constructor(
         private const val PREFS = "self_hosted_push"
         private const val SECRETS = "self_hosted_push_secrets"
         private const val KEY_ENABLED = "enabled"
+        private const val DEFAULT_ENABLED = true
+        private const val KEY_BINARY_OBJECTS = "binary_objects_enabled"
+        private const val DEFAULT_BINARY_OBJECTS = true
         private const val KEY_WIFI_ONLY = "wifi_only"
         private const val KEY_ENDPOINT = "endpoint"
         private const val KEY_TOKEN = "bearer_token"

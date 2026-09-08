@@ -19,9 +19,20 @@ class SelfHostedPushSettingsTest {
         assertFalse(SelfHostedPushSettings.forTest(plain, FakePushPrefs()).snapshot().wifiOnly)
     }
 
-    @Test fun defaultsOffAndCannotEnableWithoutEndpointAndToken() {
+    @Test fun binaryObjectsDefaultOnAndPersist() {
+        val plain = FakePushPrefs()
+        val settings = SelfHostedPushSettings.forTest(plain, FakePushPrefs())
+
+        assertTrue(settings.snapshot().binaryObjectsEnabled)
+        settings.setBinaryObjectsEnabled(false)
+
+        assertFalse(SelfHostedPushSettings.forTest(plain, FakePushPrefs()).snapshot().binaryObjectsEnabled)
+    }
+
+    @Test fun defaultsOnButCannotEnableWithoutEndpointAndToken() {
         val settings = SelfHostedPushSettings.forTest(FakePushPrefs(), FakePushPrefs())
-        assertFalse(settings.snapshot().enabled)
+        assertTrue(settings.snapshot().enabled)
+        assertFalse(settings.snapshot().ready)
         assertFalse(settings.setEnabled(true))
     }
 

@@ -51,7 +51,7 @@ public struct BrandMark: View {
         }
         .frame(width: size, height: size)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Text("NOOP"))
+        .accessibilityLabel(Text("NARA"))
         .accessibilityAddTraits(.isImage)
     }
 

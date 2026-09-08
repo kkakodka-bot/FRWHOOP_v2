@@ -68,7 +68,8 @@ abstract class WhoopDatabase : RoomDatabase() {
     abstract fun whoopDao(): WhoopDao
 
     /** Read-only, schema-neutral snapshots for the opt-in self-hosted push worker. */
-    fun pushDao(): PushDao = PushDao(this)
+    fun pushDao(imuPushSource: com.noop.push.ImuSessionPushSource? = null): PushDao =
+        PushDao(this, imuPushSource)
 
     companion object {
         const val DB_NAME = "noop_whoop.db"

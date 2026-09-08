@@ -136,7 +136,7 @@ object LogExport {
 
             val dynamic = com.noop.testcentre.AndroidDiagnostics.dynamicLines(context)
             val header = buildString {
-                appendLine("NOOP strap log (scheduled debug export)")
+                appendLine("NARA strap log (scheduled debug export)")
                 appendLine("App:     ${BuildConfig.VERSION_NAME} (${BuildConfig.TIER}) build ${BuildConfig.VERSION_CODE}")
                 // #453: the rolling BODY is scrubbed by WhoopBleClient.log(), but these HEADER lines never pass
                 // through it - and they carry device ids, which embed a BLE address for a re-added or second
@@ -251,7 +251,7 @@ object LogExport {
         mirrorToRollingBuffer(logText)
         val dynamic = com.noop.testcentre.AndroidDiagnostics.dynamicLines(context)
         val header = buildString {
-            appendLine("NOOP strap log")
+            appendLine("NARA strap log")
             appendLine("App:     ${BuildConfig.VERSION_NAME} (${BuildConfig.TIER}) build ${BuildConfig.VERSION_CODE}")
             // #453: the rolling BODY is scrubbed by WhoopBleClient.log(), but these HEADER lines never pass
             // through it - and they carry device ids, which embed a BLE address for a re-added or second
@@ -367,7 +367,7 @@ object LogExport {
             val send = Intent(Intent.ACTION_SEND).apply {
                 type = "text/plain"
                 putExtra(Intent.EXTRA_STREAM, fileUri(context, file))
-                putExtra(Intent.EXTRA_SUBJECT, "NOOP strap log")
+                putExtra(Intent.EXTRA_SUBJECT, "NARA strap log")
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
             context.startActivity(Intent.createChooser(send, "Share strap log"))

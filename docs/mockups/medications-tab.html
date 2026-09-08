@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>NOOP — Medications tab mockup</title>
+<style>
+  /* ---- NOOP design tokens (dark, from Packages/StrandDesign) ---- */
+  :root {
+    --canvas:        #1D1E23;  /* surfaceBase */
+    --surface-top:   #30323B;  /* surfaceOverlay */
+    --surface-bot:   #282A31;  /* card bottom */
+    --inset:         #23252C;  /* surfaceInset */
+    --border:        #373A44;  /* hairline */
+    --border-hi:     #4B4E59;  /* hairlineStrong */
+    --text-1:        #F7F7FA;
+    --text-2:        #C3C4CA;
+    --text-3:        #7D7F88;
+    --accent:        #69DDB8;  /* mint (dark) */
+    --accent-deep:   #13A982;
+    --charge:        #03E095;
+    --effort:        #4090E0;
+    --hrv:           #4A90E2;  /* metricPurple (titanium = blue) */
+    --heart:         #FF6B81;  /* liquidHeart */
+    --warn:          #F0A020;  /* statusWarning */
+    --deep-sleep:    #FD96FD;
+    --radius-card:   22px;
+    --radius-ctl:    14px;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { background:#101114; }
+  body {
+    font-family: ui-rounded, "SF Pro Rounded", -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    padding: 44px 40px 60px;
+    color: var(--text-1);
+  }
+  .page-title { font-size:15px; font-weight:600; color:#8b8e99; letter-spacing:.3px; }
+  .page-sub   { font-size:12px; color:#5c5f6a; margin-top:5px; }
+  .frames { display:flex; gap:44px; margin-top:28px; align-items:flex-start; }
+  .frame-label { font-size:11px; font-weight:600; letter-spacing:1.2px; color:#6a6d78; text-transform:uppercase; margin-bottom:12px; }
+
+  /* ---- iPhone frame ---- */
+  .phone {
+    width:393px; height:852px; border-radius:56px; background:#000;
+    padding:11px; box-shadow:0 30px 80px rgba(0,0,0,.6), 0 0 0 1px #33353d;
+  }
+  .screen {
+    width:100%; height:100%; border-radius:46px; background:var(--canvas);
+    overflow:hidden; position:relative; display:flex; flex-direction:column;
+  }
+
+  /* status bar + island */
+  .statusbar { height:54px; display:flex; align-items:flex-end; justify-content:space-between; padding:0 30px 6px; flex:none; position:relative; }
+  .statusbar .time { font-size:15px; font-weight:600; }
+  .island { position:absolute; left:50%; top:12px; transform:translateX(-50%); width:112px; height:32px; border-radius:20px; background:#000; }
+  .status-icons { display:flex; gap:6px; align-items:center; }
+
+  /* scroll content */
+  .scroll { flex:1; overflow:hidden; padding:10px 16px 0; position:relative; }
+  .screen-title { font-size:28px; font-weight:700; letter-spacing:-.3px; }
+  .screen-sub { font-size:15px; color:var(--text-2); margin-top:5px; line-height:1.35; }
+
+  .section { margin-top:26px; }
+
+  /* ---- card ---- */
+  .card {
+    background: linear-gradient(180deg, var(--surface-top), var(--surface-bot));
+    border-radius: var(--radius-card);
+    border: 1px solid rgba(255,255,255,.07);
+    box-shadow: 0 5px 9px rgba(0,0,0,.18), inset 0 1px 0 rgba(255,255,255,.05);
+    padding: 20px;
+  }
+  .overline {
+    font-size:11px; font-weight:600; letter-spacing:1.4px; text-transform:uppercase;
+    color: var(--text-3);
+  }
+  .card-head { display:flex; align-items:center; gap:9px; margin-top:12px; }
+  .card-head .glyph { width:22px; height:22px; display:flex; align-items:center; justify-content:center; }
+  .card-title { font-size:22px; font-weight:600; letter-spacing:-.2px; }
+  .card-blurb { font-size:15px; color:var(--text-2); margin-top:7px; line-height:1.35; }
+  .badge {
+    font-size:10px; font-weight:600; letter-spacing:.5px; text-transform:uppercase;
+    color:var(--warn); background:rgba(240,160,32,.16); border:1px solid rgba(240,160,32,.34);
+    height:18px; padding:0 7px; border-radius:9px; display:inline-flex; align-items:center;
+    vertical-align:2px; margin-left:8px;
+  }
+
+  /* ---- schedule rows ---- */
+  .dose-progress { margin-top:16px; }
+  .dose-progress .label { font-size:13px; color:var(--text-2); display:flex; justify-content:space-between; }
+  .dose-progress .label b { color:var(--text-1); font-weight:600; font-variant-numeric:tabular-nums; }
+  .pips { display:flex; gap:5px; margin-top:8px; }
+  .pip { height:10px; flex:1; border-radius:5px; background:var(--inset); }
+  .pip.on { background:var(--accent); }
+
+  .rows { margin-top:14px; }
+  .row { display:flex; align-items:center; gap:12px; padding:11px 0; }
+  .row + .row { border-top:1px solid var(--border); }
+  .row .time { width:62px; font-size:13px; font-weight:500; color:var(--text-2); font-variant-numeric:tabular-nums; }
+  .row .med { flex:1; min-width:0; }
+  .row .med .name { font-size:15px; font-weight:600; }
+  .row .med .detail { font-size:12px; color:var(--text-3); margin-top:1px; }
+  .row.taken .name { color:var(--text-2); }
+
+  .dose-state { display:flex; align-items:center; gap:6px; font-size:11px; font-weight:600; }
+  .check {
+    width:24px; height:24px; border-radius:50%; background:var(--accent);
+    display:flex; align-items:center; justify-content:center; flex:none;
+  }
+  .check svg { width:12px; height:12px; }
+  .state-taken { color:var(--accent); }
+  .state-later { color:var(--text-3); }
+  .ring { width:24px; height:24px; border-radius:50%; border:1.5px solid var(--border-hi); flex:none; }
+  .log-btn {
+    font-size:12px; font-weight:600; color:var(--accent);
+    border:1px solid rgba(105,221,184,.4); background:rgba(105,221,184,.12);
+    padding:6px 12px; border-radius:999px;
+  }
+
+  /* ---- buttons ---- */
+  .btn {
+    height:48px; border-radius:var(--radius-ctl); display:flex; align-items:center; justify-content:center;
+    gap:8px; font-size:17px; font-weight:600; letter-spacing:.2px; width:100%;
+  }
+  .btn-secondary {
+    background:linear-gradient(180deg, var(--surface-top), var(--surface-bot));
+    border:1px solid var(--border); color:var(--text-1);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.05);
+  }
+  .btn-primary { background:var(--accent); color:#0E1F19; }
+  .btn-tertiary { color:var(--accent); background:none; }
+  .card .btn { margin-top:16px; }
+
+  /* ---- vital response card ---- */
+  .chips { display:flex; gap:8px; margin-top:14px; flex-wrap:wrap; }
+  .chip {
+    font-size:12px; font-weight:500; padding:7px 12px; border-radius:999px;
+    background:var(--inset); border:1px solid var(--border); color:var(--text-2);
+    font-variant-numeric:tabular-nums;
+  }
+  .chip.on { color:var(--accent); background:rgba(105,221,184,.12); border-color:rgba(105,221,184,.4); }
+
+  .seg {
+    display:flex; background:var(--inset); border-radius:13px; padding:3px; height:32px; margin-top:12px;
+  }
+  .seg div {
+    flex:1; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:600;
+    color:var(--text-3); border-radius:10px;
+  }
+  .seg .on { background:linear-gradient(180deg,var(--surface-top),var(--surface-bot)); color:var(--text-1);
+             box-shadow:0 1px 3px rgba(0,0,0,.35); }
+
+  .chart-wrap { margin-top:14px; }
+  .chart-head { display:flex; justify-content:space-between; align-items:baseline; }
+  .chart-head .metric { font-size:13px; font-weight:600; color:var(--heart); }
+  .chart-head .range { font-size:11px; color:var(--text-3); }
+
+  .deltas { display:flex; gap:8px; margin-top:12px; }
+  .delta {
+    flex:1; display:flex; flex-direction:column; align-items:center; gap:3px;
+    padding:9px 4px; border-radius:14px; background:var(--inset);
+  }
+  .delta .k { font-size:10px; font-weight:600; letter-spacing:.6px; text-transform:uppercase; color:var(--text-3); }
+  .delta .v { font-size:14px; font-weight:600; font-variant-numeric:tabular-nums; display:flex; align-items:center; gap:4px; }
+  .delta .v small { font-size:10px; font-weight:500; color:var(--text-3); }
+
+  .footnote { font-size:12px; color:var(--text-3); margin-top:14px; line-height:1.4; }
+
+  /* ---- tab bar ---- */
+  .tabbar {
+    flex:none; height:76px; display:flex; align-items:flex-start; padding-top:10px;
+    background:rgba(29,30,35,.86); backdrop-filter:blur(20px);
+    border-top:1px solid var(--border);
+  }
+  .tab { flex:1; display:flex; flex-direction:column; align-items:center; gap:3px; color:var(--text-3); }
+  .tab.on { color:var(--accent); }
+  .tab span { font-size:10px; font-weight:500; }
+  .tab svg { width:24px; height:24px; }
+
+  /* ---- sheet (frame 2) ---- */
+  .sheet-scrim { flex:1; background:rgba(0,0,0,.45); }
+  .sheet {
+    background:var(--surface-bot); border-radius:22px 22px 0 0; padding:8px 16px 26px;
+    border-top:1px solid var(--border-hi); max-height:782px;
+  }
+  .grabber { width:36px; height:5px; border-radius:3px; background:rgba(255,255,255,.22); margin:4px auto 14px; }
+  .sheet-head { display:flex; align-items:center; justify-content:space-between; }
+  .sheet-title { font-size:20px; font-weight:600; }
+  .close {
+    width:30px; height:30px; border-radius:50%; background:var(--inset);
+    display:flex; align-items:center; justify-content:center; color:var(--text-2);
+  }
+  .field { margin-top:18px; }
+  .field .flabel { font-size:11px; font-weight:600; letter-spacing:1.4px; text-transform:uppercase; color:var(--text-3); }
+  .field .fbox {
+    margin-top:7px; background:var(--inset); border:1px solid var(--border); border-radius:14px;
+    padding:9px 12px; font-family:ui-monospace,"SF Mono",Menlo,monospace; font-size:13px; color:var(--text-1);
+    display:flex; justify-content:space-between; align-items:center;
+  }
+  .field .fbox .caret { color:var(--text-3); font-family:inherit; }
+  .field .fbox .chev { color:var(--text-3); font-size:12px; font-family:-apple-system; }
+
+  .time-row { display:flex; align-items:center; gap:10px; margin-top:7px; background:var(--inset);
+              border:1px solid var(--border); border-radius:14px; padding:9px 12px; }
+  .time-row .clock { color:var(--accent); display:flex; }
+  .time-row .t { font-family:ui-monospace,"SF Mono",Menlo,monospace; font-size:13px; flex:1; }
+  .time-row .x { color:var(--text-3); font-size:14px; }
+  .add-time { margin-top:9px; color:var(--accent); font-size:13px; font-weight:600; display:flex; align-items:center; gap:6px; }
+
+  .toggle-row { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-top:18px; }
+  .toggle-row .tt { font-size:15px; font-weight:500; }
+  .toggle-row .td { font-size:12px; color:var(--text-3); margin-top:2px; line-height:1.35; }
+  .switch {
+    width:51px; height:31px; border-radius:16px; background:var(--accent); position:relative; flex:none;
+  }
+  .switch::after {
+    content:""; position:absolute; top:2px; right:2px; width:27px; height:27px; border-radius:50%;
+    background:#fff; box-shadow:0 2px 5px rgba(0,0,0,.3);
+  }
+  .switch.off { background:#39393D; }
+  .switch.off::after { right:auto; left:2px; }
+
+  .sheet .btn-primary { margin-top:24px; }
+  .sheet .btn-tertiary { margin-top:4px; height:40px; font-size:15px; }
+</style>
+</head>
+<body>
+
+<div class="page-title">NOOP — Medications tab · placeholder mockup (dark, Titanium/Mint defaults)</div>
+<div class="page-sub">Replaces the Coach tab (slot 4). Tokens: Packages/StrandDesign — canvas #1D1E23, cards #30323B→#282A31 r22, inset #23252C, accent mint #69DDB8, overline 11/600/+1.4.</div>
+
+<div class="frames">
+
+  <!-- ============ FRAME 1 : MAIN SCREEN ============ -->
+  <div>
+    <div class="frame-label">Medications (tab 4, was Coach)</div>
+    <div class="phone"><div class="screen">
+
+      <div class="statusbar">
+        <div class="island"></div>
+        <div class="time">9:41</div>
+        <div class="status-icons">
+          <svg width="18" height="11" viewBox="0 0 18 11" fill="#F7F7FA"><rect x="0" y="7" width="3" height="4" rx="1"/><rect x="4.5" y="5" width="3" height="6" rx="1"/><rect x="9" y="2.5" width="3" height="8.5" rx="1"/><rect x="13.5" y="0" width="3" height="11" rx="1"/></svg>
+          <svg width="22" height="11" viewBox="0 0 25 12"><rect x="0.5" y="0.5" width="20" height="11" rx="3.5" fill="none" stroke="#F7F7FA" opacity=".5"/><rect x="2" y="2" width="15" height="8" rx="2" fill="#F7F7FA"/><path d="M23 4v4c1-.3 1.6-1 1.6-2S24 4.3 23 4z" fill="#F7F7FA" opacity=".5"/></svg>
+        </div>
+      </div>
+
+      <div class="scroll">
+        <div class="screen-title">Medications</div>
+        <div class="screen-sub">Log doses and see how your vitals respond.</div>
+
+        <!-- Schedule card -->
+        <div class="section card">
+          <div class="overline">Today · Mon Sep 7</div>
+          <div class="card-head">
+            <div class="glyph">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#69DDB8" stroke-width="1.8" stroke-linecap="round">
+                <rect x="9.2" y="2.6" width="9" height="15" rx="4.5" transform="rotate(45 12 12)"/>
+                <path d="M7.5 10.5l6.4 6.4" />
+              </svg>
+            </div>
+            <div class="card-title">Schedule</div>
+          </div>
+          <div class="card-blurb">Tap a dose when you take it. Times come from each medication's plan.</div>
+
+          <div class="dose-progress">
+            <div class="label"><span>Doses logged</span><b>2 of 4</b></div>
+            <div class="pips"><div class="pip on"></div><div class="pip on"></div><div class="pip"></div><div class="pip"></div></div>
+          </div>
+
+          <div class="rows">
+            <div class="row taken">
+              <div class="time">8:00 AM</div>
+              <div class="med"><div class="name">Metoprolol</div><div class="detail">25 mg · with breakfast</div></div>
+              <div class="dose-state state-taken">
+                <div class="check"><svg viewBox="0 0 12 12" fill="none" stroke="#0E1F19" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 6.2l2.6 2.6L10 3.4"/></svg></div>
+                Taken
+              </div>
+            </div>
+            <div class="row taken">
+              <div class="time">9:30 AM</div>
+              <div class="med"><div class="name">Vitamin D3</div><div class="detail">2,000 IU</div></div>
+              <div class="dose-state state-taken">
+                <div class="check"><svg viewBox="0 0 12 12" fill="none" stroke="#0E1F19" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 6.2l2.6 2.6L10 3.4"/></svg></div>
+                Taken
+              </div>
+            </div>
+            <div class="row">
+              <div class="time">2:00 PM</div>
+              <div class="med"><div class="name">Magnesium</div><div class="detail">400 mg · glycinate</div></div>
+              <div class="log-btn">Log dose</div>
+            </div>
+            <div class="row">
+              <div class="time">9:30 PM</div>
+              <div class="med"><div class="name">Melatonin</div><div class="detail">3 mg · before bed</div></div>
+              <div class="dose-state state-later"><div class="ring"></div>9:30 PM</div>
+            </div>
+          </div>
+
+          <div class="btn btn-secondary">
+            <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M7.5 2v11M2 7.5h11"/></svg>
+            Add medication
+          </div>
+        </div>
+
+        <!-- Vital response card -->
+        <div class="section card">
+          <div class="overline">Placeholder</div>
+          <div class="card-head">
+            <div class="glyph">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#FF6B81" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M3 12h4l2.5-6 4 12 2.5-6h5"/>
+              </svg>
+            </div>
+            <div class="card-title">Vital response<span class="badge">Mock data</span></div>
+          </div>
+          <div class="card-blurb">Resting heart rate, HRV and sleep in the 7 days before vs after a start date.</div>
+
+          <div class="chips">
+            <div class="chip on">Metoprolol</div>
+            <div class="chip">Melatonin</div>
+            <div class="chip">Magnesium</div>
+          </div>
+
+          <div class="seg"><div class="on">Resting HR</div><div>HRV</div><div>Sleep</div></div>
+
+          <div class="chart-wrap">
+            <div class="chart-head">
+              <div class="metric">Resting heart rate</div>
+              <div class="range">Aug 25 – Sep 7</div>
+            </div>
+            <svg width="321" height="158" viewBox="0 0 321 158" style="display:block; margin-top:6px;">
+              <defs>
+                <linearGradient id="hrfill" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0" stop-color="#FF6B81" stop-opacity=".18"/>
+                  <stop offset="1" stop-color="#FF6B81" stop-opacity="0"/>
+                </linearGradient>
+              </defs>
+              <!-- grid -->
+              <g stroke="#383A43" stroke-width="1">
+                <line x1="30" y1="18"  x2="321" y2="18"/>
+                <line x1="30" y1="62"  x2="321" y2="62"/>
+                <line x1="30" y1="106" x2="321" y2="106"/>
+                <line x1="30" y1="150" x2="321" y2="150"/>
+              </g>
+              <!-- y labels -->
+              <g fill="#7D7F88" font-size="10" text-anchor="end" font-variant-numeric="tabular-nums">
+                <text x="24" y="21">66</text>
+                <text x="24" y="65">62</text>
+                <text x="24" y="109">58</text>
+                <text x="24" y="153">54</text>
+              </g>
+              <!-- before/after averages (dotted) -->
+              <line x1="30" y1="47.6" x2="174" y2="47.6" stroke="#7D7F88" stroke-width="1" stroke-dasharray="2 4" opacity=".8"/>
+              <line x1="196" y1="91.6" x2="321" y2="91.6" stroke="#7D7F88" stroke-width="1" stroke-dasharray="2 4" opacity=".8"/>
+              <!-- start rule -->
+              <line x1="185" y1="10" x2="185" y2="150" stroke="#69DDB8" stroke-width="1.2" stroke-dasharray="5 4" opacity=".9"/>
+              <text x="185" y="6" fill="#69DDB8" font-size="9.5" font-weight="600" text-anchor="middle" letter-spacing=".5">STARTED SEP 1</text>
+              <!-- area + line : 14 pts, x from 30 step 22.38 ; y = 150 - (v-54)*11 -->
+              <path d="M30,51 52.4,62 74.8,40 97.2,51 119.5,62 141.9,51 164.3,62 186.7,84 209.1,95 231.4,84 253.8,106 276.2,95 298.6,106 321,106 L321,150 L30,150 Z" fill="url(#hrfill)"/>
+              <path d="M30,51 52.4,62 74.8,40 97.2,51 119.5,62 141.9,51 164.3,62 186.7,84 209.1,95 231.4,84 253.8,106 276.2,95 298.6,106 321,106" fill="none" stroke="#FF6B81" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+              <circle cx="321" cy="106" r="3.2" fill="#FF6B81"/>
+            </svg>
+          </div>
+
+          <div class="deltas">
+            <div class="delta"><div class="k">Resting HR</div><div class="v" style="color:#FF6B81;">−4 <small>bpm</small></div></div>
+            <div class="delta"><div class="k">HRV</div><div class="v" style="color:#4A90E2;">+6 <small>ms</small></div></div>
+            <div class="delta"><div class="k">Deep sleep</div><div class="v" style="color:#FD96FD;">+12 <small>min</small></div></div>
+          </div>
+
+          <div class="footnote">7-day averages before vs after Sep 1. Correlation, not causation — placeholder layout, not medical advice.</div>
+        </div>
+      </div>
+
+      <!-- tab bar -->
+      <div class="tabbar">
+        <div class="tab">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3.5" y="3.5" width="7.5" height="7.5" rx="2"/><rect x="13" y="3.5" width="7.5" height="7.5" rx="2"/><rect x="3.5" y="13" width="7.5" height="7.5" rx="2"/><rect x="13" y="13" width="7.5" height="7.5" rx="2"/></svg>
+          <span>Today</span>
+        </div>
+        <div class="tab">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4v15.5h16"/><path d="M6.5 15l4-4.5 3 2.5 5-6.5"/></svg>
+          <span>Trends</span>
+        </div>
+        <div class="tab">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 18.5v-8a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v8"/><path d="M3 18.5h18"/><path d="M6 8.5V7a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v1.5"/></svg>
+          <span>Sleep</span>
+        </div>
+        <div class="tab on">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><rect x="8.2" y="3.6" width="8" height="13.4" rx="4" transform="rotate(45 12 12)"/><path d="M7.6 10.4l5.2 5.2"/></svg>
+          <span>Meds</span>
+        </div>
+        <div class="tab">
+          <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5.5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="18.5" cy="12" r="1.7"/></svg>
+          <span>More</span>
+        </div>
+      </div>
+
+    </div></div>
+  </div>
+
+  <!-- ============ FRAME 2 : ADD MEDICATION SHEET ============ -->
+  <div>
+    <div class="frame-label">Add medication (sheet)</div>
+    <div class="phone"><div class="screen">
+
+      <div class="statusbar">
+        <div class="island"></div>
+        <div class="time">9:41</div>
+        <div class="status-icons">
+          <svg width="18" height="11" viewBox="0 0 18 11" fill="#F7F7FA"><rect x="0" y="7" width="3" height="4" rx="1"/><rect x="4.5" y="5" width="3" height="6" rx="1"/><rect x="9" y="2.5" width="3" height="8.5" rx="1"/><rect x="13.5" y="0" width="3" height="11" rx="1"/></svg>
+          <svg width="22" height="11" viewBox="0 0 25 12"><rect x="0.5" y="0.5" width="20" height="11" rx="3.5" fill="none" stroke="#F7F7FA" opacity=".5"/><rect x="2" y="2" width="15" height="8" rx="2" fill="#F7F7FA"/><path d="M23 4v4c1-.3 1.6-1 1.6-2S24 4.3 23 4z" fill="#F7F7FA" opacity=".5"/></svg>
+        </div>
+      </div>
+
+      <div class="sheet-scrim"></div>
+      <div class="sheet">
+        <div class="grabber"></div>
+        <div class="sheet-head">
+          <div class="sheet-title">Add medication</div>
+          <div class="close">
+            <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M2 2l9 9M11 2l-9 9"/></svg>
+          </div>
+        </div>
+
+        <div class="field">
+          <div class="flabel">Name</div>
+          <div class="fbox">Metoprolol<span class="caret">|</span></div>
+        </div>
+
+        <div class="field">
+          <div class="flabel">Dose</div>
+          <div class="fbox">25 mg</div>
+        </div>
+
+        <div class="field">
+          <div class="flabel">Schedule</div>
+          <div class="time-row">
+            <span class="clock"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3.2 2"/></svg></span>
+            <span class="t">8:00 AM</span>
+            <span class="x">×</span>
+          </div>
+          <div class="time-row">
+            <span class="clock"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3.2 2"/></svg></span>
+            <span class="t">8:00 PM</span>
+            <span class="x">×</span>
+          </div>
+          <div class="add-time">
+            <svg width="13" height="13" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M7.5 2v11M2 7.5h11"/></svg>
+            Add a time
+          </div>
+        </div>
+
+        <div class="field">
+          <div class="flabel">Start date</div>
+          <div class="fbox">Sep 1, 2026<span class="chev">▾</span></div>
+        </div>
+
+        <div class="toggle-row">
+          <div>
+            <div class="tt">Dose reminders</div>
+            <div class="td">Notify when a dose is due.</div>
+          </div>
+          <div class="switch"></div>
+        </div>
+
+        <div class="toggle-row">
+          <div>
+            <div class="tt">Track vital response</div>
+            <div class="td">Compare HR, HRV and sleep before vs after the start date.</div>
+          </div>
+          <div class="switch"></div>
+        </div>
+
+        <div class="btn btn-primary">Save medication</div>
+        <div class="btn btn-tertiary">Cancel</div>
+      </div>
+
+    </div></div>
+  </div>
+
+</div>
+</body>
+</html>

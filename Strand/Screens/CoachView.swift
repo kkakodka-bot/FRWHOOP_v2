@@ -2,7 +2,7 @@ import SwiftUI
 import MarkdownUI
 import StrandDesign
 
-/// Coach, the one feature in NOOP that talks to the network.
+/// Coach, the one feature in NARA that talks to the network.
 ///
 /// It is strictly opt-in and bring-your-own-key: the user pastes their own OpenAI
 /// or Anthropic API key (stored in the macOS Keychain by `AICoachEngine`), and only
@@ -201,7 +201,7 @@ struct CoachView: View {
                     CoachBriefScheduler.setEnabled(on, generateBrief: { await coach.generateBrief() }) { outcome in
                         if outcome == .denied {
                             briefEnabled = false
-                            briefStatus = "Notifications are off for NOOP — enable them in Settings first."
+                            briefStatus = "Notifications are off for NARA — enable them in Settings first."
                         }
                     }
                 }
@@ -215,7 +215,7 @@ struct CoachView: View {
                             .labelsHidden()
                             .accessibilityLabel("Morning brief time")
                     }
-                    Text("At \(Platform.deviceNounPhrase == "Mac" ? "this time" : "or soon after"), NOOP will use your key to generate today's brief. Best-effort: \(Platform.deviceNounPhrase) decides exactly when a backgrounded app wakes.")
+                    Text("At \(Platform.deviceNounPhrase == "Mac" ? "this time" : "or soon after"), NARA will use your key to generate today's brief. Best-effort: \(Platform.deviceNounPhrase) decides exactly when a backgrounded app wakes.")
                         .font(StrandFont.caption).foregroundStyle(StrandPalette.textTertiary)
                         .fixedSize(horizontal: false, vertical: true)
                     NoopButton(briefGenerating ? "Generating…" : "Generate now", systemImage: "sparkles", kind: .secondary) {

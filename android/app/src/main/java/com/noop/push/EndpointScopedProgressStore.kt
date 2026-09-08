@@ -20,9 +20,21 @@ class EndpointScopedProgressStore(
     override suspend fun saveCursor(table: PushAppendTable, deviceId: String, cursor: PushCursor) =
         delegate.saveCursor(table, scoped(deviceId), cursor)
 
+    override suspend fun binaryCursor(table: PushBinaryTable, deviceId: String): PushCursor? =
+        delegate.binaryCursor(table, scoped(deviceId))
+
+    override suspend fun saveBinaryCursor(table: PushBinaryTable, deviceId: String, cursor: PushCursor) =
+        delegate.saveBinaryCursor(table, scoped(deviceId), cursor)
+
     override suspend fun window(table: PushMutableTable, deviceId: String): PushWindowProgress? =
         delegate.window(table, scoped(deviceId))
 
     override suspend fun saveWindow(table: PushMutableTable, deviceId: String, progress: PushWindowProgress) =
         delegate.saveWindow(table, scoped(deviceId), progress)
+
+    override suspend fun inFlightObject(table: PushBinaryTable, deviceId: String): PushInFlightObject? =
+        delegate.inFlightObject(table, scoped(deviceId))
+
+    override suspend fun saveInFlightObject(table: PushBinaryTable, deviceId: String, object: PushInFlightObject?) =
+        delegate.saveInFlightObject(table, scoped(deviceId), object)
 }

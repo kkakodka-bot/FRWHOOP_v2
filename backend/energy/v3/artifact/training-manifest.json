@@ -1,0 +1,58 @@
+{
+  "weee_n": 412,
+  "habits_n": 1318,
+  "features_core": [
+    "enmo_mean",
+    "dyn_enmo_mean",
+    "bandpass_motion_auc_20hz",
+    "vm_mean",
+    "accel_std",
+    "enmo_mad",
+    "jerk_mean",
+    "movement_intermittency",
+    "cadence_band_power_frac",
+    "periodicity_strength"
+  ],
+  "features_hr": [
+    "hr_mean",
+    "hrr_frac"
+  ],
+  "features_gyro": [
+    "gyro_mean_dps",
+    "gyro_energy"
+  ],
+  "label_weee": "criterion_vo2_ml_kg_min / 3.5",
+  "label_habits": "criterion_vo2_ml_kg_min / 3.5 from MetCart 60s VO2/kg",
+  "target": {
+    "criterion_vo2_ml_kg_min": "WEEE DataAverage VO2[mL/kg/min]; HAbits MetCart 60s VO2/kg column",
+    "criterion_met": "criterion_vo2_ml_kg_min / 3.5",
+    "pooled": true,
+    "pool_reason": "both datasets are oxygen MET (VO2 ml/kg/min / 3.5); HAbits printer METS is rounded VO2/kg/3.5, not Weir",
+    "not_used": [
+      "Ainsworth",
+      "Google Fit",
+      "public in-lab.py clamp-below-1.0",
+      "Weir VCO2 formula",
+      "5 kcal/L O2 as a training target"
+    ],
+    "production_kcal_convention": {
+      "kcal_per_litre_o2": 5.0,
+      "role": "production conversion approximation after MET; not mixed into the training target"
+    },
+    "sync": {
+      "weee": "VO2 DataAverage absolute Time aligned to E4 ACC unix after UTC+8 site offset; 60 s bins from segment start",
+      "habits": "MetCart 60s clock in America/Chicago vs acc_resample Time; first 2 activity minutes dropped as warmup (protocol, not residual)"
+    }
+  },
+  "script": "energy/v3/research/train_eval.py",
+  "does_not_modify": "energy/v2/artifact/",
+  "physical_filter": "vm_mean [0.7, 2.5], dyn_enmo [0, 5]",
+  "mims": "renamed to bandpass_motion_auc_20hz; not NHANES MIMS",
+  "conformal": "research_residual_band; not split-conformal for shipped all-data fit",
+  "dataset_role": "development_transfer_not_external_validation",
+  "leakage_sentinel": {
+    "ok": true,
+    "train_enmo_mean": 0.0515,
+    "all_enmo_mean": 106060.64467500005
+  }
+}

@@ -84,7 +84,7 @@ struct NOOPWidgetView: View {
         var parts: [String] = []
         if let r = snap.recovery { parts.append("Charge \(r)%") }
         if let b = snap.bpm { parts.append("\(b) bpm") }
-        return parts.isEmpty ? "NOOP" : parts.joined(separator: " · ")
+        return parts.isEmpty ? "NARA" : parts.joined(separator: " · ")
     }
 
     // MARK: - Lock Screen accessories
@@ -231,7 +231,7 @@ struct NOOPWidgetView: View {
 
     private var headerRow: some View {
         HStack {
-            Text("NOOP")
+            Text("NARA")
                 .font(.system(size: 13, weight: .bold))
                 .foregroundStyle(StrandPalette.textSecondary)
             Spacer()
@@ -430,7 +430,7 @@ struct NOOPWidget: Widget {
                     .background(StrandPalette.surfaceBase)
             }
         }
-        .configurationDisplayName("NOOP")
+        .configurationDisplayName("NARA")
         .description("Charge, Effort and Rest as score rings, plus live HR and strap battery at a glance.")
         .supportedFamilies([
             .systemSmall, .systemMedium, .systemLarge,

@@ -2,6 +2,23 @@ import Compression
 import Foundation
 import WhoopProtocol
 
+/// One push-ready second of 100 Hz IMU: 600 axis-major i16 columns serialized little-endian.
+struct ImuPushRecord: Sendable {
+    let ts: Int64
+    let columns: Data
+}
+
+/// The slice of the IMU store the cloud-push object lane reads. A protocol so push tests can
+/// inject an in-memory source instead of the filesystem store.
+@MainActor
+protocol ImuSessionPushSource: Sendable {
+    /// Distinct device ids with at least one registered session window.
+    func pushDeviceIds() -> Set<String>
+    /// Up to `limit` one-second records with ts > `afterTs`, strictly ascending by ts. Records
+    /// with a malformed column count are skipped: a gap stays legible as absence on the receiver.
+    func pushRecords(deviceId: String, afterTs: Int64, limit: Int) -> [ImuPushRecord]
+}
+
 /// Canonical decoded 100 Hz IMU storage: UTC half-hour files with appendable 30-second zlib blocks.
 @MainActor
 final class ImuSessionFileStore {
@@ -187,3 +204,52 @@ final class ImuSessionFileStore {
 
 private extension Int64 { init(bigEndianBytes bytes: [UInt8], at offset: Int) { self = bytes[offset..<(offset + 8)].reduce(0) { ($0 << 8) | Int64($1) } } }
 private extension Data { mutating func appendBigEndian<T: FixedWidthInteger>(_ value: T) { var value = value.bigEndian; Swift.withUnsafeBytes(of: &value) { append(contentsOf: $0) } } }
+
+// MARK: - Push adapter (rawImuSession object lane)
+
+extension ImuSessionFileStore: ImuSessionPushSource {
+    func pushDeviceIds() -> Set<String> {
+        Set(windows().map(\.deviceId).filter { !$0.isEmpty })
+    }
+
+    func pushRecords(deviceId: String, afterTs: Int64, limit: Int) -> [ImuPushRecord] {
+        let ids = windows().filter { $0.deviceId == deviceId }.map(\.id)
+        guard !ids.isEmpty, limit > 0 else { return [] }
+        // Segments ascend in bucket order and every record in a segment has ts >= its bucket, so
+        // once `limit` records are collected and the next segment starts beyond the current
+        // limit-th ts, no later segment can displace it — the read stays bounded no matter how
+        // much history follows the cursor.
+        var byTs: [Int64: Data] = [:]
+        for id in ids {
+            flushSession(id)
+            for file in segmentFiles(id) {
+                guard let bucket = segmentBucket(file), bucket + Self.segmentSeconds > afterTs else { continue }
+                if byTs.count >= limit {
+                    let cutoff = byTs.keys.sorted()[limit - 1]
+                    if bucket > cutoff { break }
+                }
+                for record in decode((try? Data(contentsOf: file)) ?? Data()) where record.ts > afterTs {
+                    guard record.columns.count == Self.sampleRate * Self.axes, byTs[record.ts] == nil else { continue }
+                    var data = Data(capacity: Self.payloadBytes)
+                    for value in record.columns {
+                        data.append(UInt8(truncatingIfNeeded: value))
+                        data.append(UInt8(truncatingIfNeeded: value >> 8))
+                    }
+                    byTs[record.ts] = data
+                }
+            }
+        }
+        return byTs.sorted { $0.key < $1.key }.prefix(limit).map { ImuPushRecord(ts: $0.key, columns: $0.value) }
+    }
+
+    /// Reads just the 24-byte segment header for the bucket timestamp, so push paging can skip
+    /// whole files without decoding them.
+    private func segmentBucket(_ url: URL) -> Int64? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        guard let data = try? handle.read(upToCount: 24),
+              data.count >= 24,
+              data.prefix(8) == Self.magic else { return nil }
+        return Int64(bigEndianBytes: [UInt8](data), at: 8)
+    }
+}

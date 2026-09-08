@@ -8,6 +8,7 @@ import androidx.work.ListenableWorker
 import androidx.work.WorkerParameters
 import com.noop.R
 import com.noop.data.WhoopDatabase
+import com.noop.testcentre.ImuSessionFileStore
 import java.time.LocalDate
 import java.time.ZoneId
 import kotlinx.coroutines.CancellationException
@@ -214,7 +215,7 @@ class SelfHostedPushWorker(
             return ExecutionOutcome(Execution.COMPLETE)
         }
         // Room is first opened here, after the stale-work, endpoint, network-policy, token and identity gates.
-        val dao = WhoopDatabase.get(applicationContext).pushDao()
+        val dao = WhoopDatabase.get(applicationContext).pushDao(ImuSessionFileStore(applicationContext))
         val progress = EndpointScopedProgressStore(
             SharedPrefsPushProgressStore.from(applicationContext),
             namespace,
@@ -230,7 +231,7 @@ class SelfHostedPushWorker(
             today = { LocalDate.now() },
             zoneId = ZoneId.systemDefault(),
             destinationStillCurrent = { settings.enabledEndpoint() == endpoint },
-        ).pushKnownDevices(startDeviceIndex, MAX_DEVICES_PER_RUN, capabilities)
+        ).pushKnownDevices(startDeviceIndex, MAX_DEVICES_PER_RUN, capabilities, settings.binaryObjectsEnabled())
         settings.recordAcceptedBatches(
             run.acceptedBatches,
             records = run.acceptedRecords.toLong(),
@@ -247,7 +248,8 @@ class SelfHostedPushWorker(
             namespace,
             persistedDeviceIndex(startDeviceIndex, run.nextDeviceIndex, retryableFailure = false),
         )
-        val cycleNeedsAnotherPass = settings.cycleNeedsAnotherPass(namespace) || run.hasMoreAppendRows
+        val cycleNeedsAnotherPass = settings.cycleNeedsAnotherPass(namespace) ||
+            run.hasMoreAppendRows || run.hasMoreBinaryRows
         val runHadTerminalRejection = run.rejectedBatches > 0 && !run.hasRetryableFailure
         val cycleHadRejection = settings.cycleHadRejection(namespace) || runHadTerminalRejection
         val cycleFailure = settings.cycleFailure(namespace) ?: run.failure.takeIf { runHadTerminalRejection }

@@ -1898,7 +1898,7 @@ class WhoopBleClient(
         fun futureDatedStrapBanner(strapNewestTs: Long?, wallNowUnix: Long): String? =
             if (!isFutureDatedNewest(strapNewestTs, wallNowUnix)) null
             else "Synced, but your strap's clock is set in the future - its banked history is dated ahead of " +
-                "today, so NOOP can't trust those timestamps and didn't import them (importing them would " +
+                "today, so NARA can't trust those timestamps and didn't import them (importing them would " +
                 "misfile your data days or years ahead). Fully charge the strap to 100% and power-cycle it so " +
                 "its clock re-syncs, then reconnect."
 
@@ -3679,7 +3679,7 @@ class WhoopBleClient(
             log("No Bluetooth LE on this device")
             _state.update { it.copy(
                 scanning = false,
-                statusNote = "This device has no Bluetooth LE. NOOP has to run on a real phone with " +
+                statusNote = "This device has no Bluetooth LE. NARA has to run on a real phone with " +
                     "Bluetooth, near your strap. It can't connect from an emulator or virtual device.") }
             return
         }
@@ -3814,8 +3814,8 @@ class WhoopBleClient(
             log("Scan blocked (permission): ${se.message}")
             _state.update { it.copy(
                 scanning = false,
-                statusNote = "NOOP needs the Nearby devices / Bluetooth permission. Allow it in " +
-                    "Settings → Apps → NOOP → Permissions, then tap Connect.") }
+                statusNote = "NARA needs the Nearby devices / Bluetooth permission. Allow it in " +
+                    "Settings → Apps → NARA → Permissions, then tap Connect.") }
             return
         } catch (t: Throwable) {
             scanning = false
@@ -6185,7 +6185,7 @@ class WhoopBleClient(
             if (_state.value.reconnectGuide == null) {
                 _state.update { it.copy(
                     reconnectGuide = """
-                    Your strap connects but never finishes pairing with NOOP. This is almost always a stale Bluetooth pairing, usually after a WHOOP firmware update, or the official WHOOP app holding the strap. NOOP works fine once it's re-paired:
+                    Your strap connects but never finishes pairing with NARA. This is almost always a stale Bluetooth pairing, usually after a WHOOP firmware update, or the official WHOOP app holding the strap. NARA works fine once it's re-paired:
 
                     1. Quit the official WHOOP app (or turn off Bluetooth on that phone).
                     2. Open Settings → Bluetooth, find your WHOOP, and Forget / Unpair it.
@@ -6798,7 +6798,7 @@ class WhoopBleClient(
                 log("WHOOP 5/MG detected — will send CLIENT_HELLO after subscribing (experimental).")
                 _state.update { it.copy(
                     whoop5Detected = true,
-                    statusNote = "WHOOP 5/MG connected - experimental. After bonding, NOOP brings up live " +
+                    statusNote = "WHOOP 5/MG connected - experimental. After bonding, NARA brings up live " +
                         "heart rate from the strap's realtime stream. Deeper metrics (recovery, strain, " +
                         "sleep) for 5/MG are still being figured out. WHOOP 4.0 is fully supported today.",
                 ) }
@@ -10682,7 +10682,7 @@ class WhoopBleClient(
             if (_state.value.reconnectGuide == null) {
                 _state.update { it.copy(
                     reconnectGuide = """
-                    Your strap keeps connecting and then dropping a second later. This is almost always a stale Bluetooth pairing - usually after a WHOOP firmware update, or the official WHOOP app holding the strap. NOOP works fine once it's re-paired:
+                    Your strap keeps connecting and then dropping a second later. This is almost always a stale Bluetooth pairing - usually after a WHOOP firmware update, or the official WHOOP app holding the strap. NARA works fine once it's re-paired:
 
                     1. Quit the official WHOOP app (or turn off Bluetooth on that phone).
                     2. Open Settings → Bluetooth, find your WHOOP, and Forget / Unpair it.
@@ -10736,7 +10736,7 @@ class WhoopBleClient(
             if (_state.value.reconnectGuide == null) {
                 _state.update { it.copy(
                     reconnectGuide = """
-                    Your strap connects but never finishes pairing with NOOP, so it drops and retries in a loop. This is almost always a stale Bluetooth pairing, usually after a WHOOP firmware update, or the official WHOOP app holding the strap. NOOP works fine once it's re-paired:
+                    Your strap connects but never finishes pairing with NARA, so it drops and retries in a loop. This is almost always a stale Bluetooth pairing, usually after a WHOOP firmware update, or the official WHOOP app holding the strap. NARA works fine once it's re-paired:
 
                     1. Quit the official WHOOP app (or turn off Bluetooth on that phone).
                     2. Open Settings → Bluetooth, find your WHOOP, and Forget / Unpair it.
@@ -10874,7 +10874,7 @@ class WhoopBleClient(
                 if (staleDirectFailures >= 2) {
                     _state.update { it.copy(
                         reconnectGuide = """
-                        Your strap's Bluetooth pairing was reset - usually by a WHOOP firmware update, or the official WHOOP app reconnecting. NOOP works fine on the new firmware; you just need to re-pair:
+                        Your strap's Bluetooth pairing was reset - usually by a WHOOP firmware update, or the official WHOOP app reconnecting. NARA works fine on the new firmware; you just need to re-pair:
 
                         1. Quit the official WHOOP app (or turn off Bluetooth on that phone).
                         2. Open Settings → Bluetooth, find your WHOOP, and Forget / Unpair it.

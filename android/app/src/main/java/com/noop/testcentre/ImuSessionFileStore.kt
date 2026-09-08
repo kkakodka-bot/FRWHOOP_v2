@@ -3,6 +3,8 @@ package com.noop.testcentre
 import android.content.Context
 import com.noop.data.StreamPersistence
 import com.noop.protocol.Whoop5RawImu
+import com.noop.push.ImuPushRecord
+import com.noop.push.ImuSessionPushSource
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
@@ -14,7 +16,7 @@ import java.util.zip.Deflater
 import java.util.zip.Inflater
 
 /** Stores decoded 100 Hz IMU in fixed UTC half-hour segments owned by one capture session. */
-class ImuSessionFileStore(private val context: Context) {
+class ImuSessionFileStore(private val context: Context) : ImuSessionPushSource {
     data class Stats(val bytes: Long, val coveredSeconds: Int, val firstTs: Long?)
     data class ExportSegment(val name: String, val data: ByteArray, val startTs: Long, val endTs: Long,
                              val sampleCount: Int)
@@ -124,6 +126,46 @@ class ImuSessionFileStore(private val context: Context) {
                 ExportSegment("imu-${utcName(bucket)}.imus", encodeFile(bucket, records), records.first().ts,
                     records.last().ts, records.size * SAMPLE_RATE)
             }
+    }
+
+    override fun pushDeviceIds(): Set<String> = synchronized(lock) {
+        ids().mapNotNull { id -> prefs.getString("$id.device", null)?.takeIf { it.isNotEmpty() } }.toSet()
+    }
+
+    override fun pushRecords(deviceId: String, afterTs: Long, limit: Int): List<ImuPushRecord> = synchronized(lock) {
+        val sessionIds = ids().filter { prefs.getString("$it.device", null) == deviceId }
+        if (sessionIds.isEmpty() || limit <= 0) return emptyList()
+        val byTs = linkedMapOf<Long, ByteArray>()
+        for (id in sessionIds) {
+            flushSession(id)
+            for (file in segmentFiles(id)) {
+                val bucket = segmentBucket(file) ?: continue
+                if (bucket + SEGMENT_SECONDS <= afterTs) continue
+                if (byTs.size >= limit) {
+                    val cutoff = byTs.keys.sorted()[limit - 1]
+                    if (bucket > cutoff) break
+                }
+                for (record in decodeFile(file.readBytes())) where record.ts > afterTs {
+                    if (record.columns.size != SAMPLE_RATE * AXES || byTs.containsKey(record.ts)) continue
+                    val data = ByteArray(PAYLOAD_BYTES)
+                    var offset = 0
+                    for (value in record.columns) {
+                        data[offset++] = (value.toInt() and 0xff).toByte()
+                        data[offset++] = ((value.toInt() shr 8) and 0xff).toByte()
+                    }
+                    byTs[record.ts] = data
+                }
+            }
+        }
+        return byTs.entries.sortedBy { it.key }.take(limit).map { ImuPushRecord(it.key, it.value) }
+    }
+
+    private fun segmentBucket(file: File): Long? {
+        if (!file.isFile) return null
+        val header = runCatching { file.inputStream().use { it.readNBytes(FILE_HEADER_BYTES) } }.getOrNull()
+            ?: return null
+        if (header.size < FILE_HEADER_BYTES || !header.copyOfRange(0, MAGIC.size).contentEquals(MAGIC)) return null
+        return java.nio.ByteBuffer.wrap(header, MAGIC.size, 8).order(java.nio.ByteOrder.BIG_ENDIAN).long
     }
 
     private fun readRecords(id: String, from: Long, to: Long, includePending: Boolean): List<Record> {

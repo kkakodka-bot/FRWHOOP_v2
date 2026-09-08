@@ -41,16 +41,24 @@ internal object PushDeviceDiscovery {
  * Narrow, read-only Room snapshot adapter. SQL identifiers come exclusively from the closed enums below;
  * user/config input is always a bind argument. Every cursor is consumed and closed inside [withTransaction].
  */
-class PushDao internal constructor(private val db: WhoopDatabase) : PushSnapshotSource {
+class PushDao internal constructor(
+    private val db: WhoopDatabase,
+    private val imuPushSource: ImuSessionPushSource? = null,
+) : PushSnapshotSource {
     override suspend fun knownDeviceIds(capabilities: PushCapabilities): List<String> = db.withTransaction {
         val supportedTables = capabilities.appendTables.map(::appendSpec) +
-            capabilities.mutableTables.map(::mutableSpec)
+            capabilities.mutableTables.map(::mutableSpec) +
+            capabilities.binaryTables.mapNotNull(::binarySpec)
         val sql = PushDeviceDiscovery.query(supportedTables.map(TableSpec::sqlName))
-        db.query(SimpleSQLiteQuery(sql)).use { cursor ->
+        val ids = db.query(SimpleSQLiteQuery(sql)).use { cursor ->
             buildList {
                 while (cursor.moveToNext()) cursor.getString(0)?.takeIf { it.isNotBlank() }?.let(::add)
             }
+        }.toMutableSet()
+        if (PushBinaryTable.RAW_IMU_SESSION in capabilities.binaryTables) {
+            imuPushSource?.pushDeviceIds()?.let { ids.addAll(it) }
         }
+        ids.sorted()
     }
 
     override suspend fun appendRecordAt(
@@ -136,6 +144,61 @@ class PushDao internal constructor(private val db: WhoopDatabase) : PushSnapshot
         }
     }
 
+    override suspend fun binaryRecordAt(
+        table: PushBinaryTable,
+        deviceId: String,
+        rowId: Long,
+    ): PushBinaryRow? = when (table) {
+        PushBinaryTable.RAW_BATCH -> null
+        PushBinaryTable.RAW_IMU_SESSION -> {
+            val source = imuPushSource ?: return null
+            val record = source.pushRecords(deviceId, rowId - 1, 1).firstOrNull()?.takeIf { it.ts == rowId }
+                ?: return null
+            PushBinaryRow.RawImuSession(PushRawImuRecord(record.ts, record.ts, record.columns))
+        }
+        else -> db.withTransaction {
+            val spec = binarySpec(table) ?: return@withTransaction null
+            val sql = "SELECT rowid AS _pushRowId, ${spec.columns.joinToString()} FROM ${spec.sqlName} " +
+                "WHERE deviceId = ? AND rowid = ? LIMIT 1"
+            db.query(SimpleSQLiteQuery(sql, arrayOf(deviceId, rowId))).use { cursor ->
+                if (cursor.moveToFirst()) cursor.binaryRecord(table) else null
+            }
+        }
+    }
+
+    override suspend fun binaryRows(
+        table: PushBinaryTable,
+        deviceId: String,
+        afterRowId: Long,
+        limit: Int,
+    ): List<PushBinaryRow> {
+        if (table == PushBinaryTable.RAW_BATCH) return emptyList()
+        if (table == PushBinaryTable.RAW_IMU_SESSION) {
+            val source = imuPushSource ?: return emptyList()
+            return source.pushRecords(deviceId, afterRowId, limit)
+                .map { PushBinaryRow.RawImuSession(PushRawImuRecord(it.ts, it.ts, it.columns)) }
+        }
+        require(limit >= 1)
+        val spec = binarySpec(table) ?: return emptyList()
+        return db.withTransaction {
+            val sql = "SELECT rowid AS _pushRowId, ${spec.columns.joinToString()} FROM ${spec.sqlName} " +
+                "WHERE deviceId = ? AND rowid > ? ORDER BY rowid ASC LIMIT ?"
+            db.query(SimpleSQLiteQuery(sql, arrayOf(deviceId, afterRowId, limit))).use { cursor ->
+                buildList {
+                    while (cursor.moveToNext()) add(cursor.binaryRecord(table))
+                }
+            }
+        }
+    }
+
+    override suspend fun acknowledgeBinary(
+        table: PushBinaryTable,
+        deviceId: String,
+        rows: List<PushBinaryRow>,
+    ) {
+        // Android has no rawBatch table; ppg/v18 rows need no local acknowledgement marker.
+    }
+
     private fun ensureSnapshotBounded(sql: String, args: Array<Any?>) {
         val estimate = db.query(SimpleSQLiteQuery(sql, args)).use { cursor ->
             if (cursor.moveToFirst()) cursor.getLong(0) else 0L
@@ -163,6 +226,30 @@ class PushDao internal constructor(private val db: WhoopDatabase) : PushSnapshot
         )
     }
 
+    private fun Cursor.binaryRecord(table: PushBinaryTable): PushBinaryRow {
+        val rowId = getLong(getColumnIndexOrThrow("_pushRowId"))
+        val ts = getLong(getColumnIndexOrThrow("ts"))
+        return when (table) {
+            PushBinaryTable.PPG_WAVEFORM_SAMPLE -> {
+                val burstIndex = if (isNull(getColumnIndexOrThrow("burstIndex"))) {
+                    null
+                } else {
+                    getInt(getColumnIndexOrThrow("burstIndex"))
+                }
+                val samples = getBlob(getColumnIndexOrThrow("samples"))
+                    ?: throw PushProtocolException("ppgWaveformSample.samples must not be null")
+                PushBinaryRow.PpgWaveform(PushPpgWaveformRecord(rowId, ts, burstIndex, samples))
+            }
+            PushBinaryTable.V18_AUX_SAMPLE -> {
+                val fields = getBlob(getColumnIndexOrThrow("fields"))
+                    ?: throw PushProtocolException("v18AuxSample.fields must not be null")
+                PushBinaryRow.V18Aux(PushV18AuxRecord(rowId, ts, fields))
+            }
+            PushBinaryTable.RAW_BATCH -> throw PushProtocolException("rawBatch is not available on Android")
+            PushBinaryTable.RAW_IMU_SESSION -> throw PushProtocolException("rawImuSession is file-backed")
+        }
+    }
+
     private fun Cursor.values(spec: TableSpec): Map<String, Any?> = buildMap {
         for (name in spec.columns) {
             val index = getColumnIndexOrThrow(name)
@@ -171,7 +258,8 @@ class PushDao internal constructor(private val db: WhoopDatabase) : PushSnapshot
                 Cursor.FIELD_TYPE_INTEGER -> if (name in spec.booleanColumns) getLong(index) != 0L else getLong(index)
                 Cursor.FIELD_TYPE_FLOAT -> getDouble(index)
                 Cursor.FIELD_TYPE_STRING -> getString(index)
-                else -> throw PushProtocolException("unsupported SQLite type in ${spec.sqlName}.$name")
+                Cursor.FIELD_TYPE_BLOB -> getBlob(index)
+                    ?: throw PushProtocolException("unsupported SQLite type in ${spec.sqlName}.$name")
             }
             put(name, value)
         }
@@ -202,6 +290,12 @@ class PushDao internal constructor(private val db: WhoopDatabase) : PushSnapshot
         PushMutableTable.SLEEP_SESSION -> SLEEP
         PushMutableTable.WORKOUT -> WORKOUT
         PushMutableTable.JOURNAL -> JOURNAL
+    }
+
+    private fun binarySpec(table: PushBinaryTable): TableSpec? = when (table) {
+        PushBinaryTable.PPG_WAVEFORM_SAMPLE -> PPG_WAVEFORM
+        PushBinaryTable.V18_AUX_SAMPLE -> V18_AUX
+        PushBinaryTable.RAW_BATCH, PushBinaryTable.RAW_IMU_SESSION -> null
     }
 
     private companion object {
@@ -257,6 +351,16 @@ class PushDao internal constructor(private val db: WhoopDatabase) : PushSnapshot
         val JOURNAL = TableSpec(
             "journal", listOf("day", "question"), listOf("answeredYes", "notes", "numericValue"),
             booleanColumns = setOf("answeredYes"),
+        )
+        val PPG_WAVEFORM = TableSpec(
+            "ppgWaveformSample",
+            keyColumns = emptyList(),
+            dataColumns = listOf("ts", "burstIndex", "samples"),
+        )
+        val V18_AUX = TableSpec(
+            "v18AuxSample",
+            keyColumns = emptyList(),
+            dataColumns = listOf("ts", "fields"),
         )
     }
 }

@@ -14,6 +14,7 @@ import okio.BufferedSink
 import okio.GzipSink
 import okio.buffer
 import java.io.IOException
+import java.util.Base64
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -23,6 +24,7 @@ class PushHttpTransport(
     private val endpoint: PushEndpointPolicy.ValidEndpoint,
     private val bearerToken: String,
     private val client: OkHttpClient = defaultClient(),
+    private val uploadClient: OkHttpClient = defaultUploadClient(),
     private val onBatchStart: (PushBatch) -> Unit = {},
 ) : PushTransport {
     override suspend fun capabilities(): PushCapabilitiesResult {
@@ -30,7 +32,7 @@ class PushHttpTransport(
             .url(endpoint.url)
             .header("Authorization", "Bearer $bearerToken")
             .header("Accept", "application/json")
-            .header(ACCEPT_VERSION_HEADER, PushProtocol.VERSION)
+            .header(ACCEPT_VERSION_HEADER, PushProtocol.CAPABILITIES_ACCEPT_VERSIONS)
             .get()
             .build()
         val response = try {
@@ -69,13 +71,114 @@ class PushHttpTransport(
         return execute(batch.body, contentEncoding = null)
     }
 
-    private suspend fun execute(body: ByteArray, contentEncoding: String?): PushTransportResponse {
+    override suspend fun postBinary(batch: PushBinaryBatch): PushTransportResponse {
+        val manifestHeader = Base64.getEncoder().encodeToString(batch.manifestJSON)
+        return execute(
+            body = batch.payload,
+            contentEncoding = batch.contentEncoding,
+            contentType = OCTET_STREAM,
+            binaryObject = true,
+            manifestHeader = manifestHeader,
+        )
+    }
+
+    override suspend fun createObjectIntent(manifest: PushObjectManifest, lane: PushObjectLane): PushObjectIntent {
+        val body = manifest.encode()
+        if (body.size > 8 * 1024) throw PushTransportException(PushFailure(PushFailureCode.LOCAL_DATA))
+        val request = Request.Builder()
+            .url(laneUrl(lane.endpoint))
+            .header("Authorization", "Bearer $bearerToken")
+            .header("Accept", "application/json")
+            .header("Content-Type", "application/json")
+            .post(FixedRequestBody(body, "application/json"))
+            .build()
+        val response = executeRequest(request)
+        if (response.statusCode !in 200..299) {
+            throw PushTransportException(
+                PushFailure.http(
+                    response.statusCode,
+                    PushError.parseCode(response.body, PushProtocol.OBJECT_VERSION),
+                ),
+            )
+        }
+        return try {
+            PushObjectIntentParser.parse(response.body, manifest.objectId)
+        } catch (_: PushProtocolException) {
+            throw PushTransportException(PushFailure(PushFailureCode.ACK_INVALID))
+        }
+    }
+
+    override suspend fun uploadObject(intent: PushObjectIntent, body: ByteArray) {
+        val uploadUrl = intent.uploadUrl
+            ?: throw PushTransportException(PushFailure(PushFailureCode.ACK_INVALID))
+        val request = Request.Builder()
+            .url(uploadUrl)
+            .put(FixedRequestBody(body, OCTET_STREAM))
+            .apply {
+                intent.requiredHeaders.forEach { (name, value) -> header(name, value) }
+            }
+            .build()
+        val response = try {
+            uploadClient.newCall(request).await().use { it.code to (it.body?.bytes() ?: ByteArray(0)) }
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (io: IOException) {
+            throw PushTransportException(classifyPushTransportFailure(io), io)
+        }
+        if (response.first !in 200..299) {
+            throw PushTransportException(PushFailure.http(response.first))
+        }
+    }
+
+    override suspend fun completeObject(objectId: String, lane: PushObjectLane): PushObjectAck {
+        val request = Request.Builder()
+            .url(laneUrl("${lane.endpoint}/$objectId/complete"))
+            .header("Authorization", "Bearer $bearerToken")
+            .header("Accept", "application/json")
+            .post(FixedRequestBody(ByteArray(0), "application/json"))
+            .build()
+        val response = executeRequest(request)
+        if (response.statusCode !in 200..299) {
+            throw PushTransportException(
+                PushFailure.http(
+                    response.statusCode,
+                    PushError.parseCode(response.body, PushProtocol.OBJECT_VERSION),
+                ),
+            )
+        }
+        return try {
+            PushObjectAckParser.parse(response.body, objectId)
+        } catch (_: PushProtocolException) {
+            throw PushTransportException(PushFailure(PushFailureCode.ACK_INVALID))
+        }
+    }
+
+    private fun laneUrl(path: String): String {
+        val base = java.net.URI(endpoint.url)
+        return java.net.URI(base.scheme, base.authority, path, null, null).toString()
+    }
+
+    private suspend fun execute(body: ByteArray, contentEncoding: String?): PushTransportResponse =
+        execute(body, contentEncoding, NDJSON.toString(), binaryObject = false, manifestHeader = null)
+
+    private suspend fun execute(
+        body: ByteArray,
+        contentEncoding: String?,
+        contentType: String,
+        binaryObject: Boolean,
+        manifestHeader: String?,
+    ): PushTransportResponse {
         val request = Request.Builder()
             .url(endpoint.url)
             .header("Authorization", "Bearer $bearerToken")
             .header("Accept", "application/json")
-            .apply { if (contentEncoding != null) header("Content-Encoding", contentEncoding) }
-            .post(FixedRequestBody(body))
+            .header("Content-Type", contentType)
+            .apply {
+                if (binaryObject) header("NOOP-Push-Binary-Object", "1")
+                if (manifestHeader != null) header("NOOP-Push-Manifest", manifestHeader)
+                if (contentEncoding != null) header("Content-Encoding", contentEncoding)
+            }
+            .post(FixedRequestBody(body, contentType))
             .build()
         return executeRequest(request)
     }
@@ -126,6 +229,7 @@ class PushHttpTransport(
     companion object {
         const val ACCEPT_VERSION_HEADER = "NOOP-Push-Accept-Version"
         private val NDJSON = "application/x-ndjson; charset=utf-8".toMediaType()
+        private const val OCTET_STREAM = "application/octet-stream"
         internal fun defaultClient(): OkHttpClient = OkHttpClient.Builder()
             .followRedirects(false)
             .followSslRedirects(false)
@@ -133,6 +237,15 @@ class PushHttpTransport(
             .readTimeout(15, TimeUnit.SECONDS)
             .writeTimeout(15, TimeUnit.SECONDS)
             .callTimeout(15, TimeUnit.SECONDS)
+            .build()
+
+        internal fun defaultUploadClient(): OkHttpClient = OkHttpClient.Builder()
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .connectTimeout(10, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.MINUTES)
+            .writeTimeout(30, TimeUnit.MINUTES)
+            .callTimeout(30, TimeUnit.MINUTES)
             .build()
 
         /** Compresses only the already bounded decoded entity and rejects unexpected wire expansion. */
@@ -144,8 +257,12 @@ class PushHttpTransport(
             return buffer.readByteArray()
         }
 
-        private class FixedRequestBody(private val bytes: ByteArray) : RequestBody() {
-            override fun contentType() = NDJSON
+        private class FixedRequestBody(
+            private val bytes: ByteArray,
+            private val mediaType: String,
+        ) : RequestBody() {
+            private val type = mediaType.toMediaType()
+            override fun contentType() = type
             override fun contentLength(): Long = bytes.size.toLong()
             override fun writeTo(sink: BufferedSink) {
                 sink.write(bytes)

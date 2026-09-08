@@ -2160,11 +2160,11 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         let detail: String
         switch reason {
         case .factoryResetOrNoKey:
-            detail = "NOOP needs the ring's install key to read it live, and that pairing handshake isn't set up yet."
+            detail = "NARA needs the ring's install key to read it live, and that pairing handshake isn't set up yet."
         case .authFailed(let status):
             detail = "The ring rejected the pairing handshake (status \(status.rawValue))."
         case .installFailed(let why):
-            detail = "NOOP couldn't take over this ring (\(why))."
+            detail = "NARA couldn't take over this ring (\(why))."
         }
         let recovery = " The ring isn't bricked: re-pair it in the Oura app to recover it."
         let msg = detail + " Live data isn't available - export from the Oura app and import the file instead." + recovery

@@ -6,12 +6,12 @@ import UserNotifications
 
 // MARK: - OnboardingWizard
 //
-// A full-screen, paged onboarding + pairing flow for NOOP. Cinematic and calm:
+// A full-screen, paged onboarding + pairing flow for NARA. Cinematic and calm:
 // a dark surfaceBase substrate with a slow ambient glow, a bottom progress "thread"
 // that fills as you advance, Back always available, and a forward CTA per step.
 //
 // Steps:
-//  1 Welcome           — NOOP + "all your data, none of the cloud"
+//  1 Welcome           — NARA + "all your data, none of the cloud"
 //  2 What it does      — 3 calm value slides
 //  3 Bluetooth priming — explain BEFORE the OS prompt
 //  4 Wear & wake       — put your strap on, make sure it's charged
@@ -47,7 +47,7 @@ public struct OnboardingWizard: View {
     @State private var step: Step = .welcome
     @State private var glow = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    /// Low Power Mode / "Reduce motion in NOOP" pose these looping glows still too. Onboarding is
+    /// Low Power Mode / "Reduce motion in NARA" pose these looping glows still too. Onboarding is
     /// first-run only, but a `repeatForever` is a `repeatForever` wherever it lives.
     @ObservedObject private var motion = NoopMotionState.shared
     private var poseStill: Bool { motion.poseStill(reduceMotion) }
@@ -195,7 +195,7 @@ public struct OnboardingWizard: View {
         case .importData: return String(localized: "Continue")
         case .notifications: return String(localized: "Continue")
         case .appearance: return String(localized: "Continue")
-        case .done:       return String(localized: "Enter NOOP")
+        case .done:       return String(localized: "Enter NARA")
         }
     }
 
@@ -219,7 +219,7 @@ public struct OnboardingWizard: View {
 
     /// Leaving the Notifications step is the one point in onboarding where we actually ask the OS for
     /// notification permission — everything before this only explained why (the `NotificationsStep`
-    /// card). Without this, NOOP never showed up under Settings → Notifications at all unless a user
+    /// card). Without this, NARA never showed up under Settings → Notifications at all unless a user
     /// later found and enabled one of the opt-in automations (wind-down, battery, illness) buried in
     /// More → Alarms/Automations, each of which lazily requests on its own toggle. Mirrors the Android
     /// onboarding's `OnboardingPage.Notifications` step (`OnboardingScreen.kt`): request only if not
@@ -328,7 +328,7 @@ private struct WhatItDoesStep: View {
     ]
 
     var body: some View {
-        StepShell(title: String(localized: "What NOOP does"), subtitle: String(localized: "Three quiet promises.")) {
+        StepShell(title: String(localized: "What NARA does"), subtitle: String(localized: "Three quiet promises.")) {
             VStack(spacing: 14) {
                 ForEach(Array(slides.enumerated()), id: \.element.id) { index, slide in
                     SlideRow(slide: slide, index: index)
@@ -411,7 +411,7 @@ private struct ExpectationsStep: View {
                 expectationRow(
                     icon: "iphone.gen3",
                     title: String(localized: "Installed outside the App Store"),
-                    body: String(localized: "On iPhone this is a sideloaded build. Re-sign it about every 7 days on a free Apple ID (longer on a paid account). After your phone reboots, unlock it once so NOOP can read and sync its data.")
+                    body: String(localized: "On iPhone this is a sideloaded build. Re-sign it about every 7 days on a free Apple ID (longer on a paid account). After your phone reboots, unlock it once so NARA can read and sync its data.")
                 )
                 .opacity(shown ? 1 : 0)
                 .offset(y: shown ? 0 : 8)
@@ -451,7 +451,7 @@ private struct ExpectationsStep: View {
 private struct BluetoothStep: View {
     @State private var pulse = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    /// Low Power Mode / "Reduce motion in NOOP" pose these looping glows still too. Onboarding is
+    /// Low Power Mode / "Reduce motion in NARA" pose these looping glows still too. Onboarding is
     /// first-run only, but a `repeatForever` is a `repeatForever` wherever it lives.
     @ObservedObject private var motion = NoopMotionState.shared
     private var poseStill: Bool { motion.poseStill(reduceMotion) }
@@ -478,10 +478,10 @@ private struct BluetoothStep: View {
                     icon: "lock.fill",
                     tint: StrandPalette.statusPositive,
                     title: String(localized: "Nothing leaves your \(Platform.deviceNoun)"),
-                    message: String(localized: "NOOP talks to your strap directly over Bluetooth Low Energy. There's no server in the middle. The connection is local, and so is every reading it pulls in.")
+                    message: String(localized: "NARA talks to your strap directly over Bluetooth Low Energy. There's no server in the middle. The connection is local, and so is every reading it pulls in.")
                 )
 
-                Text("When the system prompt appears, choose Allow so NOOP can find your strap.")
+                Text("When the system prompt appears, choose Allow so NARA can find your strap.")
                     .font(StrandFont.subhead)
                     .foregroundStyle(StrandPalette.textTertiary)
                     .multilineTextAlignment(.center)
@@ -537,7 +537,7 @@ private struct ScanStep: View {
 
     var body: some View {
         StepShell(title: String(localized: "Find your strap"),
-                  subtitle: live.bonded ? String(localized: "Bonded. You're set.") : String(localized: "Pick your strap below, then tap Scan. NOOP will find it.")) {
+                  subtitle: live.bonded ? String(localized: "Bonded. You're set.") : String(localized: "Pick your strap below, then tap Scan. NARA will find it.")) {
             VStack(spacing: 24) {
                 RadarSweep(active: scanning && !live.bonded, bonded: live.bonded)
                     .frame(width: 220, height: 220)
@@ -579,7 +579,7 @@ private struct ScanStep: View {
 
                     if showHelp { reassurance }
 
-                    // WHOOP is NOOP's primary band, so onboarding leads with it — but it isn't required.
+                    // WHOOP is NARA's primary band, so onboarding leads with it — but it isn't required.
                     // Make that obvious so a non-WHOOP user doesn't feel stuck here: they can continue now
                     // and pair a heart-rate strap or import data afterwards (in Devices / Data Sources).
                     Text("No WHOOP? You can still continue. Pair a heart-rate strap (Polar, Wahoo, Coospo, Garmin HRM…) or a gym machine under Devices, or import from WHOOP, Apple Health, Oura, Fitbit, Garmin and more under Data Sources. You can do either any time.")
@@ -641,7 +641,7 @@ private struct ScanStep: View {
                         .foregroundStyle(StrandPalette.textPrimary)
                 }
 
-                Text("WHOOP straps don't appear in your \(Platform.deviceNoun)'s Bluetooth settings. They advertise on a custom profile that only apps like NOOP can find, so there's nothing to pair there, and you shouldn't try.")
+                Text("WHOOP straps don't appear in your \(Platform.deviceNoun)'s Bluetooth settings. They advertise on a custom profile that only apps like NARA can find, so there's nothing to pair there, and you shouldn't try.")
                     .font(StrandFont.subhead)
                     .foregroundStyle(StrandPalette.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -964,13 +964,13 @@ private struct ImportStep: View {
 private struct NotificationsStep: View {
     @State private var pulse = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    /// Low Power Mode / "Reduce motion in NOOP" pose these looping glows still too. Onboarding is
+    /// Low Power Mode / "Reduce motion in NARA" pose these looping glows still too. Onboarding is
     /// first-run only, but a `repeatForever` is a `repeatForever` wherever it lives.
     @ObservedObject private var motion = NoopMotionState.shared
     private var poseStill: Bool { motion.poseStill(reduceMotion) }
     var body: some View {
         StepShell(title: String(localized: "Stay in the loop"),
-                  subtitle: String(localized: "NOOP can tap your wrist when your \(Platform.deviceNoun) needs you. No glance at the screen required.")) {
+                  subtitle: String(localized: "NARA can tap your wrist when your \(Platform.deviceNoun) needs you. No glance at the screen required.")) {
             VStack(spacing: 24) {
                 ZStack {
                     Circle()
@@ -990,13 +990,13 @@ private struct NotificationsStep: View {
                 #if os(iOS)
                 // iOS gives an app no way to observe *other* apps' notifications, and the per-app picker
                 // behind it is NSWorkspace-based (macOS-only). So drop the cross-app relay claim here and
-                // keep only what iOS genuinely does: NOOP's own strain nudges + smart alarm buzz the strap
+                // keep only what iOS genuinely does: NARA's own strain nudges + smart alarm buzz the strap
                 // directly over BLE.
                 InfoCard(
                     icon: "applewatch.radiowaves.left.and.right",
                     tint: StrandPalette.statusPositive,
                     title: String(localized: "A buzz, not a banner"),
-                    message: String(localized: "NOOP taps your strap so an alert lands on your wrist instead of your screen. No need to reach for it. Everything stays on \(Platform.deviceNounPhrase).")
+                    message: String(localized: "NARA taps your strap so an alert lands on your wrist instead of your screen. No need to reach for it. Everything stays on \(Platform.deviceNounPhrase).")
                 )
 
                 VStack(spacing: 12) {
@@ -1009,7 +1009,7 @@ private struct NotificationsStep: View {
                     icon: "applewatch.radiowaves.left.and.right",
                     tint: StrandPalette.statusPositive,
                     title: String(localized: "A buzz, not a banner"),
-                    message: String(localized: "When the \(Platform.deviceNoun) apps you choose send a notification, NOOP taps your strap: Slack, Calendar, Messages, whatever matters. Everything stays on \(Platform.deviceNounPhrase).")
+                    message: String(localized: "When the \(Platform.deviceNoun) apps you choose send a notification, NARA taps your strap: Slack, Calendar, Messages, whatever matters. Everything stays on \(Platform.deviceNounPhrase).")
                 )
 
                 VStack(spacing: 12) {
@@ -1054,7 +1054,7 @@ private struct DoneStep: View {
                     Text("Your thread starts here.")
                         .font(StrandFont.title1)
                         .foregroundStyle(StrandPalette.textPrimary)
-                    Text("Every beat, every night, every day, woven into one quiet picture of you. Welcome to NOOP.")
+                    Text("Every beat, every night, every day, woven into one quiet picture of you. Welcome to NARA.")
                         .font(StrandFont.body)
                         .foregroundStyle(StrandPalette.textSecondary)
                         .multilineTextAlignment(.center)
@@ -1082,7 +1082,7 @@ private struct AppearanceStep: View {
     }
     var body: some View {
         StepShell(title: String(localized: "Make it yours"),
-                  subtitle: String(localized: "Choose how NOOP looks. The whole app updates as you tap. You can change this any time in Settings → Appearance.")) {
+                  subtitle: String(localized: "Choose how NARA looks. The whole app updates as you tap. You can change this any time in Settings → Appearance.")) {
             VStack(spacing: 28) {
                 Image(systemName: "circle.lefthalf.filled")
                     .font(.system(size: 56, weight: .light))
@@ -1146,7 +1146,7 @@ private struct RadarSweep: View {
     @State private var angle: Double = 0
     @State private var ping = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    /// Low Power Mode / "Reduce motion in NOOP" pose these looping glows still too. Onboarding is
+    /// Low Power Mode / "Reduce motion in NARA" pose these looping glows still too. Onboarding is
     /// first-run only, but a `repeatForever` is a `repeatForever` wherever it lives.
     @ObservedObject private var motion = NoopMotionState.shared
     private var poseStill: Bool { motion.poseStill(reduceMotion) }
