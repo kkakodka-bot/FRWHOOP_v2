@@ -2978,7 +2978,7 @@ fun SettingsScreen(
                     color = Palette.textTertiary,
                 )
 
-                // --- #103/queue-11a: Blood Oxygen strap estimate — OFF by default. ---
+                // --- #103/queue-11a: Blood Oxygen strap estimate — ON by default when unset. ---
                 // Device-conditional (see IntelligenceEngine.nightlySpo2CeilingMean / .nightlySpo2CandidateMean):
                 // a WHOOP 5/MG strap computes a nightly SpO₂ candidate at byte @82 of the V18Aux stream
                 // (cross-device evidence split, corr +0.99 on 8 nights but 2 nights moved opposite); an

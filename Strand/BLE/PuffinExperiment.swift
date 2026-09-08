@@ -65,7 +65,7 @@ enum PuffinExperiment {
     ///    round-matching the Oura app's own displayed SpO2 on 3/3 full-tier nights measured so far
     ///    (2026-08-22).
     /// Neither candidate is a validated calibration. Per the derived-biosignal rule (CLAUDE.md), both ship
-    /// behind this one default-off toggle, never as the default `spo2Pct` and never feeding a downstream
+    /// behind this toggle (default on when unset), never as the default `spo2Pct` and never feeding a downstream
     /// gate.
     ///
     /// Display-only: writes nothing to the strap. The engine writes the resolved mean to metricSeries as
@@ -73,7 +73,9 @@ enum PuffinExperiment {
     /// ON. Mirrors the Android `NoopPrefs.KEY_SPO2_CANDIDATE_DISPLAY`.
     static let spo2CandidateDisplayKey = "noopSpo2CandidateDisplay"
 
-    static var spo2CandidateDisplayEnabled: Bool { UserDefaults.standard.bool(forKey: spo2CandidateDisplayKey) }
+    static var spo2CandidateDisplayEnabled: Bool {
+        UserDefaults.standard.object(forKey: spo2CandidateDisplayKey) as? Bool ?? true
+    }
 
     /// Opt-in "Personal daytime-stress baseline" (#463): score TODAY's intraday stress timeline against a
     /// PERSONAL cross-day rolling baseline (Oura-style `.baselineRelative`) instead of the day's own calm

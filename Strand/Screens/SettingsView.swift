@@ -69,7 +69,7 @@ struct SettingsView: View {
     /// #103 opt-in: surfaces the WHOOP 5/MG `spo2_candidate_82` nightly mean in the Blood Oxygen tile
     /// as a "strap estimate (unverified)" fallback when no calibrated `spo2Pct` exists. Display-only —
     /// writes nothing to the strap. See [PuffinExperiment.spo2CandidateDisplayKey].
-    @AppStorage(PuffinExperiment.spo2CandidateDisplayKey) private var spo2CandidateDisplayEnabled = false
+    @AppStorage(PuffinExperiment.spo2CandidateDisplayKey) private var spo2CandidateDisplayEnabled = true
 
     /// #463 opt-in: score the intraday stress timeline against a PERSONAL cross-day baseline
     /// (`.baselineRelative`) instead of the day's own calm hours. Default off — the r≈0.6 margin is
