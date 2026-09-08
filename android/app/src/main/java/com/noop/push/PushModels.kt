@@ -410,7 +410,7 @@ interface PushProgressStore {
     suspend fun window(table: PushMutableTable, deviceId: String): PushWindowProgress?
     suspend fun saveWindow(table: PushMutableTable, deviceId: String, progress: PushWindowProgress)
     suspend fun inFlightObject(table: PushBinaryTable, deviceId: String): PushInFlightObject? = null
-    suspend fun saveInFlightObject(table: PushBinaryTable, deviceId: String, object: PushInFlightObject?) {}
+    suspend fun saveInFlightObject(table: PushBinaryTable, deviceId: String, inFlight: PushInFlightObject?) {}
 }
 
 /** All methods return bounded snapshots and close their database transaction before returning. */

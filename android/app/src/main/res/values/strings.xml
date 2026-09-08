@@ -52,11 +52,11 @@
     <string name="nav_self_hosted_push">Self-hosted push</string>
     <string name="nav_more">More</string>
 
-    <string name="push_title">Self-hosted push</string>
-    <string name="push_subtitle">Experimental · Android</string>
-    <string name="push_destination_title">Your endpoint</string>
-    <string name="push_disclosure">When enabled, NOOP sends raw health records from this phone to the endpoint you control. This is explicit data egress from the device.</string>
-    <string name="push_one_way_warning">One-way export only. NOOP cannot restore data from this endpoint and does not provide a receiver.</string>
+    <string name="push_title">Cloud export</string>
+    <string name="push_subtitle">Research backend</string>
+    <string name="push_destination_title">Export</string>
+    <string name="push_disclosure">When enabled, NOOP sends raw health records from this phone to the research backend. This is explicit data egress from the device.</string>
+    <string name="push_one_way_warning">One-way export only. NOOP cannot restore data from the backend.</string>
     <string name="push_endpoint">Endpoint URL</string>
     <string name="push_token">Bearer token (hidden)</string>
     <string name="push_token_saved">Bearer token (saved; enter to replace)</string>
@@ -104,12 +104,12 @@
     <string name="push_enabled">Enable automatic export</string>
     <string name="push_enabled_detail">Exports new and changed data after a complete strap sync and catches up at app launch.</string>
     <string name="push_wifi_only">Wi-Fi only</string>
-    <string name="push_wifi_only_detail">Use unmetered Wi-Fi for connection tests and exports. Turn off to allow mobile and other connected networks.</string>
+    <string name="push_wifi_only_detail">Use unmetered Wi-Fi for exports. Turn off to allow mobile and other connected networks.</string>
     <string name="push_binary_objects">Export waveform and raw batches</string>
     <string name="push_binary_objects_detail">Also upload large binary streams (PPG waveforms, 100 Hz motion, and v18 auxiliary fields). On by default; these objects are much larger than ordinary health records.</string>
     <string name="push_export_now">Export now</string>
     <string name="push_export_now_detail">Starts a catch-up now. Automatic export must be enabled.</string>
-    <string name="push_config_required">Save a valid endpoint and token before enabling.</string>
+    <string name="push_config_required">This build has no export destination configured.</string>
     <string name="push_status_title">Status</string>
     <string name="push_status_detail">Credentials are never shown in status or worker metadata.</string>
     <string name="push_never">Never</string>

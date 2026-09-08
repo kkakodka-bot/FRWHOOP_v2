@@ -465,9 +465,9 @@ class PushCoordinator(
         if (!uploaded) {
             val intent = try {
                 transport.createObjectIntent(manifest, lane)
-            } catch (transport: PushTransportException) {
-                if (transport.failure.receiverCode != "object_id_conflict") {
-                    return objectLaneFailure(transport)
+            } catch (intentFailure: PushTransportException) {
+                if (intentFailure.failure.receiverCode != "object_id_conflict") {
+                    return objectLaneFailure(intentFailure)
                 }
                 manifest = manifest.replacingObjectId(PushProtocol.freshObjectId())
                 try {
@@ -530,8 +530,8 @@ class PushCoordinator(
         while (true) {
             val ack = try {
                 transport.completeObject(manifest.objectId, lane)
-            } catch (transport: PushTransportException) {
-                val code = transport.failure.receiverCode
+            } catch (completeFailure: PushTransportException) {
+                val code = completeFailure.failure.receiverCode
                 if (!reuploaded && (code == "size_mismatch" || code == "object_missing")) {
                     reuploaded = true
                     try {
@@ -551,7 +551,7 @@ class PushCoordinator(
                     }
                     continue
                 }
-                return objectLaneFailure(transport)
+                return objectLaneFailure(completeFailure)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Throwable) {

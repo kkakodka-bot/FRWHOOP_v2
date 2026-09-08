@@ -24,15 +24,10 @@ class PushCoordinatorTest {
 
     @Test
     fun endpointChangeFencesRemainingPostsToCapturedDestination() = runBlocking {
-        val settings = SelfHostedPushSettings.forTest(
-            SelfHostedPushSettingsTest.FakePushPrefs(),
-            SelfHostedPushSettingsTest.FakePushPrefs(),
-        )
         val first = (PushEndpointPolicy.validate("https://one.example/push") as PushEndpointPolicy.Result.Valid).endpoint
-        val second = (PushEndpointPolicy.validate("https://two.example/push") as PushEndpointPolicy.Result.Valid).endpoint
-        settings.saveEndpoint(first.url)
-        settings.saveToken("secret")
-        assertTrue(settings.setEnabled(true))
+        // The fleet destination is build-baked, so mid-run rotation can only come from a process
+        // running an older/newer build; model it as a plain mutable read, no settings involved.
+        var currentDestination = first.url
         val source = FakePushSource(
             append = mutableMapOf(
                 key(PushAppendTable.HR_SAMPLE, "a") to mutableListOf(hr(1, 100)),
@@ -45,7 +40,7 @@ class PushCoordinatorTest {
             var posts = 0
             override suspend fun post(batch: PushBatch): PushTransportResponse {
                 posts++
-                if (posts == 1) settings.saveEndpoint(second.url)
+                if (posts == 1) currentDestination = "https://two.example/push"
                 return PushTransportResponse(200, PushAck.fromBatch(batch).encode())
             }
         }
@@ -53,7 +48,7 @@ class PushCoordinatorTest {
         try {
             PushCoordinator(
                 source, transport, MemoryProgress(), SOURCE_A, pinnedToday, ZoneId.of("UTC"),
-                destinationStillCurrent = { settings.enabledEndpoint() == first },
+                destinationStillCurrent = { currentDestination == first.url },
             ).pushKnownDevices(
                 capabilities = PushCapabilities(
                     appendTables = setOf(PushAppendTable.HR_SAMPLE, PushAppendTable.BATTERY),

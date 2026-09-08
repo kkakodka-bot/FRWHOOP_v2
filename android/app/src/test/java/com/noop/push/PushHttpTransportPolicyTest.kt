@@ -90,7 +90,7 @@ class PushHttpTransportPolicyTest {
 
         assertEquals("GET", method)
         assertEquals("Bearer secret", authorization)
-        assertEquals("1.1,1.0", acceptedVersions)
+        assertEquals("1.2,1.1,1.0", acceptedVersions)
         assertEquals(
             PushCapabilitiesResult.Available(
                 PushCapabilities(

@@ -43,3 +43,8 @@ verify_enabled = true
 
 [realtime]
 enabled = true
+
+# NOOP push receiver. The function does its own bearer auth (Supabase Auth JWT or opaque `noop_`
+# ingest token), so the gateway's JWT verification must stay off — it would reject ingest tokens.
+[functions.push]
+verify_jwt = false

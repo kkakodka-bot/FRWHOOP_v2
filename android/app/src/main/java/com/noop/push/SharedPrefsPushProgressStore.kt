@@ -83,19 +83,19 @@ class SharedPrefsPushProgressStore private constructor(
         return PushInFlightObject(objectId, objectKey, sha, prefs.getBoolean("$prefix.uploaded", false))
     }
 
-    override suspend fun saveInFlightObject(table: PushBinaryTable, deviceId: String, object: PushInFlightObject?) {
+    override suspend fun saveInFlightObject(table: PushBinaryTable, deviceId: String, inFlight: PushInFlightObject?) {
         val prefix = key("inflight", table.wireName, deviceId)
         val editor = prefs.edit()
-        if (object == null) {
+        if (inFlight == null) {
             editor.remove("$prefix.objectId")
                 .remove("$prefix.objectKey")
                 .remove("$prefix.sha")
                 .remove("$prefix.uploaded")
         } else {
-            editor.putString("$prefix.objectId", object.objectId)
-                .putString("$prefix.objectKey", object.objectKey)
-                .putString("$prefix.sha", object.contentSha256)
-                .putBoolean("$prefix.uploaded", object.uploaded)
+            editor.putString("$prefix.objectId", inFlight.objectId)
+                .putString("$prefix.objectKey", inFlight.objectKey)
+                .putString("$prefix.sha", inFlight.contentSha256)
+                .putBoolean("$prefix.uploaded", inFlight.uploaded)
         }
         check(editor.commit()) { "Could not persist in-flight object" }
     }

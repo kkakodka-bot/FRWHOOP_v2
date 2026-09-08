@@ -21,12 +21,6 @@ enum CloudPushScheduler {
         #endif
     }
 
-    static func destinationChanged(db: any DatabaseWriter) {
-        guard CloudPushSettings.enabledEndpoint() != nil else { return }
-        cancelScheduledWork()
-        enqueueManualCatchUp(db: db)
-    }
-
     static func networkPolicyChanged(db: any DatabaseWriter) {
         guard CloudPushSettings.enabledEndpoint() != nil else { return }
         cancelScheduledWork()

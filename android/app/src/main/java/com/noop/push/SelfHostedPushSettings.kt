@@ -2,14 +2,19 @@ package com.noop.push
 
 import android.content.Context
 import android.content.SharedPreferences
-import com.noop.data.SecurePrefs
+import com.noop.BuildConfig
 import java.security.MessageDigest
 import java.util.UUID
 
-/** Stores configuration without ever placing the bearer token in ordinary preferences. */
+/**
+ * Push configuration. The destination and bearer token are baked into BuildConfig from
+ * Config/CloudPushSecrets.properties — one fleet destination for every install, with no
+ * per-user endpoint or token override. Only toggles and run-state persist in preferences.
+ */
 class SelfHostedPushSettings private constructor(
     private val prefs: SharedPreferences,
-    private val secrets: Lazy<SharedPreferences>,
+    private val bundleEndpoint: String,
+    private val bundleToken: String,
 ) {
     enum class RunState { IDLE, QUEUED, RUNNING, CONTINUING, RETRYING, COMPLETE, FAILED }
 
@@ -33,14 +38,14 @@ class SelfHostedPushSettings private constructor(
 
     fun snapshot(): Snapshot {
         val enabled = prefs.getBoolean(KEY_ENABLED, DEFAULT_ENABLED)
-        val endpoint = (PushEndpointPolicy.validate(prefs.getString(KEY_ENDPOINT, "").orEmpty()) as? PushEndpointPolicy.Result.Valid)?.endpoint
+        val endpoint = (PushEndpointPolicy.validate(endpointText()) as? PushEndpointPolicy.Result.Valid)?.endpoint
         val capabilities = capabilitiesFor(endpoint)
         return Snapshot(
             enabled = enabled,
             wifiOnly = wifiOnly(),
             binaryObjectsEnabled = binaryObjectsEnabled(),
             endpoint = endpoint,
-            hasToken = !secrets.value.getString(KEY_TOKEN, null).isNullOrBlank(),
+            hasToken = token() != null,
             lastSuccessAt = prefs.getLong(KEY_LAST_SUCCESS, 0L).takeIf { it > 0 },
             lastError = prefs.getString(KEY_LAST_ERROR, null),
             runState = if (!enabled) RunState.IDLE else runCatching {
@@ -55,7 +60,7 @@ class SelfHostedPushSettings private constructor(
         )
     }
 
-    fun endpointText(): String = prefs.getString(KEY_ENDPOINT, "").orEmpty()
+    fun endpointText(): String = bundleEndpoint
     fun wifiOnly(): Boolean = prefs.getBoolean(KEY_WIFI_ONLY, true)
     fun binaryObjectsEnabled(): Boolean = prefs.getBoolean(KEY_BINARY_OBJECTS, DEFAULT_BINARY_OBJECTS)
 
@@ -77,7 +82,8 @@ class SelfHostedPushSettings private constructor(
         return (PushEndpointPolicy.validate(endpointText()) as? PushEndpointPolicy.Result.Valid)?.endpoint
     }
 
-    fun token(): String? = secrets.value.getString(KEY_TOKEN, null)?.takeIf { it.isNotBlank() }
+    /** The bearer the worker sends: the fleet token baked into BuildConfig. Never persisted. */
+    fun token(): String? = bundleToken.takeIf { it.isNotBlank() }
 
     /** Stable, non-secret receiver namespace. Generated only after the worker's stale-work gates pass. */
     @Synchronized
@@ -88,30 +94,6 @@ class SelfHostedPushSettings private constructor(
         val generated = UUID.randomUUID().toString()
         check(prefs.edit().putString(KEY_SOURCE_ID, generated).commit()) { "Could not persist push source id" }
         return generated
-    }
-
-    /** Saving a different normalized URL changes the progress namespace; token rotation does not. */
-    fun saveEndpoint(raw: String): PushEndpointPolicy.Result {
-        val validation = PushEndpointPolicy.validate(raw)
-        val normalized = (validation as? PushEndpointPolicy.Result.Valid)?.endpoint?.url
-            ?: return validation
-        val edit = prefs.edit().putString(KEY_ENDPOINT, normalized)
-        if (prefs.getString(KEY_CAPABILITIES_ENDPOINT, null) != normalized) {
-            edit.remove(KEY_CAPABILITIES_ENDPOINT)
-                .remove(KEY_CAPABILITIES_STREAMS)
-                .remove(KEY_CAPABILITIES_AT)
-        }
-        edit.apply()
-        return validation
-    }
-
-    fun saveToken(token: String) {
-        val trimmed = token.trim()
-        val changed = secrets.value.getString(KEY_TOKEN, null).orEmpty() != trimmed
-        secrets.value.edit().let { edit ->
-            if (trimmed.isEmpty()) edit.remove(KEY_TOKEN) else edit.putString(KEY_TOKEN, trimmed)
-        }.apply()
-        if (changed) clearCapabilities()
     }
 
     fun setEnabled(enabled: Boolean): Boolean = synchronized(statusLock) {
@@ -216,11 +198,6 @@ class SelfHostedPushSettings private constructor(
         return names.takeIf { it.size == it.distinct().size && it.all(known::contains) }
     }
 
-    private fun clearCapabilities() {
-        prefs.edit().remove(KEY_CAPABILITIES_ENDPOINT)
-            .remove(KEY_CAPABILITIES_STREAMS).remove(KEY_CAPABILITIES_AT).apply()
-    }
-
     fun nextDeviceIndex(namespace: String): Int = prefs.getInt("$KEY_NEXT_DEVICE.$namespace", 0).coerceAtLeast(0)
 
     fun saveNextDeviceIndex(namespace: String, index: Int) {
@@ -273,14 +250,11 @@ class SelfHostedPushSettings private constructor(
 
     companion object {
         private const val PREFS = "self_hosted_push"
-        private const val SECRETS = "self_hosted_push_secrets"
         private const val KEY_ENABLED = "enabled"
         private const val DEFAULT_ENABLED = true
         private const val KEY_BINARY_OBJECTS = "binary_objects_enabled"
         private const val DEFAULT_BINARY_OBJECTS = true
         private const val KEY_WIFI_ONLY = "wifi_only"
-        private const val KEY_ENDPOINT = "endpoint"
-        private const val KEY_TOKEN = "bearer_token"
         private const val KEY_SOURCE_ID = "source_id"
         private const val KEY_LAST_SUCCESS = "last_success_at"
         private const val KEY_LAST_ERROR = "last_error"
@@ -302,10 +276,14 @@ class SelfHostedPushSettings private constructor(
 
         fun from(context: Context) = SelfHostedPushSettings(
             context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE),
-            lazy(LazyThreadSafetyMode.SYNCHRONIZED) { SecurePrefs.of(context.applicationContext, SECRETS) },
+            BuildConfig.NOOP_PUSH_ENDPOINT.trim(),
+            BuildConfig.NOOP_PUSH_TOKEN.trim(),
         )
 
-        internal fun forTest(prefs: SharedPreferences, secrets: SharedPreferences) =
-            SelfHostedPushSettings(prefs, lazyOf(secrets))
+        internal fun forTest(
+            prefs: SharedPreferences,
+            bundleEndpoint: String = "",
+            bundleToken: String = "",
+        ) = SelfHostedPushSettings(prefs, bundleEndpoint, bundleToken)
     }
 }

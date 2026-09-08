@@ -5,8 +5,14 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.time.LocalDate
+import java.time.ZoneId
 
 class PushObjectLaneTest {
+    // Same pinned-today discipline as PushCoordinatorTest: the coordinator requires an explicit
+    // clock so the suite asserts behaviour rather than the calendar.
+    private val pinnedToday = { LocalDate.of(2026, 8, 18) }
+
     private fun imuColumns(seed: Short): ByteArray {
         val data = ByteArray(PushBinaryCodec.IMU_RECORD_PAYLOAD_BYTES)
         for (index in 0 until PushBinaryCodec.IMU_COLUMNS_PER_RECORD) {
@@ -57,7 +63,7 @@ class PushObjectLaneTest {
             }
         }
         val result = PushCoordinator(
-            FakeImuSource(listOf(row)), transport, progress, SOURCE_A,
+            FakeImuSource(listOf(row)), transport, progress,             SOURCE_A, pinnedToday, ZoneId.of("UTC"),
         ).pushObjects(PushBinaryTable.RAW_IMU_SESSION, "dev", lane)
         assertTrue(result is PushResult.Accepted)
         assertEquals(0, intentCalls)
@@ -90,7 +96,7 @@ class PushObjectLaneTest {
             }
         }
         val result = PushCoordinator(
-            FakeImuSource(listOf(row)), transport, MemoryObjectProgress(), SOURCE_A,
+            FakeImuSource(listOf(row)), transport, MemoryObjectProgress(),             SOURCE_A, pinnedToday, ZoneId.of("UTC"),
         ).pushObjects(PushBinaryTable.RAW_IMU_SESSION, "dev", lane)
         assertTrue(result is PushResult.Rejected)
         assertFalse((result as PushResult.Rejected).retryable)
@@ -140,7 +146,7 @@ class PushObjectLaneTest {
             }
         }
         val result = PushCoordinator(
-            FakeImuSource(listOf(row)), transport, progress, SOURCE_A,
+            FakeImuSource(listOf(row)), transport, progress,             SOURCE_A, pinnedToday, ZoneId.of("UTC"),
         ).pushObjects(PushBinaryTable.RAW_IMU_SESSION, "dev", lane)
         assertTrue(result is PushResult.Accepted)
         assertEquals(1, intentCalls)
@@ -173,7 +179,7 @@ class PushObjectLaneTest {
             }
         }
         val result = PushCoordinator(
-            FakeImuSource(listOf(row)), transport, MemoryObjectProgress(), SOURCE_A,
+            FakeImuSource(listOf(row)), transport, MemoryObjectProgress(),             SOURCE_A, pinnedToday, ZoneId.of("UTC"),
         ).pushObjects(PushBinaryTable.RAW_IMU_SESSION, "dev", lane)
         assertTrue(result is PushResult.Rejected)
         assertFalse((result as PushResult.Rejected).retryable)
@@ -203,7 +209,7 @@ class PushObjectLaneTest {
             }
         }
         val result = PushCoordinator(
-            FakeImuSource(listOf(row)), transport, MemoryObjectProgress(), SOURCE_A,
+            FakeImuSource(listOf(row)), transport, MemoryObjectProgress(),             SOURCE_A, pinnedToday, ZoneId.of("UTC"),
         ).pushObjects(PushBinaryTable.RAW_IMU_SESSION, "dev", lane)
         assertTrue(result is PushResult.Rejected)
         assertTrue((result as PushResult.Rejected).retryable)
@@ -224,7 +230,7 @@ class PushObjectLaneTest {
                     throw PushTransportException(PushFailure(PushFailureCode.LOCAL_DATA))
             },
             MemoryObjectProgress(),
-            SOURCE_A,
+            SOURCE_A, pinnedToday, ZoneId.of("UTC"),
         ).pushKnownDevices(capabilities = caps, binaryEnabled = true)
         assertEquals(0, result.acceptedBatches)
         assertFalse(result.hasMoreBinaryRows)
@@ -256,8 +262,8 @@ private class MemoryObjectProgress : PushProgressStore {
     override suspend fun saveWindow(table: PushMutableTable, deviceId: String, progress: PushWindowProgress) {}
     override suspend fun inFlightObject(table: PushBinaryTable, deviceId: String): PushInFlightObject? =
         inflight["${table.wireName}.$deviceId"]
-    override suspend fun saveInFlightObject(table: PushBinaryTable, deviceId: String, object: PushInFlightObject?) {
+    override suspend fun saveInFlightObject(table: PushBinaryTable, deviceId: String, inFlight: PushInFlightObject?) {
         val key = "${table.wireName}.$deviceId"
-        if (object == null) inflight.remove(key) else inflight[key] = object
+        if (inFlight == null) inflight.remove(key) else inflight[key] = inFlight
     }
 }

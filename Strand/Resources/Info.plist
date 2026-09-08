@@ -33,6 +33,10 @@
 	<string>public.app-category.healthcare-fitness</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>13.0</string>
+	<key>NOOPPushEndpoint</key>
+	<string>$(NOOP_PUSH_ENDPOINT)</string>
+	<key>NOOPPushToken</key>
+	<string>$(NOOP_PUSH_TOKEN)</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>

@@ -3,31 +3,20 @@ import SwiftUI
 import StrandDesign
 import NoopPush
 
-/// Experimental, explicit consent surface for raw one-way health-data egress to a user-controlled endpoint.
+/// Fleet cloud-push status and controls. The destination (Supabase Edge Function) and bearer
+/// token are baked into the build — there is no per-user endpoint to configure.
 struct CloudPushView: View {
     @EnvironmentObject private var model: AppModel
 
-    @State private var endpoint = CloudPushSettings.endpointText
-    @State private var token = ""
     @State private var snapshot = CloudPushSettings.snapshot()
-    @State private var validationMessage: String?
-    @State private var capabilityProbe: CapabilityProbeUI = .idle
-    @State private var capabilityProbeGeneration = 0
-
-    private enum CapabilityProbeUI {
-        case idle
-        case testing
-        case success(streams: [String], checkedAt: Date)
-        case failure(PushFailure)
-    }
 
     var body: some View {
         ScreenScaffold(
-            title: "Self-hosted push",
-            subtitle: "Experimental · iOS"
+            title: "Cloud export",
+            subtitle: "Research backend"
         ) {
             VStack(alignment: .leading, spacing: NoopMetrics.sectionSpacing) {
-                destinationCard
+                exportCard
                 statusCard
             }
         }
@@ -39,85 +28,25 @@ struct CloudPushView: View {
         }
     }
 
-    private var destinationCard: some View {
+    private var exportCard: some View {
         pushSection(
             icon: "icloud.and.arrow.up.fill",
-            title: "Your endpoint",
-            blurb: "When enabled, NOOP sends raw health records from this phone to an endpoint you control. That means data explicitly leaves the device."
+            title: "Export",
+            blurb: "When enabled, NOOP sends raw health records from this phone to the research backend. That means data explicitly leaves the device."
         ) {
             VStack(alignment: .leading, spacing: NoopMetrics.space3) {
-                Text("One-way export only. NOOP cannot restore from this endpoint and ships no receiver.")
+                Text("One-way export only. NOOP cannot restore from the backend.")
                     .font(StrandFont.footnote)
                     .foregroundStyle(StrandPalette.statusWarning)
                     .fixedSize(horizontal: false, vertical: true)
 
-                pushField(
-                    label: String(localized: "Endpoint URL"),
-                    text: $endpoint,
-                    secret: false
-                )
-                .onChangeCompat(of: endpoint) { _ in
-                    validationMessage = nil
-                    capabilityProbe = .idle
-                    capabilityProbeGeneration += 1
-                }
-
-                pushField(
-                    label: snapshot.hasToken
-                        ? String(localized: "Bearer token (saved; enter a new value to replace)")
-                        : String(localized: "Bearer token (hidden)"),
-                    text: $token,
-                    secret: true
-                )
-                .onChangeCompat(of: token) { _ in
-                    capabilityProbe = .idle
-                    capabilityProbeGeneration += 1
-                }
-
-                if let validationMessage {
-                    Text(validationMessage)
-                        .font(StrandFont.footnote)
-                        .foregroundStyle(StrandPalette.statusWarning)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                NoopButton("Save destination", kind: .secondary, fullWidth: true) {
-                    saveDestination()
-                }
-                .disabled(!canSave)
-
-                if isTestingConnection {
-                    NoopButton("Testing connection…", kind: .secondary, fullWidth: true) {
-                        testConnection()
-                    }
-                    .disabled(true)
-                } else {
-                    NoopButton("Test connection", kind: .secondary, fullWidth: true) {
-                        testConnection()
-                    }
-                    .disabled(!canTestConnection)
-                }
-
-                Text("Checks authentication and supported data types. Sends no health data.")
-                    .font(StrandFont.footnote)
-                    .foregroundStyle(StrandPalette.textSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
-
                 capabilitySummary
-
-                if snapshot.hasToken {
-                    NoopButton("Clear saved token", kind: .secondary, fullWidth: true) {
-                        clearToken()
-                    }
-                }
 
                 pushToggle(
                     title: String(localized: "Wi‑Fi only"),
-                    detail: String(localized: "Connection tests and exports use unmetered Wi‑Fi only. Turn off to allow cellular and other connected networks."),
+                    detail: String(localized: "Exports use unmetered Wi‑Fi only. Turn off to allow cellular and other connected networks."),
                     isOn: snapshot.wifiOnly
                 ) { requested in
-                    capabilityProbe = .idle
-                    capabilityProbeGeneration += 1
                     CloudPushSettings.setWifiOnly(requested)
                     snapshot = CloudPushSettings.snapshot()
                     Task {
@@ -143,9 +72,8 @@ struct CloudPushView: View {
                     if !requested {
                         CloudPushSettings.setEnabled(false)
                         CloudPushScheduler.cancelScheduledWork()
-                    } else if !CloudPushSettings.setEnabled(true) {
-                        validationMessage = String(localized: "Save a valid endpoint and token before enabling.")
                     } else {
+                        CloudPushSettings.setEnabled(true)
                         Task {
                             guard let writer = await model.repo.registryWriterForPush() else { return }
                             CloudPushScheduler.enqueueLaunchCatchUp(db: writer)
@@ -157,7 +85,7 @@ struct CloudPushView: View {
                 NoopButton("Export now", kind: .secondary, fullWidth: true) {
                     exportNow()
                 }
-                .disabled(!canSave || !snapshot.enabled)
+                .disabled(!snapshot.ready)
 
                 Text("Start a catch-up immediately. Automatic export must be enabled first.")
                     .font(StrandFont.footnote)
@@ -200,26 +128,12 @@ struct CloudPushView: View {
 
     @ViewBuilder
     private var capabilitySummary: some View {
-        switch capabilityProbe {
-        case .testing:
-            ProgressView()
-                .tint(StrandPalette.accent)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        case .failure(let failure):
-            Text(CloudPushMessaging.pushFailureMessage(failure))
-                .font(StrandFont.footnote)
-                .foregroundStyle(StrandPalette.statusWarning)
-                .fixedSize(horizontal: false, vertical: true)
-        case .idle, .success:
-            EmptyView()
-        }
-
-        if let shownStreams = displayedCapabilityStreams {
+        if let shownStreams = snapshot.supportedStreams {
             let total = PushCapabilities.all.wireNames.count
             Text("Receiver supports \(shownStreams.count)/\(total) data types")
                 .font(StrandFont.body)
                 .foregroundStyle(shownStreams.isEmpty ? StrandPalette.statusWarning : StrandPalette.textPrimary)
-            if let checkedAt = displayedCapabilitiesCheckedAt {
+            if let checkedAt = snapshot.capabilitiesCheckedAt {
                 Text("Last checked: \(formattedDate(checkedAt) ?? "")")
                     .font(StrandFont.footnote)
                     .foregroundStyle(StrandPalette.textSecondary)
@@ -235,35 +149,6 @@ struct CloudPushView: View {
         }
     }
 
-    private var savedEndpointMatchesProbe: Bool {
-        token.isEmpty && validatedEndpoint?.url == snapshot.endpoint?.url
-    }
-
-    private var displayedCapabilityStreams: [String]? {
-        if case .success(let streams, _) = capabilityProbe { return streams }
-        return snapshot.supportedStreams.flatMap { savedEndpointMatchesProbe ? $0 : nil }
-    }
-
-    private var displayedCapabilitiesCheckedAt: Date? {
-        if case .success(_, let checkedAt) = capabilityProbe { return checkedAt }
-        return snapshot.capabilitiesCheckedAt.flatMap { savedEndpointMatchesProbe ? $0 : nil }
-    }
-
-    private var isTestingConnection: Bool {
-        if case .testing = capabilityProbe { return true }
-        return false
-    }
-
-    private var validatedEndpoint: PushValidEndpoint? {
-        guard case .valid(let endpoint) = PushEndpointPolicy.validate(endpoint) else { return nil }
-        return endpoint
-    }
-
-    private var endpointValid: Bool { validatedEndpoint != nil }
-    private var tokenAvailable: Bool { !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || snapshot.hasToken }
-    private var canSave: Bool { endpointValid && tokenAvailable }
-    private var canTestConnection: Bool { endpointValid && tokenAvailable }
-
     private var isActive: Bool {
         switch snapshot.runState {
         case .queued, .running, .continuing, .retrying: true
@@ -273,112 +158,10 @@ struct CloudPushView: View {
 
     private func exportNow() {
         Task {
-            guard persistDestinationForExport() else { return }
-            guard let writer = await model.repo.registryWriterForPush() else {
-                validationMessage = String(localized: "The local database is not ready yet. Try again shortly.")
-                return
-            }
+            guard let writer = await model.repo.registryWriterForPush() else { return }
             CloudPushScheduler.enqueueManualCatchUp(db: writer)
             snapshot = CloudPushSettings.snapshot()
         }
-    }
-
-    @discardableResult
-    private func persistDestinationForExport() -> Bool {
-        guard canSave else {
-            validationMessage = String(localized: "Enter a valid endpoint and token before exporting.")
-            return false
-        }
-        switch CloudPushSettings.saveEndpoint(endpoint) {
-        case .invalid(let problem):
-            validationMessage = CloudPushMessaging.endpointProblem(problem)
-            return false
-        case .valid(let valid):
-            endpoint = valid.url
-            if !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                CloudPushSettings.saveToken(token)
-            }
-            token = ""
-            guard CloudPushSettings.setEnabled(true) else {
-                validationMessage = String(localized: "Save a valid endpoint and token before enabling.")
-                return false
-            }
-            snapshot = CloudPushSettings.snapshot()
-            return CloudPushSettings.ready
-        }
-    }
-
-    private func saveDestination() {
-        switch CloudPushSettings.saveEndpoint(endpoint) {
-        case .invalid(let problem):
-            validationMessage = CloudPushMessaging.endpointProblem(problem)
-        case .valid(let valid):
-            let destinationChanged = snapshot.endpoint?.url != valid.url
-            endpoint = valid.url
-            if !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                CloudPushSettings.saveToken(token)
-            }
-            token = ""
-            snapshot = CloudPushSettings.snapshot()
-            if destinationChanged, snapshot.ready {
-                Task {
-                    guard let writer = await model.repo.registryWriterForPush() else { return }
-                    CloudPushScheduler.destinationChanged(db: writer)
-                }
-            }
-            validationMessage = String(localized: "Destination saved.")
-        }
-    }
-
-    private func testConnection() {
-        guard let valid = validatedEndpoint else {
-            validationMessage = String(localized: "Save a valid endpoint and token before enabling.")
-            return
-        }
-        let testToken = token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? CloudPushKeyStore.readToken()
-            : token.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let testToken, !testToken.isEmpty else {
-            validationMessage = String(localized: "Save a valid endpoint and token before enabling.")
-            return
-        }
-        guard CloudPushNetworkPolicy.canStartConnectionTest(
-            networkAvailable: CloudPushNetworkPolicy.isNetworkAvailable(wifiOnly: snapshot.wifiOnly),
-            endpointValid: true,
-            tokenAvailable: true
-        ) else {
-            validationMessage = String(localized: "Connect to a network allowed by the Wi‑Fi only setting before testing the receiver.")
-            return
-        }
-
-        let generation = capabilityProbeGeneration + 1
-        capabilityProbeGeneration = generation
-        let persistResult = token.isEmpty && valid.url == snapshot.endpoint?.url
-        capabilityProbe = .testing
-        Task {
-            let result = await CloudPushConnectionTester.test(endpoint: valid, token: testToken)
-            guard capabilityProbeGeneration == generation else { return }
-            switch result {
-            case .available(let capabilities):
-                let checkedAt = Date()
-                if persistResult {
-                    CloudPushSettings.recordCapabilities(endpoint: valid, capabilities: capabilities, checkedAt: checkedAt)
-                }
-                snapshot = CloudPushSettings.snapshot()
-                capabilityProbe = .success(streams: capabilities.wireNames, checkedAt: checkedAt)
-            case .rejected(_, _, let failure):
-                capabilityProbe = .failure(failure ?? PushFailure(code: .networkIO))
-            }
-        }
-    }
-
-    private func clearToken() {
-        CloudPushSettings.saveToken("")
-        CloudPushSettings.setEnabled(false)
-        CloudPushScheduler.cancelScheduledWork()
-        token = ""
-        snapshot = CloudPushSettings.snapshot()
-        validationMessage = String(localized: "Saved token cleared and push turned off.")
     }
 
     private func runStateLabel(_ state: CloudPushSettings.RunState) -> String {
@@ -407,7 +190,6 @@ struct CloudPushView: View {
         StrandCard(padding: NoopMetrics.space5) {
             VStack(alignment: .leading, spacing: NoopMetrics.space4) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Experimental").strandOverline()
                     HStack(spacing: NoopMetrics.space2 + 2) {
                         Image(systemName: icon)
                             .foregroundStyle(StrandPalette.accent)
@@ -423,32 +205,6 @@ struct CloudPushView: View {
                     .fixedSize(horizontal: false, vertical: true)
                 content()
             }
-        }
-    }
-
-    private func pushField(label: String, text: Binding<String>, secret: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(label).strandOverline()
-            Group {
-                if secret {
-                    SecureField(label, text: text)
-                } else {
-                    TextField(label, text: text)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .keyboardType(.URL)
-                }
-            }
-            .textFieldStyle(.plain)
-            .font(StrandFont.mono(13))
-            .foregroundStyle(StrandPalette.textPrimary)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 9)
-            .background(StrandPalette.surfaceInset, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .strokeBorder(StrandPalette.hairline, lineWidth: 1)
-            )
         }
     }
 

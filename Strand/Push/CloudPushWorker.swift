@@ -33,7 +33,7 @@ enum CloudPushWorker {
         #endif
 
         guard let endpoint = CloudPushSettings.enabledEndpoint(),
-              let token = CloudPushKeyStore.readToken() else {
+              let token = CloudPushSettings.resolvedToken() else {
             CloudPushSettings.recordError(
                 String(localized: "The saved token is unavailable. Save it again.")
             )

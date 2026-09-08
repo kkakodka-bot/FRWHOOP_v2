@@ -320,9 +320,9 @@ object PushProtocol {
         }
     }
 
-    private fun binaryEndCursor(table: PushBinaryTable, deviceId: String, rows: List<PushBinaryRow>): PushCursor? =
+    private fun binaryEndCursor(table: PushBinaryTable, deviceId: String, rows: List<PushBinaryRow>): PushCursor? {
         when (table) {
-            PushBinaryTable.RAW_BATCH -> null
+            PushBinaryTable.RAW_BATCH -> return null
             PushBinaryTable.PPG_WAVEFORM_SAMPLE, PushBinaryTable.V18_AUX_SAMPLE, PushBinaryTable.RAW_IMU_SESSION -> {
                 val last = rows.lastOrNull() ?: return null
                 val rowId = when (last) {
@@ -331,9 +331,10 @@ object PushProtocol {
                     is PushBinaryRow.RawImuSession -> last.record.rowId
                     else -> throw PushProtocolException("binary row kind mismatch")
                 }
-                PushCursor(rowId, binaryKeyFingerprint(table, deviceId, last))
+                return PushCursor(rowId, binaryKeyFingerprint(table, deviceId, last))
             }
         }
+    }
 
     internal fun mutableRecordEncodedSize(table: PushMutableTable, record: PushMutableRecord): Int {
         validateRecord(table, record.key, record.data)

@@ -148,14 +148,18 @@ class PushDao internal constructor(
         table: PushBinaryTable,
         deviceId: String,
         rowId: Long,
-    ): PushBinaryRow? = when (table) {
-        PushBinaryTable.RAW_BATCH -> null
-        PushBinaryTable.RAW_IMU_SESSION -> {
-            val source = imuPushSource ?: return null
-            val record = source.pushRecords(deviceId, rowId - 1, 1).firstOrNull()?.takeIf { it.ts == rowId }
-                ?: return null
-            PushBinaryRow.RawImuSession(PushRawImuRecord(record.ts, record.ts, record.columns))
+    ): PushBinaryRow? {
+        when (table) {
+            PushBinaryTable.RAW_BATCH -> return null
+            PushBinaryTable.RAW_IMU_SESSION -> {
+                val source = imuPushSource ?: return null
+                val record = source.pushRecords(deviceId, rowId - 1, 1).firstOrNull()?.takeIf { it.ts == rowId }
+                    ?: return null
+                return PushBinaryRow.RawImuSession(PushRawImuRecord(record.ts, record.ts, record.columns))
+            }
+            else -> Unit
         }
+        return when (table) {
         else -> db.withTransaction {
             val spec = binarySpec(table) ?: return@withTransaction null
             val sql = "SELECT rowid AS _pushRowId, ${spec.columns.joinToString()} FROM ${spec.sqlName} " +
@@ -163,6 +167,7 @@ class PushDao internal constructor(
             db.query(SimpleSQLiteQuery(sql, arrayOf(deviceId, rowId))).use { cursor ->
                 if (cursor.moveToFirst()) cursor.binaryRecord(table) else null
             }
+        }
         }
     }
 
@@ -260,6 +265,7 @@ class PushDao internal constructor(
                 Cursor.FIELD_TYPE_STRING -> getString(index)
                 Cursor.FIELD_TYPE_BLOB -> getBlob(index)
                     ?: throw PushProtocolException("unsupported SQLite type in ${spec.sqlName}.$name")
+                else -> throw PushProtocolException("unsupported cursor type in ${spec.sqlName}.$name")
             }
             put(name, value)
         }

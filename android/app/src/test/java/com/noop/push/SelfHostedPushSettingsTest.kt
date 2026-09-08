@@ -11,61 +11,56 @@ import org.junit.Test
 class SelfHostedPushSettingsTest {
     @Test fun wifiOnlyDefaultsOnAndPersistsOptOut() {
         val plain = FakePushPrefs()
-        val settings = SelfHostedPushSettings.forTest(plain, FakePushPrefs())
+        val settings = SelfHostedPushSettings.forTest(plain)
 
         assertTrue(settings.snapshot().wifiOnly)
         settings.setWifiOnly(false)
 
-        assertFalse(SelfHostedPushSettings.forTest(plain, FakePushPrefs()).snapshot().wifiOnly)
+        assertFalse(SelfHostedPushSettings.forTest(plain).snapshot().wifiOnly)
     }
 
     @Test fun binaryObjectsDefaultOnAndPersist() {
         val plain = FakePushPrefs()
-        val settings = SelfHostedPushSettings.forTest(plain, FakePushPrefs())
+        val settings = SelfHostedPushSettings.forTest(plain)
 
         assertTrue(settings.snapshot().binaryObjectsEnabled)
         settings.setBinaryObjectsEnabled(false)
 
-        assertFalse(SelfHostedPushSettings.forTest(plain, FakePushPrefs()).snapshot().binaryObjectsEnabled)
+        assertFalse(SelfHostedPushSettings.forTest(plain).snapshot().binaryObjectsEnabled)
     }
 
-    @Test fun defaultsOnButCannotEnableWithoutEndpointAndToken() {
-        val settings = SelfHostedPushSettings.forTest(FakePushPrefs(), FakePushPrefs())
+    @Test fun defaultsOnButCannotEnableWithoutBundleEndpointAndToken() {
+        val settings = SelfHostedPushSettings.forTest(FakePushPrefs())
         assertTrue(settings.snapshot().enabled)
         assertFalse(settings.snapshot().ready)
         assertFalse(settings.setEnabled(true))
     }
 
-    @Test fun blankTokenRemovesEncryptedCredentialAndTurnsReadinessOff() {
-        val plain = FakePushPrefs()
-        val encrypted = FakePushPrefs()
-        val settings = SelfHostedPushSettings.forTest(plain, encrypted)
-        settings.saveEndpoint("https://example.com/push")
-        settings.saveToken("secret")
-        assertTrue(settings.setEnabled(true))
-        assertTrue(settings.snapshot().ready)
-
-        settings.saveToken("   ")
+    @Test fun blankBundleTokenTurnsReadinessOff() {
+        val settings = SelfHostedPushSettings.forTest(
+            FakePushPrefs(),
+            bundleEndpoint = "https://example.com/push",
+            bundleToken = "   ",
+        )
 
         assertNull(settings.token())
         assertFalse(settings.snapshot().ready)
+        assertFalse(settings.setEnabled(true))
     }
 
-    @Test fun capturedEndpointKeepsItsOwnProgressNamespaceAcrossConcurrentEdit() {
-        val settings = SelfHostedPushSettings.forTest(FakePushPrefs(), FakePushPrefs())
+    @Test fun progressNamespaceDiffersPerEndpointAndIsStable() {
+        val settings = SelfHostedPushSettings.forTest(FakePushPrefs())
         val first = (PushEndpointPolicy.validate("https://one.example/push") as PushEndpointPolicy.Result.Valid).endpoint
         val second = (PushEndpointPolicy.validate("https://two.example/push") as PushEndpointPolicy.Result.Valid).endpoint
 
-        settings.saveEndpoint(first.url)
         val firstNamespace = settings.progressNamespace(SOURCE_A, first)
-        settings.saveEndpoint(second.url)
 
         assertNotEquals(firstNamespace, settings.progressNamespace(SOURCE_A, second))
         assertTrue(firstNamespace == settings.progressNamespace(SOURCE_A, first))
     }
 
     @Test fun receiverStateAndNegotiatedVersionFenceProgressAtTheSameEndpoint() {
-        val settings = SelfHostedPushSettings.forTest(FakePushPrefs(), FakePushPrefs())
+        val settings = SelfHostedPushSettings.forTest(FakePushPrefs())
         val endpoint = (PushEndpointPolicy.validate("https://one.example/push") as PushEndpointPolicy.Result.Valid).endpoint
 
         val first = settings.progressNamespace(SOURCE_A, endpoint, "1.0", "00000000-0000-4000-8000-000000000001")
@@ -77,9 +72,11 @@ class SelfHostedPushSettingsTest {
     }
 
     @Test fun progressIsPersistedAndSuccessOnlyAppearsAfterCatchUpCompletes() {
-        val settings = SelfHostedPushSettings.forTest(FakePushPrefs(), FakePushPrefs())
-        settings.saveEndpoint("https://example.com/push")
-        settings.saveToken("secret")
+        val settings = SelfHostedPushSettings.forTest(
+            FakePushPrefs(),
+            bundleEndpoint = "https://example.com/push",
+            bundleToken = "secret",
+        )
         assertTrue(settings.setEnabled(true))
 
         settings.recordPushStarted()
@@ -103,9 +100,11 @@ class SelfHostedPushSettingsTest {
     }
 
     @Test fun disableIsImmediatelyIdleAndRejectsLateWorkerStatusWrites() {
-        val settings = SelfHostedPushSettings.forTest(FakePushPrefs(), FakePushPrefs())
-        settings.saveEndpoint("https://example.com/push")
-        settings.saveToken("secret")
+        val settings = SelfHostedPushSettings.forTest(
+            FakePushPrefs(),
+            bundleEndpoint = "https://example.com/push",
+            bundleToken = "secret",
+        )
         assertTrue(settings.setEnabled(true))
         settings.recordPushStarted()
         settings.recordRunning()
@@ -122,11 +121,14 @@ class SelfHostedPushSettingsTest {
         assertNull(stopped.lastSuccessAt)
     }
 
-    @Test fun capabilitiesArePersistedOnlyForTheirNormalizedEndpoint() {
-        val settings = SelfHostedPushSettings.forTest(FakePushPrefs(), FakePushPrefs())
+    @Test fun capabilitiesAreVisibleOnlyWhenRecordedForTheBundleEndpoint() {
+        val settings = SelfHostedPushSettings.forTest(
+            FakePushPrefs(),
+            bundleEndpoint = "https://one.example/push",
+            bundleToken = "secret",
+        )
         val first = (PushEndpointPolicy.validate("https://one.example/push") as PushEndpointPolicy.Result.Valid).endpoint
         val second = (PushEndpointPolicy.validate("https://two.example/push") as PushEndpointPolicy.Result.Valid).endpoint
-        settings.saveEndpoint(first.url)
 
         settings.recordCapabilities(
             first,
@@ -139,18 +141,19 @@ class SelfHostedPushSettingsTest {
 
         assertEquals(listOf("hrSample", "journal"), settings.snapshot().supportedStreams)
         assertEquals(1234L, settings.snapshot().capabilitiesCheckedAt)
-        settings.saveToken("rotated-token")
-        assertNull(settings.snapshot().supportedStreams)
-        settings.recordCapabilities(first, PushCapabilities.ALL, atMillis = 2345L)
-        settings.saveEndpoint(second.url)
+
+        // Capabilities recorded against any other destination must not surface for this build's endpoint.
+        settings.recordCapabilities(second, PushCapabilities.ALL, atMillis = 2345L)
         assertNull(settings.snapshot().supportedStreams)
         assertNull(settings.snapshot().capabilitiesCheckedAt)
     }
 
     @Test fun liveStreamIsVisibleDuringWorkAndClearedAfterCompleteCatchUp() {
-        val settings = SelfHostedPushSettings.forTest(FakePushPrefs(), FakePushPrefs())
-        settings.saveEndpoint("https://example.com/push")
-        settings.saveToken("secret")
+        val settings = SelfHostedPushSettings.forTest(
+            FakePushPrefs(),
+            bundleEndpoint = "https://example.com/push",
+            bundleToken = "secret",
+        )
         assertTrue(settings.setEnabled(true))
         settings.recordRunning()
 
@@ -163,7 +166,7 @@ class SelfHostedPushSettingsTest {
 
     @Test fun cycleFailurePersistsOnlyStructuredCategoryAndStatus() {
         val plain = FakePushPrefs()
-        val settings = SelfHostedPushSettings.forTest(plain, FakePushPrefs())
+        val settings = SelfHostedPushSettings.forTest(plain)
         val failure = PushFailure(PushFailureCode.HTTP_AUTH, 401)
 
         settings.saveCycleFailure("receiver-a", failure)
@@ -176,7 +179,7 @@ class SelfHostedPushSettingsTest {
 
     @Test fun boundedReceiverErrorCodeSurvivesContinuationWithoutArbitraryText() {
         val plain = FakePushPrefs()
-        val settings = SelfHostedPushSettings.forTest(plain, FakePushPrefs())
+        val settings = SelfHostedPushSettings.forTest(plain)
         val failure = PushFailure(PushFailureCode.HTTP_PROTOCOL_REJECTED, 422, "registry_mismatch")
 
         settings.saveCycleFailure("receiver-a", failure)

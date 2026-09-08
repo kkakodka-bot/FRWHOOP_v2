@@ -62,14 +62,6 @@ object SelfHostedPushScheduler {
 
     fun enqueueManualCatchUp(context: Context) = enqueueExternal(context)
 
-    /** Revoke an in-flight destination snapshot before queueing a baseline for the newly saved URL. */
-    fun destinationChanged(context: Context) {
-        val app = context.applicationContext
-        PushRunSignal.clear(app)
-        WorkManager.getInstance(app).cancelUniqueWork(UNIQUE_WORK)
-        enqueueExternal(app)
-    }
-
     /** Replace queued work so a changed network policy takes effect immediately. */
     fun networkPolicyChanged(context: Context) {
         val app = context.applicationContext

@@ -2,7 +2,9 @@ import Foundation
 import CryptoKit
 import NoopPush
 
-/// UserDefaults-backed push configuration. Bearer token lives in [CloudPushKeyStore].
+/// Push configuration. The destination and bearer token are baked into the build (Info.plist,
+/// from Config/CloudPush.xcconfig) and are the same for every user — there is no per-user
+/// endpoint or token override. Only toggles and run-state persist in UserDefaults.
 enum CloudPushSettings {
     enum RunState: String {
         case idle, queued, running, continuing, retrying, complete, failed
@@ -28,7 +30,6 @@ enum CloudPushSettings {
     private enum K {
         static let enabled = "cloudPush.enabled"
         static let binaryObjectsEnabled = "cloudPush.binaryObjectsEnabled"
-        static let endpoint = "cloudPush.endpoint"
         static let sourceId = "cloudPush.sourceId"
         static let wifiOnly = "cloudPush.wifiOnly"
         static let lastSuccess = "cloudPush.lastSuccessAt"
@@ -43,6 +44,17 @@ enum CloudPushSettings {
         static let cycleMorePrefix = "cloudPush.cycleMore."
     }
 
+    /// Fleet destination baked into Info.plist at build time from Config/CloudPush.xcconfig
+    /// (gitignored secrets in Config/CloudPushSecrets.xcconfig). This is the only destination —
+    /// builds without the secrets file simply have push unconfigured. An unresolved `$(…)`
+    /// placeholder reads as absent.
+    private static func bundleValue(_ key: String) -> String? {
+        guard let raw = Bundle.main.object(forInfoDictionaryKey: key) as? String else { return nil }
+        let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty, !value.hasPrefix("$(") else { return nil }
+        return value
+    }
+
     static var isEnabled: Bool {
         if UserDefaults.standard.object(forKey: K.enabled) == nil { return true }
         return UserDefaults.standard.bool(forKey: K.enabled)
@@ -51,7 +63,15 @@ enum CloudPushSettings {
         if UserDefaults.standard.object(forKey: K.binaryObjectsEnabled) == nil { return true }
         return UserDefaults.standard.bool(forKey: K.binaryObjectsEnabled)
     }
-    static var endpointText: String { UserDefaults.standard.string(forKey: K.endpoint) ?? "" }
+    static var endpointText: String {
+        bundleValue("NOOPPushEndpoint") ?? ""
+    }
+
+    /// The bearer the worker sends: the fleet token baked into the bundle. Never written to the
+    /// keychain — rotation only needs a new build, not a per-device keychain migration.
+    static func resolvedToken() -> String? {
+        bundleValue("NOOPPushToken")
+    }
     static var wifiOnly: Bool {
         if UserDefaults.standard.object(forKey: K.wifiOnly) == nil { return true }
         return UserDefaults.standard.bool(forKey: K.wifiOnly)
@@ -61,7 +81,7 @@ enum CloudPushSettings {
 
     private static var isConfigured: Bool {
         guard case .valid = PushEndpointPolicy.validate(endpointText) else { return false }
-        return CloudPushKeyStore.hasToken
+        return resolvedToken() != nil
     }
 
     static func snapshot() -> Snapshot {
@@ -77,7 +97,7 @@ enum CloudPushSettings {
             binaryObjectsEnabled: binaryObjectsEnabled,
             wifiOnly: wifiOnly,
             endpoint: endpoint,
-            hasToken: CloudPushKeyStore.hasToken,
+            hasToken: resolvedToken() != nil,
             lastSuccessAt: UserDefaults.standard.object(forKey: K.lastSuccess).map { Date(timeIntervalSince1970: $0 as? TimeInterval ?? 0) },
             lastError: UserDefaults.standard.string(forKey: K.lastError),
             runState: RunState(rawValue: UserDefaults.standard.string(forKey: K.runState) ?? "") ?? .idle,
@@ -114,25 +134,6 @@ enum CloudPushSettings {
 
     static func setWifiOnly(_ wifiOnly: Bool) {
         UserDefaults.standard.set(wifiOnly, forKey: K.wifiOnly)
-    }
-
-    static func saveToken(_ token: String) {
-        if token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            CloudPushKeyStore.saveToken("")
-        } else {
-            CloudPushKeyStore.saveToken(token)
-        }
-        clearCapabilities()
-    }
-
-    static func saveEndpoint(_ raw: String) -> PushEndpointValidation {
-        let result = PushEndpointPolicy.validate(raw)
-        if case .valid(let endpoint) = result {
-            let previous = endpointText
-            UserDefaults.standard.set(endpoint.url, forKey: K.endpoint)
-            if previous != endpoint.url { clearCapabilities() }
-        }
-        return result
     }
 
     static func sourceId() -> String {
@@ -237,19 +238,4 @@ enum CloudPushSettings {
         return names
     }
 
-    private static func clearCapabilities() {
-        UserDefaults.standard.removeObject(forKey: K.capabilitiesEndpoint)
-        UserDefaults.standard.removeObject(forKey: K.capabilitiesStreams)
-        UserDefaults.standard.removeObject(forKey: K.capabilitiesAt)
-    }
-
-    #if DEBUG
-    static func applyLaunchArgsIfNeeded() {
-        let args = CommandLine.arguments
-        guard let index = args.firstIndex(of: "--cloud-push"), index + 2 < args.count else { return }
-        saveEndpoint(args[index + 1])
-        CloudPushKeyStore.saveToken(args[index + 2])
-        setEnabled(true)
-    }
-    #endif
 }

@@ -119,6 +119,11 @@ targets:
         OURA_CLIENT_ID: $(OURA_CLIENT_ID)
         OURA_CLIENT_SECRET: $(OURA_CLIENT_SECRET)
         OURA_REDIRECT_URI: $(OURA_REDIRECT_URI)
+        # FRWHOOP fleet cloud-push defaults (values come from Config/CloudPush.xcconfig, included
+        # project-wide via Config/BundleId.xcconfig); read at runtime via CloudPushSettings.
+        # Absent/blank values leave push manual-configure, exactly as before.
+        NOOPPushEndpoint: $(NOOP_PUSH_ENDPOINT)
+        NOOPPushToken: $(NOOP_PUSH_TOKEN)
         # Registers the noop:// URL scheme so ASWebAuthenticationSession's OAuth redirect
         # (noop://oura/callback) reaches OuraOAuthProvider instead of bouncing off the OS.
         CFBundleURLTypes:
@@ -316,6 +321,11 @@ targets:
         OURA_CLIENT_ID: $(OURA_CLIENT_ID)
         OURA_CLIENT_SECRET: $(OURA_CLIENT_SECRET)
         OURA_REDIRECT_URI: $(OURA_REDIRECT_URI)
+        # FRWHOOP fleet cloud-push defaults (values come from Config/CloudPush.xcconfig, included
+        # project-wide via Config/BundleId.xcconfig); read at runtime via CloudPushSettings.
+        # Absent/blank values leave push manual-configure, exactly as before.
+        NOOPPushEndpoint: $(NOOP_PUSH_ENDPOINT)
+        NOOPPushToken: $(NOOP_PUSH_TOKEN)
         # Registers the noop:// URL scheme so ASWebAuthenticationSession's OAuth redirect
         # (noop://oura/callback) reaches OuraOAuthProvider instead of bouncing off the OS.
         CFBundleURLTypes:

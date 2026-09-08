@@ -18,6 +18,19 @@ val requestedReleaseBuild = gradle.startParameter.taskNames.any {
     it.contains("Release", ignoreCase = true)
 }
 
+// Fleet cloud-push destination (Supabase Edge Function) + ingest token, baked into BuildConfig.
+// Values live in Config/CloudPushSecrets.properties (git-ignored, never committed — the Xcode
+// half is Config/CloudPushSecrets.xcconfig); when the file is absent the build is simply
+// unconfigured and push stays off. See Config/CloudPushSecrets.example.properties.
+val fleetPushPropsFile = rootProject.file("../Config/CloudPushSecrets.properties")
+val fleetPushProps = Properties().apply {
+    if (fleetPushPropsFile.exists()) fleetPushPropsFile.inputStream().use { load(it) }
+}
+fun fleetPushBuildConfig(key: String): String =
+    "\"" + fleetPushProps.getProperty(key).orEmpty().trim()
+        .replace("\\", "\\\\")
+        .replace("\"", "\\\"") + "\""
+
 android {
     namespace = "com.noop"
     compileSdk = 35
@@ -33,6 +46,11 @@ android {
         vectorDrawables {
             useSupportLibrary = true
         }
+
+        // Fleet push destination, identical for every install; empty when the secrets file is
+        // absent. Read at runtime only through SelfHostedPushSettings.
+        buildConfigField("String", "NOOP_PUSH_ENDPOINT", fleetPushBuildConfig("NOOP_PUSH_ENDPOINT"))
+        buildConfigField("String", "NOOP_PUSH_TOKEN", fleetPushBuildConfig("NOOP_PUSH_TOKEN"))
     }
 
     signingConfigs {

@@ -127,3 +127,7 @@ backend/.env
 backend/.frwhoop-host-token
 supabase/.temp/
 supabase/.branches/
+
+# Fleet cloud-push defaults (endpoint + ingest token) baked in at build time. See Config/CloudPush.xcconfig.
+Config/CloudPushSecrets.xcconfig
+Config/CloudPushSecrets.properties

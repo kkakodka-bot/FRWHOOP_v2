@@ -145,7 +145,8 @@ class ImuSessionFileStore(private val context: Context) : ImuSessionPushSource {
                     val cutoff = byTs.keys.sorted()[limit - 1]
                     if (bucket > cutoff) break
                 }
-                for (record in decodeFile(file.readBytes())) where record.ts > afterTs {
+                for (record in decodeFile(file.readBytes())) {
+                    if (record.ts <= afterTs) continue
                     if (record.columns.size != SAMPLE_RATE * AXES || byTs.containsKey(record.ts)) continue
                     val data = ByteArray(PAYLOAD_BYTES)
                     var offset = 0

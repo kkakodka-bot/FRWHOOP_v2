@@ -1,0 +1,16 @@
+// Tracked wrapper so a clean checkout (no fleet credentials) still generates and builds.
+//
+// CloudPushSecrets.xcconfig is gitignored and user-created (template:
+// CloudPushSecrets.example.xcconfig). It carries the FRWHOOP fleet push defaults baked into the
+// app at build time:
+//   NOOP_PUSH_ENDPOINT — the Supabase Edge Function base (…/functions/v1/push)
+//   NOOP_PUSH_TOKEN    — the fleet ingest token (opaque `noop_…`, NOT a JWT, NOT a B2 key)
+// When the file is absent the $(NOOP_PUSH_*) Info.plist keys resolve to empty strings and the
+// build simply has no export destination: cloud push stays off and cannot be enabled.
+//
+// The token is an ingest credential, not a session: it can only write batches/objects for the
+// research user, and it is extractable from the app bundle by anyone with the binary. That is an
+// accepted property of the consented-research-fleet model — do not put any other secret here.
+NOOP_PUSH_ENDPOINT =
+NOOP_PUSH_TOKEN =
+#include? "CloudPushSecrets.xcconfig"

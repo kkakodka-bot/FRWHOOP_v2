@@ -35,6 +35,6 @@ class EndpointScopedProgressStore(
     override suspend fun inFlightObject(table: PushBinaryTable, deviceId: String): PushInFlightObject? =
         delegate.inFlightObject(table, scoped(deviceId))
 
-    override suspend fun saveInFlightObject(table: PushBinaryTable, deviceId: String, object: PushInFlightObject?) =
-        delegate.saveInFlightObject(table, scoped(deviceId), object)
+    override suspend fun saveInFlightObject(table: PushBinaryTable, deviceId: String, inFlight: PushInFlightObject?) =
+        delegate.saveInFlightObject(table, scoped(deviceId), inFlight)
 }
