@@ -1437,12 +1437,19 @@ public final class BLEManager: NSObject, ObservableObject {
         // FRWHOOP fork: raw capture defaults ON (the research corpus requires the raw stream);
         // upstream NOOP defaults it off. Set "enableRawCapture" to false in UserDefaults to opt out.
         let enableRawCapture = UserDefaults.standard.noopRawCaptureEnabled
+        // Research push: the live-banked hook below needs a DatabaseWriter, and `store` is local to
+        // bootstrap — capture the writer (nonisolated/Sendable) so the closure doesn't need `self`.
+        let pushWriter = store.registryWriter
         collector = Collector(store: store, deviceId: deviceId,
                               enableRawCapture: enableRawCapture,
                               log: { [weak self] line in self?.log(line) },
                               onBanked: { [weak self] c in
                                   // Live path: hr/rr are all the realtime decoder yields.
                                   self?.liveHr += c.hr; self?.liveRr += c.rr
+                                  // Research push: migrate live rows to B2 on a cadence, not only
+                                  // after full offload. Covers hrSample, skinTempSample, gravitySample,
+                                  // and the binary lane (ppgWaveformSample, v18AuxSample, rawImuSession).
+                                  CloudPushPeriodicScheduler.pushIfDue(db: pushWriter, reason: "live")
                               })
         // The store can finish bootstrapping AFTER connect(model:) already ran (both wait on
         // poweredOn), so apply the family/clock configuration here too — whichever runs last wins.
