@@ -284,6 +284,7 @@ targets:
           # only BGProcessingTask of the three; the other two are refresh tasks.
           - $(PRODUCT_BUNDLE_IDENTIFIER).rescore
           - $(PRODUCT_BUNDLE_IDENTIFIER).cloudpush
+          - $(PRODUCT_BUNDLE_IDENTIFIER).syncmaintenance
         NSBluetoothAlwaysUsageDescription: "NARA connects directly to your WHOOP strap over Bluetooth to read heart rate, R-R intervals, battery, and sensor data locally on your iPhone. Nothing leaves your device."
         NSLocationWhenInUseUsageDescription: "NARA records your route during an outdoor workout to show distance, pace, and a map, and keeps recording while the screen is off. The route stays on your device. Nothing leaves it."
         NSHealthShareUsageDescription: "NARA reads your own Apple Health data on-device to compute recovery, strain, and sleep. Nothing leaves your device."
