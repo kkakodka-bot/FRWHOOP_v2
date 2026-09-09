@@ -919,6 +919,27 @@ extension WhoopStore {
             // No index: the table is capped at maxStoredMessages (40 rows), so a full scan + sort on
             // read is negligible and an index buys nothing worth the extra Room<->GRDB parity surface.
         }
+        // Device-local operational debt for post-offload stages (#1538). One outstanding row per kind;
+        // the token follows the #1681 pattern so a pass settles only the debt it captured. Never added
+        // to the `.noopbak` backup whitelist — this is ephemeral scheduling state, not user data.
+        migrator.registerMigration("v44-sync-jobs") { db in
+            try db.create(table: "syncJob", options: [.ifNotExists]) { t in
+                t.column("kind", .text).primaryKey()
+                t.column("owedAt", .integer).notNull()
+                t.column("token", .text).notNull()
+                t.column("attempts", .integer).notNull().defaults(to: 0)
+                t.column("lastNote", .text)
+            }
+            try db.create(table: "syncJournalEntry", options: [.ifNotExists]) { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("ts", .integer).notNull()
+                t.column("wakeReason", .text).notNull()
+                t.column("stagesRun", .text).notNull()
+                t.column("stagesOwed", .text).notNull()
+                t.column("durationMs", .integer).notNull()
+                t.column("note", .text)
+            }
+        }
         return migrator
     }
 }
