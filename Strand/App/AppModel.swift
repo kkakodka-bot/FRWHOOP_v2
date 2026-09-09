@@ -59,6 +59,9 @@ final class AppModel: ObservableObject {
     /// Opt-in AI coach (bring-your-own-key) , the one networked feature, off until the user enables it.
     let coach: AICoachEngine
 
+    /// Post-offload orchestrator (#1538): re-score, cloud push, Health write-back, widget publish.
+    let syncEngine = SyncEngine()
+
     /// Observable cache over the paired-device registry; `activeDeviceId` drives the source coordinator.
     /// Built lazily once the store opens (see `wireSourceCoordinator`). nil until then , with no generic
     /// strap paired the active id stays "my-whoop", so this never affects the WHOOP startup path.
@@ -381,6 +384,7 @@ final class AppModel: ObservableObject {
         rehydrateActiveWorkout()
 
         AppModel.shared = self   // publish for App Intents (Shortcuts) , see the static above (#42)
+        syncEngine.bind(self)
 
         // Seed the BLE client with the persisted "Continuous HRV capture" intent so `wantsRealtime`
         // reflects it from launch , the reconciler then arms the dense stream as soon as the strap bonds
@@ -614,7 +618,7 @@ final class AppModel: ObservableObject {
     ///
     /// A closure rather than a direct reference because `HealthKitBridge` owns iOS-only HealthKit state
     /// while this type is shared with macOS, and the bridge is a `@StateObject` the app scene owns.
-    var healthWriteBack: (() async -> Void)?
+    var healthWriteBack: (() async -> Bool)?
     #endif
 
     /// Settle a re-score that is owed (#1538) — one an earlier attempt started and was killed partway
@@ -641,43 +645,11 @@ final class AppModel: ObservableObject {
     private func refreshAfterCompletedBackfill() async {
         live.append(log: "Backfill: refreshing dashboard cache from completed sync")
         await repo.refresh(days: 120)
-        // Score the freshly-offloaded raw data RIGHT NOW rather than waiting for the next 15-minute
-        // analyzeRecent tick , otherwise a just-synced night's Charge / Effort / Rest can take up to
-        // 15 minutes to appear on a strap-only (no-import) dashboard. analyzeRecent no-ops if a tick is
-        // already running and refreshes the dashboard itself once the new scores persist. (PR #218)
-        // #1196/#1146: `skipIfUnchanged` gates THIS post-offload pass on the complete raw-input fingerprint — an empty/
-        // duplicate offload (nothing new banked, common on a flapping link) skips the whole-window rescore
-        // instead of churning it, which was surfacing as a Trends/streak "0 days" flicker. Only this
-        // post-offload caller opts in; every other analyzeRecent path still forces unconditionally.
-        // #1538: this offload routinely completes while the app is BACKGROUNDED — it stays alive as a
-        // bluetooth-central to receive the offload at all — and the pass is all-or-nothing, so on a heavy
-        // install iOS suspends the process minutes before it can finish and every scored night is lost.
-        // Worse, the watermark advances only on completion, so the next trigger still sees new data and
-        // starts another doomed pass: a livelock that burned nearly eight minutes of CPU per attempt in
-        // the #1538 report while never producing a score. Decide first whether this pass can finish here,
-        // and hand it to a background-processing task when it cannot. A no-op on macOS, and on iOS a
-        // foreground pass is never deferred.
-        await RescoreBackgroundScheduler.run(log: { [live] line in live.append(log: line) }) {
-            await intelligence.analyzeRecent(skipIfUnchanged: true)
-        }
+        // Post-offload pipeline: re-score (#1538 deferral still inside RescoreBackgroundScheduler.run),
+        // cloud push, Apple Health write-back (#1021), and widget publish (#980) all drain through one
+        // orchestrator so owed work survives suspension and every wake can settle every stage.
+        await syncEngine.drain(reason: .offloadComplete)
         await refreshV5Signals()
-        #if os(iOS)
-        // #980: a strap backfill routinely completes while the app is BACKGROUNDED (it runs as a
-        // bluetooth-central, so it stays alive to receive the offload). The only other widget-publish
-        // sites are gated on scenePhase == .active, so a background sync would rescore today's data but
-        // never rewrite the shared App-Group snapshot or call WidgetCenter.reloadAllTimelines — the
-        // widget kept showing yesterday's numbers. Publishing here, on the real "new data landed"
-        // signal, pushes the fresh snapshot to the home-screen widget without needing a foreground.
-        await WidgetSnapshot.publish(from: self)
-        // #1021: same reasoning as the widget publish above, for Apple Health. The only automatic
-        // write-back ran on scenePhase == .active, in the same block that KICKS this offload - so it
-        // raced the data it was meant to publish and last night's sleep reached Health an app-open late.
-        // Set by StrandiOSApp; nil on macOS and in tests, where there is no bridge.
-        await healthWriteBack?()
-        if let writer = await repo.registryWriterForPush() {
-            CloudPushWorker.enqueueAfterSuccessfulOffload(db: writer)
-        }
-        #endif
     }
 
     /// Fold a fresh reading into the smoothing window and republish a stable bpm.
