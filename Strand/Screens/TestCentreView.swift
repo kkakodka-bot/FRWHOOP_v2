@@ -90,11 +90,12 @@ struct TestCentreView: View {
                        subtitle: "Turn on a test for the thing that's wrong, wear the strap, then tap Report. All on \(Platform.deviceNounPhrase).") {
             VStack(alignment: .leading, spacing: NoopMetrics.sectionSpacing) {
                 domainModesCard.staggeredAppear(index: 0)
-                diagnosticToolsCard.staggeredAppear(index: 1)
-                if is5MG { rawDataCollectorCard.staggeredAppear(index: 2) }
-                if is5MG { fiveMGProtocolDiagnosticsCard.staggeredAppear(index: 3) }
-                exportCard.staggeredAppear(index: 2)
-                experimentalAlgorithmsCard.staggeredAppear(index: 3)
+                syncStatusCard.staggeredAppear(index: 1)
+                diagnosticToolsCard.staggeredAppear(index: 2)
+                if is5MG { rawDataCollectorCard.staggeredAppear(index: 3) }
+                if is5MG { fiveMGProtocolDiagnosticsCard.staggeredAppear(index: 4) }
+                exportCard.staggeredAppear(index: 3)
+                experimentalAlgorithmsCard.staggeredAppear(index: 4)
             }
         }
         .id(refreshToken)
@@ -239,6 +240,12 @@ struct TestCentreView: View {
                     .font(StrandFont.caption).foregroundStyle(StrandPalette.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+        }
+    }
+
+    @ViewBuilder private var syncStatusCard: some View {
+        NoopCard {
+            SyncStatusPanel()
         }
     }
 
@@ -939,7 +946,7 @@ private struct DisplayReadoutPanel: View {
 
 /// A compact key/value readout row for the Test Centre live panels (Group E/F/G). Mono value so the
 /// counts line up; secondary/tertiary tokens so it reads as a diagnostic, not a headline.
-private struct ReadoutRow: View {
+struct ReadoutRow: View {
     let label: String
     let value: String
     var body: some View {
