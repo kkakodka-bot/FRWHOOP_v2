@@ -53,8 +53,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         V18AuxSampleEntity::class,
         AppleStepHour::class,
         CoachMessageRow::class,
+        SyncJobEntity::class,
+        SyncJournalEntryEntity::class,
     ],
-    version = 37,
+    version = 38,
     // #775: ON so Room's KSP processor writes the generated schema (every table's exact `CREATE TABLE`,
     // columns in declaration order with affinity/NOT NULL/default, PK and indices) as JSON. That export
     // is what lets a plain JVM test — no device, no Robolectric — read Android's REAL schema and compare
@@ -75,7 +77,7 @@ abstract class WhoopDatabase : RoomDatabase() {
         const val DB_NAME = "noop_whoop.db"
         /** Room schema version — MUST equal the `@Database(version = …)` above. Surfaced in the backup
          *  manifest (#1410) so an export states its schema. Bump both together on a migration. */
-        const val SCHEMA_VERSION = 37
+        const val SCHEMA_VERSION = 38
 
         @Volatile
         private var instance: WhoopDatabase? = null
@@ -974,6 +976,33 @@ abstract class WhoopDatabase : RoomDatabase() {
             }
         }
 
+        /** GRDB v44-sync-jobs twin: device-local sync debt + journal (schema parity only on Android). */
+        internal val MIGRATION_37_38 = object : Migration(37, 38) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                for (stmt in SYNC_JOBS_MIGRATION_SQL) db.execSQL(stmt)
+            }
+        }
+
+        internal val SYNC_JOBS_MIGRATION_SQL: List<String> = listOf(
+            """CREATE TABLE IF NOT EXISTS `syncJob` (
+                `kind` TEXT NOT NULL,
+                `owedAt` INTEGER NOT NULL,
+                `token` TEXT NOT NULL,
+                `attempts` INTEGER NOT NULL,
+                `lastNote` TEXT,
+                PRIMARY KEY(`kind`)
+            )""",
+            """CREATE TABLE IF NOT EXISTS `syncJournalEntry` (
+                `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                `ts` INTEGER NOT NULL,
+                `wakeReason` TEXT NOT NULL,
+                `stagesRun` TEXT NOT NULL,
+                `stagesOwed` TEXT NOT NULL,
+                `durationMs` INTEGER NOT NULL,
+                `note` TEXT
+            )""",
+        )
+
         /**
          * Every migration the builder registers, as a VALUE rather than an argument list.
          *
@@ -1001,6 +1030,7 @@ abstract class WhoopDatabase : RoomDatabase() {
             MIGRATION_26_27, MIGRATION_27_28, MIGRATION_28_29, MIGRATION_29_30,
             MIGRATION_30_31, MIGRATION_31_32, MIGRATION_32_33, MIGRATION_33_34, MIGRATION_34_35, MIGRATION_35_36,
             MIGRATION_36_37,
+            MIGRATION_37_38,
         )
 
         private fun build(appContext: Context): WhoopDatabase =
