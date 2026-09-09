@@ -387,14 +387,23 @@ public struct PushCoordinator: Sendable {
         var retryableFailure = false
         var selectedFailure: PushFailure?
 
+        // Wake-budget ordering: ship scored mutable tables first so a short background wake still
+        // lands today's Charge / sleep / workouts / journal before dense per-second append streams.
+        // Append tables follow: lightweight event + battery, then the heavy HR/SpO₂/temp/resp/gravity
+        // lanes, with rrInterval last among append tables. Binary/object lanes stay last.
+        let mutableOrder: [PushMutableTable] = [.dailyMetric, .sleepSession, .workout, .journal]
+        let appendOrder: [PushAppendTable] = [
+            .event, .battery, .hrSample, .spo2Sample, .skinTempSample,
+            .respSample, .gravitySample, .rrInterval,
+        ]
+
         for deviceId in selectedDevices {
             if ndjsonEnabled {
-                for table in PushAppendTable.allCases where capabilities.appendTables.contains(table) {
-                    switch await pushAppend(table, deviceId: deviceId) {
-                    case .accepted(_, let records, let hasMore, let batchCount):
+                for table in mutableOrder where capabilities.mutableTables.contains(table) {
+                    switch await pushMutable(table, deviceId: deviceId) {
+                    case .accepted(_, let records, _, let batchCount):
                         accepted += batchCount
                         acceptedRecords += records
-                        more = more || hasMore
                     case .rejected(_, let retryable, let failure):
                         rejected += 1
                         if selectedFailure == nil || (retryable && !retryableFailure) {
@@ -405,11 +414,12 @@ public struct PushCoordinator: Sendable {
                         break
                     }
                 }
-                for table in PushMutableTable.allCases where capabilities.mutableTables.contains(table) {
-                    switch await pushMutable(table, deviceId: deviceId) {
-                    case .accepted(_, let records, _, let batchCount):
+                for table in appendOrder where capabilities.appendTables.contains(table) {
+                    switch await pushAppend(table, deviceId: deviceId) {
+                    case .accepted(_, let records, let hasMore, let batchCount):
                         accepted += batchCount
                         acceptedRecords += records
+                        more = more || hasMore
                     case .rejected(_, let retryable, let failure):
                         rejected += 1
                         if selectedFailure == nil || (retryable && !retryableFailure) {
