@@ -19,6 +19,11 @@ public struct BackfillInsertOutcome: Sendable {
     }
 }
 
+private struct RRBatchSecond: Hashable {
+    let ts: Int
+    let transport: Int
+}
+
 extension WhoopStore {
     /// Backfill duplicate-replay skip (v45). Default ON; `enableBackfillRangeSkip = false` disables.
     /// Live `insert()` passes empty `postOffloadJobKinds` and never consults the frontier.
@@ -348,24 +353,41 @@ extension WhoopStore {
                 // DO NOTHING keeps the first row. The historical path delivers a second atomically.
                 // Twin of Kotlin assignRrSeq.
                 //
-                // v32 (#1071): `srcChannel` is the sensor channel that measured the beat, carried from the
-                // decoder that produced it. NULL for every WHOOP row (one beat source — there is no channel
-                // to name, and that is honest rather than a placeholder) and for any source that does not
-                // report one. Like `ord` it is OUTSIDE the key: two channels measuring the same beat can
+                // `srcChannel` carries Oura optical channels or WHOOP 5 transport provenance. WHOOP 4
+                // and legacy rows stay NULL. Like `ord` it is OUTSIDE the key: two observations of a beat can
                 // yield the same (ts, rrMs), and keying on the label would store both — which is precisely
-                // the double-count this fixes. `DO NOTHING` therefore keeps whichever arrived first and the
-                // second channel's copy of THAT exact beat is dropped at insert; the read filter is what
-                // separates the streams in general.
-                var seqByTsRr: [Int: [Int: Int]] = [:]
-                var ordByTs: [Int: Int] = [:]
+                // the double-count this fixes. A collision never inserts another beat. A newly observed
+                // canonical WHOOP 5 transport can promote the existing source and order below; the read
+                // filter separates sources across the full requested interval.
+                let promote = try db.cachedStatement(sql: """
+                    UPDATE rrInterval SET srcChannel = :source, ord = :ord
+                    WHERE deviceId = :device AND ts = :ts AND rrMs = :rr AND seq = :seq
+                    AND ((:source = 5 AND (srcChannel IS NULL OR srcChannel IN (6, 7)))
+                      OR (:source = 7 AND (srcChannel IS NULL OR srcChannel = 6)))
+                    """)
+                var seqByTsRr: [RRBatchSecond: [Int: Int]] = [:]
+                var ordByTs: [RRBatchSecond: Int] = [:]
                 for r in streams.rr {
-                    let seq = seqByTsRr[r.ts]?[r.rrMs] ?? 0
-                    seqByTsRr[r.ts, default: [:]][r.rrMs] = seq + 1
-                    let ord = ordByTs[r.ts] ?? 0
-                    ordByTs[r.ts] = ord + 1
+                    // A second's native historical array is atomic. A standard packet in the same
+                    // batch must not change its order or the occurrence number of an equal interval.
+                    let key = RRBatchSecond(ts: r.ts,
+                        transport: r.srcChannel?.isWhoop5Transport == true ? r.srcChannel!.rawValue : 0)
+                    let seq = seqByTsRr[key]?[r.rrMs] ?? 0
+                    seqByTsRr[key, default: [:]][r.rrMs] = seq + 1
+                    let ord = ordByTs[key] ?? 0
+                    ordByTs[key] = ord + 1
                     try stmt.execute(arguments: [deviceId, r.ts, r.rrMs, seq, ord,
                                                  r.srcChannel?.rawValue])
-                    rr += db.changesCount
+                    let inserted = db.changesCount
+                    rr += inserted
+                    if inserted == 0, let source = r.srcChannel,
+                       source == .whoop5Historical || source == .whoop5Standard {
+                        // Canonical precedence is history > standard > native/legacy. The winning
+                        // observation supplies its order; values/keys and Oura labels remain intact.
+                        // Cache fingerprints witness both canonical-source counts independently of inserts.
+                        try promote.execute(arguments: ["source": source.rawValue, "ord": ord,
+                            "device": deviceId, "ts": r.ts, "rr": r.rrMs, "seq": seq])
+                    }
                 }
                 try recordFrontier("rr", timestamps: streams.rr.map(\.ts))
             }

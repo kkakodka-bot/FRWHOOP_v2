@@ -953,8 +953,10 @@ final class IntelligenceEngine: ObservableObject {
             let hrWindow = SlidingStreamWindow<HRSample>(tsOf: { $0.ts }, limit: StreamReadCap.hr) { o, f, t in
                 try? await store.hrSamples(deviceId: o, from: f, to: t, limit: StreamReadCap.hr)
             }
+            let activeWhoop5RR = (try? await store.isWhoop5RRSource(deviceId: regActiveId)) ?? true
             let rrWindow = SlidingStreamWindow<RRInterval>(tsOf: { $0.ts }, limit: StreamReadCap.rr) { o, f, t in
-                try? await store.rrIntervals(deviceId: o, from: f, to: t, limit: StreamReadCap.rr)
+                try? await store.rrIntervals(deviceId: o, from: f, to: t, limit: StreamReadCap.rr,
+                                            unlabelledAliasOfWhoop5: activeWhoop5RR && o == Repository.whoopSource)
             }
             for offset in 0..<maxDays {
                 let dayStart = nowLocalMidnight - offset * 86_400
@@ -1020,7 +1022,7 @@ final class IntelligenceEngine: ObservableObject {
                             // watermark gate above, never this one. Both reads are index-only aggregates
                             // over the same `(deviceId, ts)` keys; a miss costs the 7 full stream reads
                             // this gate exists to skip.
-                            streams: streamFp,
+                            streams: streamFp + "|rrAlias5=\(activeWhoop5RR && owner == Repository.whoopSource)",
                             // #1575: `hrvTraceActive &&` matters. With the HRV trace OFF no detail
                             // line is ever produced, so the flag describes nothing — but it would still
                             // flip at midnight and invalidate yesterday, charging EVERY user an extra
@@ -1050,7 +1052,9 @@ final class IntelligenceEngine: ObservableObject {
                     skippedSleepDays.append((day: day, hrSamples: hr.count))
                     continue
                 }
-                let rr = await rrWindow.rows(owner: owner, from: from, to: to)
+                let strictWhoop5RR = (try? await store.isWhoop5RRSource(deviceId: owner,
+                    unlabelledAliasOfWhoop5: activeWhoop5RR && owner == Repository.whoopSource)) ?? true
+                let rr = await rrWindow.rows(owner: owner, from: from, to: to, allowReuse: !strictWhoop5RR)
                 // `forScoring` drops an Oura ring's respiration rows: those are the ring's OWN per-window
                 // RATE (0x6A, milli-bpm, ~1 row per 5 min), stored as instrumentation, while the stager
                 // reads this stream as a ~1 Hz raw ADC waveform. Refusing by provenance keeps the

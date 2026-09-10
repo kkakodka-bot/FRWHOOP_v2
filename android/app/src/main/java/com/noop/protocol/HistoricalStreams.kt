@@ -394,11 +394,19 @@ private fun decodeWhoop5Historical(frame: ByteArray): Map<String, Any?>? {
     val rrn = frame.histU8(23) ?: 0
     out["rr_count"] = rrn
     val rrVals = ArrayList<Int>()
+    val rawTicks = ArrayList<Int>()
+    val payloadEnd = minOf(frame.size, (frame.histU16(2) ?: 0) + 4)
     for (i in 0 until minOf(rrn, 4)) {
+        if (24 + i * 2 + 2 > payloadEnd) break
         val v = frame.histU16(24 + i * 2)
-        if (v != null && v != 0) rrVals.add(v)
+        if (v != null && v != 0) {
+            rawTicks.add(v)
+            rrVals.add(Whoop5RR.milliseconds(v))
+        }
     }
     out["rr_intervals"] = rrVals
+    out["rr_raw_ticks"] = rawTicks
+    out["rr_source_channel"] = RrSourceChannel.WHOOP5_HISTORICAL.code
     // Bytes adjacent to the HR/R-R fields: @36 is a FLAG byte and @37 a duplicate heart rate — not the
     // two halves of one fixed-point HR; the others are carried raw (meaning not pinned).
     frame.histU8(33)?.let { out["cardiac_flags"] = it }
@@ -851,7 +859,9 @@ fun extractHistoricalStreams(
                 p.intOrNull("heart_rate")?.let { bpm -> if (bpm != 0) hr.add(HrRow(ts, bpm)) }
 
                 @Suppress("UNCHECKED_CAST")
-                (p["rr_intervals"] as? List<Int>)?.forEach { rrMs -> rr.add(RrRow(ts, rrMs)) }
+                (p["rr_intervals"] as? List<Int>)?.forEach { rrMs ->
+                    rr.add(RrRow(ts, rrMs, RrSourceChannel.fromCode(p.intOrNull("rr_source_channel"))))
+                }
 
                 p.intOrNull("spo2_red")?.let { red ->
                     spo2.add(Spo2Row(ts, red = red, ir = p.intOrNull("spo2_ir") ?: 0))

@@ -950,6 +950,11 @@ extension WhoopStore {
                 t.primaryKey(["deviceId", "stream"])
             }
         }
+        // Source promotions change scoring without adding rows. Cover their cache witnesses so
+        // legacy/non-WHOOP installs do not scan the entire R-R table on every analysis tick.
+        migrator.registerMigration("v46-rr-source-index") { db in
+            try db.create(index: "rrInterval_source_suspect", on: "rrInterval", columns: ["srcChannel", "tsSuspect"])
+        }
         return migrator
     }
 }

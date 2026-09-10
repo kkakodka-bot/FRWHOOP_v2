@@ -224,21 +224,22 @@ data class RrRow(val ts: Long, val rrMs: Int, val srcChannel: RrSourceChannel? =
  * and ON CONFLICT DO NOTHING keeps whichever row landed first. The historical path delivers a second
  * atomically, so the authoritative copy is correctly ordered.
  *
- * And carries `srcChannel` (Room v26, #1071): the sensor channel that measured the beat, as reported by
- * the decoder that produced it. NULL for every WHOOP row (one beat source — there is no channel to name,
- * and that is honest rather than a placeholder). Like `ord` it is OUTSIDE the key: two channels measuring
- * the same beat can yield the same (ts, rrMs), and keying on the label would store both — which is
- * precisely the double-count this fixes. Twin of the Swift StreamStore insert.
+ * `srcChannel` labels the sensor or transport. WHOOP 5 tags name the transport; WHOOP 4 and legacy
+ * rows stay null. Like `ord`, it stays outside the key: two observations may name the same beat.
+ * WHOOP 5 transport counters are independent; historical collisions promote source and order.
+ * Twin of the Swift StreamStore insert.
  */
 internal fun assignRrSeq(deviceId: String, rows: List<RrRow>): List<RrInterval> {
-    val seqByBeat = HashMap<Pair<Long, Int>, Int>()
-    val ordByTs = HashMap<Long, Int>()
+    val seqByBeat = HashMap<Triple<Long, Int, Int>, Int>()
+    val ordByTs = HashMap<Pair<Long, Int>, Int>()
     return rows.map { row ->
-        val key = row.ts to row.rrMs
+        val transport = row.srcChannel?.takeIf { it.isWhoop5Transport }?.code ?: 0
+        val key = Triple(row.ts, row.rrMs, transport)
         val s = seqByBeat.getOrDefault(key, 0)
         seqByBeat[key] = s + 1
-        val o = ordByTs.getOrDefault(row.ts, 0)
-        ordByTs[row.ts] = o + 1
+        val second = row.ts to transport
+        val o = ordByTs.getOrDefault(second, 0)
+        ordByTs[second] = o + 1
         RrInterval(
             deviceId = deviceId, ts = row.ts, rrMs = row.rrMs, seq = s, ord = o,
             srcChannel = row.srcChannel?.code,
@@ -562,8 +563,15 @@ class WhoopRepository(
     ): InsertResult {
         val hrIds = if (streams.hr.isEmpty()) emptyList() else
             dao.insertHr(streams.hr.map { HrSample(deviceId, it.ts, it.bpm) })
-        val rrIds = if (streams.rr.isEmpty()) emptyList() else
-            dao.insertRr(assignRrSeq(deviceId, streams.rr))
+        val rrRows = assignRrSeq(deviceId, streams.rr)
+        val rrIds = if (rrRows.isEmpty()) emptyList() else dao.insertRr(rrRows)
+        for ((index, row) in rrRows.withIndex()) {
+            if (rrIds[index] == -1L && (row.srcChannel == RrSourceChannel.WHOOP5_HISTORICAL.code ||
+                    row.srcChannel == RrSourceChannel.WHOOP5_STANDARD.code)) {
+                // Counts stay separate; the canonical observation owns this key's order and provenance.
+                dao.promoteWhoop5RrSource(row.deviceId, row.ts, row.rrMs, row.seq, row.ord!!, row.srcChannel)
+            }
+        }
         val evIds = if (streams.events.isEmpty()) emptyList() else
             dao.insertEvents(streams.events.map { EventRow(deviceId, it.ts, it.kind, it.payloadJSON) })
         val batIds = if (streams.battery.isEmpty()) emptyList() else
@@ -723,7 +731,7 @@ class WhoopRepository(
      *  the reuse cache re-served an HRV-less scan for the rest of the process. See
      *  DAY_STREAM_FINGERPRINT_SQL; mirrors Swift WhoopStore.dayStreamFingerprint. */
     suspend fun dayStreamFingerprint(deviceId: String, from: Long, to: Long): String =
-        dao.dayStreamFingerprint(deviceId, from, to)
+        dao.dayStreamFingerprint(deviceId, from, to) + "|rr5=${isWhoop5RrSource(deviceId)}"
 
     // MARK: - Server-derived caches (latest value wins on conflict)
 
@@ -1276,8 +1284,33 @@ class WhoopRepository(
         }
     }
 
-    suspend fun rrIntervalsForDevice(deviceId: String, from: Long, to: Long, limit: Int = DEFAULT_LIMIT) =
+    suspend fun isWhoop5RrSource(deviceId: String, unlabelledAliasOfWhoop5: Boolean = false): Boolean {
+        val owner = dao.pairedDevice(deviceId)
+        val known = com.noop.protocol.DeviceFamily.confirmedRegistryFamily(owner?.model, owner?.brand)
+        val nonWhoop = !owner?.brand.isNullOrEmpty() && !owner?.brand.equals("WHOOP", ignoreCase = true)
+        var tagged = known == null && !nonWhoop && dao.hasWhoop5RrSource(deviceId)
+        // Re-pairing leaves some callers and historical rows under the canonical alias. Resolve
+        // its active strap here so sleep edits, manual naps and nightly reads share one policy.
+        // Confirmed WHOOP 4 and physical owners retain their own identity.
+        if (known == null && !nonWhoop && !tagged && !unlabelledAliasOfWhoop5 && deviceId == WHOOP_SOURCE) {
+            val active = dao.activeDeviceId()
+            if (active != null && active != deviceId) tagged = isWhoop5RrSource(active)
+        }
+        return com.noop.protocol.Whoop5RR.usesCanonicalSource(owner?.model, owner?.brand, tagged || unlabelledAliasOfWhoop5)
+    }
+
+    /** Diagnostic export keeps all WHOOP transports and legacy values without scoring selection.
+     * Existing quarantine and Oura SpO2-IBI exclusions still apply. */
+    suspend fun rawRrIntervalsForDevice(deviceId: String, from: Long, to: Long,
+                                        limit: Int = DEFAULT_LIMIT): List<RrInterval> =
         dao.rrIntervals(deviceId, from, to, limit)
+
+    suspend fun rrIntervalsForDevice(deviceId: String, from: Long, to: Long,
+                                     limit: Int = DEFAULT_LIMIT,
+                                     unlabelledAliasOfWhoop5: Boolean = false): List<RrInterval> = transactor.run {
+        if (isWhoop5RrSource(deviceId, unlabelledAliasOfWhoop5)) dao.whoop5RrIntervals(deviceId, from, to, limit)
+        else dao.rrIntervals(deviceId, from, to, limit)
+    }
 
     /** R-R beats over active strap + canonical history. Exact duplicate beats are removed with the
      * active source winning; distinct beats sharing a timestamp remain intact. */
@@ -1286,9 +1319,14 @@ class WhoopRepository(
         from: Long,
         to: Long,
         limit: Int = DEFAULT_LIMIT,
-    ): List<RrInterval> = mergeRrByIdentity(
-        rawWhoopSourceIds(activeDeviceId).map { dao.rrIntervals(it, from, to, limit) },
-    )
+    ): List<RrInterval> = transactor.run {
+        val activeWhoop5 = isWhoop5RrSource(activeDeviceId)
+        // Preserve archived physical straps; guard only the ambiguous canonical alias's units.
+        mergeRrByIdentity(rawWhoopSourceIds(activeDeviceId).map {
+            rrIntervalsForDevice(it, from, to, limit,
+                unlabelledAliasOfWhoop5 = activeWhoop5 && it == "my-whoop")
+        })
+    }
 
     suspend fun events(deviceId: String, from: Long, to: Long, limit: Int = DEFAULT_LIMIT) =
         dao.events(deviceId, from, to, limit)
@@ -2638,6 +2676,10 @@ class WhoopRepository(
             val byBeat = LinkedHashMap<BeatKey, RrInterval>()
             for (list in lists) for (beat in list) {
                 byBeat.putIfAbsent(BeatKey(beat.ts, beat.rrMs, beat.seq), beat)
+            }
+            if (byBeat.values.any { it.srcChannel in 5..7 }) {
+                // Kotlin's stable sort preserves owner precedence and captured within-second order.
+                return byBeat.values.sortedBy { it.ts }
             }
             return byBeat.values.sortedWith(
                 compareBy<RrInterval> { it.ts }

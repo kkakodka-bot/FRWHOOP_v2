@@ -140,7 +140,8 @@ data class HrWindowStats(
  * as `v30-rr-ord`, and `srcChannel` as `v32-rr-src-channel`. (An earlier revision of this note said the
  * Swift widening was still pending; it had already shipped.)
  */
-@Entity(tableName = "rrInterval", primaryKeys = ["deviceId", "ts", "rrMs", "seq"])
+@Entity(tableName = "rrInterval", primaryKeys = ["deviceId", "ts", "rrMs", "seq"],
+    indices = [Index(value = ["srcChannel", "tsSuspect"], name = "rrInterval_source_suspect")])
 data class RrInterval(
     val deviceId: String,
     val ts: Long,
