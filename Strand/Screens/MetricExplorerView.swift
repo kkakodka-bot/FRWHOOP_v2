@@ -541,6 +541,9 @@ private struct MetricRow: View {
 struct MetricDetailView: View {
     let metric: MetricDescriptor
     @EnvironmentObject var repo: Repository
+    /// Trailing-window HRV from the last sync — merged into today's chart point so the detail screen
+    /// matches the Today tile's "Current HRV" readout.
+    @EnvironmentObject var app: AppModel
     /// #430 parity: the detail carries the SAME backdrop as the screen that pushed it — the day-cycle sky
     /// when the setting is on, the plain canvas when off — so a Key-Metrics tile tap doesn't jar from the
     /// liquid Today's sky to a flat page. Same keys TodayView/LiquidTodayView gate on; "Sky behind cards"
@@ -620,13 +623,24 @@ struct MetricDetailView: View {
 
     // MARK: Derived
 
+    /// The plotted history, with today's trailing-window HRV overlaid when the Today tile is showing
+    /// a current readout. Nightly `avgHrv` stays in `series` for provenance/correlations; only the
+    /// chart + headline swap today's point to the fresher trailing-window RMSSD.
+    private var chartSeries: [(day: String, value: Double)] {
+        guard metric.key == "hrv", let current = app.currentHrv else { return series }
+        let todayKey = Repository.localDayKey(Date())
+        var out = series.filter { $0.day != todayKey }
+        out.append((day: todayKey, value: current.rmssdMs))
+        return out.sorted { $0.day < $1.day }
+    }
+
     /// The trailing-N-days slice for a given range, taken RELATIVE TO THE LATEST data
     /// point (not "now") — `.all` returns everything.
     private func slice(for r: ExploreRange) -> [(day: String, value: Double)] {
-        guard let days = r.days else { return series }
-        guard let lastDay = series.last?.day, let last = parseDay(lastDay) else { return [] }
+        guard let days = r.days else { return chartSeries }
+        guard let lastDay = chartSeries.last?.day, let last = parseDay(lastDay) else { return [] }
         let cutoff = last.addingTimeInterval(-Double(days - 1) * 86_400)
-        return series.filter { row in
+        return chartSeries.filter { row in
             guard let d = parseDay(row.day) else { return false }
             return d >= cutoff
         }
@@ -654,7 +668,7 @@ struct MetricDetailView: View {
     }
 
     private var effectiveRange: ExploreRange {
-        guard !series.isEmpty else { return coercedSelection }
+        guard !chartSeries.isEmpty else { return coercedSelection }
         for r in coercedSelection.widening where !slice(for: r).isEmpty { return r }
         return .all
     }
@@ -662,7 +676,7 @@ struct MetricDetailView: View {
     /// Whole days between the first and last reading (0 for a single point). The
     /// UTC-fixed day parser makes the Int truncation exact.
     private var historySpanDays: Int {
-        guard let firstDay = series.first?.day, let lastDay = series.last?.day,
+        guard let firstDay = chartSeries.first?.day, let lastDay = chartSeries.last?.day,
               let first = parseDay(firstDay), let last = parseDay(lastDay) else { return 0 }
         return Int(last.timeIntervalSince(first) / 86_400)
     }
@@ -676,7 +690,7 @@ struct MetricDetailView: View {
     /// user always has a selectable range; until the series loads (or with no history at all)
     /// nothing is gated, since the empty state deliberately keeps the full range bar for context.
     private func isUnlocked(_ r: ExploreRange) -> Bool {
-        guard loaded, !series.isEmpty else { return true }
+        guard loaded, !chartSeries.isEmpty else { return true }
         switch r {
         case .week, .all: return true
         case .twoWeeks:   return historySpanDays > ExploreRange.week.rawValue
@@ -700,10 +714,10 @@ struct MetricDetailView: View {
         guard size > 0 else { return [] }
         // Index of the active window's first row, then step back `size` rows.
         guard let firstDay = windowed.first?.day,
-              let lo = series.firstIndex(where: { $0.day == firstDay }) else { return [] }
+              let lo = chartSeries.firstIndex(where: { $0.day == firstDay }) else { return [] }
         let prevLo = max(0, lo - size)
         guard prevLo < lo else { return [] }
-        return Array(series[prevLo..<lo])
+        return Array(chartSeries[prevLo..<lo])
     }
 
     private func trendPoints(_ windowed: [(day: String, value: Double)]) -> [TrendPoint] {
@@ -725,7 +739,18 @@ struct MetricDetailView: View {
         return (lo - span * 0.12)...(hi + span * 0.12)
     }
 
-    private var latest: (day: String, value: Double)? { series.last }
+    private var latest: (day: String, value: Double)? { chartSeries.last }
+
+    private func valueAsOfCaption(for day: String?) -> String {
+        if metric.key == "hrv", let current = app.currentHrv,
+           day == Repository.localDayKey(Date()) {
+            let updated = AppClock.hourMinuteFormatter().string(
+                from: Date(timeIntervalSince1970: TimeInterval(current.computedAtUnix)))
+            return String(localized: "Current HRV · updated \(updated)")
+        }
+        guard let day, let d = parseDay(day) else { return "—" }
+        return String(localized: "as of \(longDate(d))")
+    }
 
     // MARK: Body
 
@@ -738,7 +763,7 @@ struct MetricDetailView: View {
         let fellBack = effRange != range
         return ScrollView {
             VStack(alignment: .leading, spacing: NoopMetrics.sectionGap) {
-                if loaded && series.isEmpty {
+                if loaded && chartSeries.isEmpty {
                     // No data in the entire history — keep the range bar for context, then the
                     // honest empty state (no scenic hero floating over nothing). Deliberately
                     // NOT gated by the #943 chip locking: with zero data there is no chart for
@@ -1027,10 +1052,7 @@ struct MetricDetailView: View {
         let domain = metricDomain(metric)
         let value = latest?.value
         let heroValue = latest.map { fmt($0.value) } ?? "—"
-        let asOf: String = {
-            guard let day = latest?.day, let d = parseDay(day) else { return "—" }
-            return String(localized: "as of \(longDate(d))")
-        }()
+        let asOf = valueAsOfCaption(for: latest?.day)
         let fraction = value.flatMap { metricGaugeFraction(metric, value: $0) }
 
         // Gap fix (2026-07-02): draw the starfield as the content's BACKGROUND, not as a
@@ -1178,7 +1200,7 @@ struct MetricDetailView: View {
     private func rangeCaption(effectiveRange: ExploreRange,
                               windowed: [(day: String, value: Double)],
                               windowFellBack: Bool) -> String {
-        guard loaded, !series.isEmpty else { return "—" }
+        guard loaded, !chartSeries.isEmpty else { return "—" }
         let n = windowed.count
         if windowFellBack {
             return n == 1
@@ -1195,10 +1217,7 @@ struct MetricDetailView: View {
     private func heroChart(effectiveRange: ExploreRange,
                            windowed: [(day: String, value: Double)],
                            windowFellBack: Bool) -> some View {
-        let asOf: String = {
-            guard let day = latest?.day, let d = parseDay(day) else { return "—" }
-            return String(localized: "as of \(longDate(d))")
-        }()
+        let asOf = valueAsOfCaption(for: latest?.day)
         let heroValue = latest.map { fmt($0.value) } ?? "—"
         let subtitle = windowFellBack
             ? String(localized: "Sparse, widened to \(effectiveRange.name) · \(windowed.count) readings")
@@ -1327,7 +1346,14 @@ struct MetricDetailView: View {
     }
 
     private var latestCaption: String? {
-        guard let day = latest?.day, let d = parseDay(day) else { return nil }
+        guard let day = latest?.day else { return nil }
+        if metric.key == "hrv", let current = app.currentHrv,
+           day == Repository.localDayKey(Date()) {
+            let updated = AppClock.hourMinuteFormatter().string(
+                from: Date(timeIntervalSince1970: TimeInterval(current.computedAtUnix)))
+            return String(localized: "updated \(updated)")
+        }
+        guard let d = parseDay(day) else { return nil }
         return longDate(d)
     }
 
@@ -1557,6 +1583,7 @@ private func explorerPreviewRepo() -> Repository {
         MetricDetailView(metric: MetricCatalog.all.first { $0.key == "recovery" }!)
     }
     .environmentObject(repo)
+    .environmentObject(AppModel())
     .environmentObject(ProfileStore())
     .environmentObject(IntelligenceEngine(repo: repo, profile: ProfileStore(), deviceId: "preview"))
     .frame(width: 900, height: 820)

@@ -193,6 +193,9 @@ struct TodayView: View {
     /// classification and tint selection stable when the app language changes.
     private static let whoopBrandName = "WHOOP"
     @EnvironmentObject var repo: Repository
+    /// Trailing-window HRV readout only (`currentHrv`, refreshed after each sync ~15 min). Not used for
+    /// live HR — that stays in leaf subviews so 1 Hz ticks do not re-render the whole dashboard.
+    @EnvironmentObject var app: AppModel
     // PERF (scroll stutter): TodayView deliberately does NOT observe `LiveState` directly. A connected
     // strap publishes `LiveState` ~1 Hz (heart rate + each R-R packet), and an `@EnvironmentObject live`
     // here would invalidate the ENTIRE Today `body` on every tick, re-evaluating the scene backdrop, the
@@ -3893,16 +3896,29 @@ struct TodayView: View {
         case .hrv:
             // Carry the last scored night's HRV at the rollover (#543), today's wins, the carried value
             // is stamped "Last night · <date>", and a never-scored metric still shows ", ".
-            let hrv = carriedVital(unit: "ms", today: d?.avgHrv,
-                                   prior: { $0.avgHrv }, format: { "\(Int($0.rounded()))" })
-            StatTile(
-                label: "HRV",
-                value: hrv.value,
-                caption: hrv.caption,
-                accent: hrv.value == "—" ? StrandPalette.textPrimary : StrandPalette.metricPurple,
-                sparkline: sparks["hrv"],
-                sparkColor: StrandPalette.metricPurple
-            )
+            let nightly = carriedVital(unit: "ms", today: d?.avgHrv,
+                                       prior: { $0.avgHrv }, format: { "\(Int($0.rounded()))" })
+            if selectedDayOffset == 0, let current = app.currentHrv {
+                let updated = Self.hrTimeFmt.string(
+                    from: Date(timeIntervalSince1970: TimeInterval(current.computedAtUnix)))
+                StatTile(
+                    label: "HRV",
+                    value: "\(Int(current.rmssdMs.rounded()))",
+                    caption: String(localized: "Current HRV · updated \(updated)"),
+                    accent: StrandPalette.metricPurple,
+                    sparkline: sparks["hrv"],
+                    sparkColor: StrandPalette.metricPurple
+                )
+            } else {
+                StatTile(
+                    label: "HRV",
+                    value: nightly.value,
+                    caption: nightly.caption,
+                    accent: nightly.value == "—" ? StrandPalette.textPrimary : StrandPalette.metricPurple,
+                    sparkline: sparks["hrv"],
+                    sparkColor: StrandPalette.metricPurple
+                )
+            }
         case .restingHr:
             let rhr = carriedVital(unit: "bpm", today: d?.restingHr.map(Double.init),
                                    prior: { $0.restingHr.map(Double.init) }, format: { "\(Int($0.rounded()))" })

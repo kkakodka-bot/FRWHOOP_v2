@@ -20,6 +20,7 @@ struct LiquidTodayView: View {
     @AppStorage(DayCycleMode.storageKey) private var dayCycleModeRaw = DayCycleMode.sleepOnset.rawValue
     private var dayCycleMode: DayCycleMode { DayCycleMode.persisted(dayCycleModeRaw) }
     @EnvironmentObject var repo: Repository
+    @EnvironmentObject var app: AppModel
     @EnvironmentObject var router: NavRouter
     @EnvironmentObject var profile: ProfileStore
     // For the pull-to-sync gesture (#334): a pull kicks a manual strap history offload via ble.syncNow().
@@ -197,6 +198,19 @@ struct LiquidTodayView: View {
     /// them — a respiratory-only row blanks HRV and Resting HR on both the vitals card and the Key Metrics
     /// tiles. Twins of `DailyMetric.lastHrvDay` / `lastRestingHrDay`; mirror the Android per-field rows.
     private var hrvDay: DailyMetric? { cachedHrvDay }
+
+    /// Trailing-window RMSSD when today's tile has a fresh post-sync readout; nil falls back to nightly HRV.
+    private var liquidCurrentHrvValue: Double? {
+        guard selectedDayOffset == 0, let current = app.currentHrv else { return nil }
+        return current.rmssdMs
+    }
+
+    private var liquidCurrentHrvCaption: String? {
+        guard selectedDayOffset == 0, let current = app.currentHrv else { return nil }
+        let updated = AppClock.hourMinuteFormatter().string(
+            from: Date(timeIntervalSince1970: TimeInterval(current.computedAtUnix)))
+        return String(localized: "Current HRV · updated \(updated)")
+    }
 
     /// PER-FIELD SpO₂ carry — twin of `DailyMetric.lastSpo2Day`; `vitalsDay`'s OR predicate can land on a
     /// row with HRV/RHR but no calibrated SpO₂, so the tile needs the freshest row that actually has one.
@@ -913,9 +927,10 @@ struct LiquidTodayView: View {
             cardLink(.metric("vitality"), title: card.title, sub: card.subtitle,
                      value: intText(vitality), tint: liquidPurple, frac: frac(vitality))
         case .hrv:
-            let hrvCard = displayDay?.avgHrv ?? hrvDay?.avgHrv
-            let hrvSub = liquidVitalCardSubtitle(today: displayDay?.avgHrv, carryDay: hrvDay,
-                                                 prior: { $0.avgHrv }, fallback: card.subtitle)
+            let hrvCard = liquidCurrentHrvValue ?? displayDay?.avgHrv ?? hrvDay?.avgHrv
+            let hrvSub = liquidCurrentHrvCaption
+                ?? liquidVitalCardSubtitle(today: displayDay?.avgHrv, carryDay: hrvDay,
+                                           prior: { $0.avgHrv }, fallback: card.subtitle)
             cardLink(.metric("hrv"), title: card.title, sub: hrvSub,
                      value: unitText(hrvCard, card.unit), tint: StrandPalette.metricCyan,
                      frac: fracOver(hrvCard, 120))
@@ -1319,8 +1334,11 @@ struct LiquidTodayView: View {
         case .rest:
             ktile(String(localized: "Rest"), icon: keyMetricIcon(metric), intText(restScore), "%", StrandPalette.restColor, frac(restScore), key: "sleep_performance")
         case .hrv:
-            ktile("HRV", icon: keyMetricIcon(metric), intText(hrv), "ms", StrandPalette.metricCyan, fracOver(hrv, 120), key: "hrv",
-                  caption: liquidVitalTileCaption(today: displayDay?.avgHrv, carryDay: hrvDay, prior: { $0.avgHrv }))
+            let hrvValue = liquidCurrentHrvValue ?? hrv
+            let hrvCaption = liquidCurrentHrvCaption
+                ?? liquidVitalTileCaption(today: displayDay?.avgHrv, carryDay: hrvDay, prior: { $0.avgHrv })
+            ktile("HRV", icon: keyMetricIcon(metric), intText(hrvValue), "ms", StrandPalette.metricCyan,
+                  fracOver(hrvValue, 120), key: "hrv", caption: hrvCaption)
         case .restingHr:
             ktile(String(localized: "Rest HR"), icon: keyMetricIcon(metric), intText(rhr), "bpm", StrandPalette.metricRose, fracOver(rhr, 100), key: "rhr")
         case .bloodOxygen:

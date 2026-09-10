@@ -72,7 +72,7 @@ struct MedicationsView: View {
         .sheet(isPresented: $showAddSheet) {
             addMedicationSheet
                 #if os(iOS)
-                .noopSheetPresentation(largeFirst: false)
+                .noopSheetPresentation(largeFirst: true)
                 #endif
                 #if os(macOS)
                 .frame(minWidth: NoopMetrics.editorSheetMinWidth, minHeight: NoopMetrics.editorSheetMinHeight)
@@ -143,12 +143,14 @@ struct MedicationsView: View {
                 .font(StrandFont.headline)
                 .foregroundStyle(StrandPalette.textPrimary)
             Text("Add a medication to build today's schedule and optionally track how your vitals respond.")
-                .font(StrandFont.subhead)
+                .font(StrandFont.footnote)
                 .foregroundStyle(StrandPalette.textSecondary)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, NoopMetrics.space3)
         }
         .frame(maxWidth: .infinity)
+        .padding(.horizontal, NoopMetrics.space2)
         .padding(.vertical, NoopMetrics.space4)
         .background(StrandPalette.surfaceInset, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
@@ -482,6 +484,7 @@ struct MedicationsView: View {
     @State private var draftTrackVitals = true
 
     private var addMedicationSheet: some View {
+        ScrollView {
         VStack(alignment: .leading, spacing: NoopMetrics.space4) {
             HStack {
                 Text("Add medication")
@@ -576,6 +579,7 @@ struct MedicationsView: View {
             }
         }
         .padding(NoopMetrics.space5)
+        }
         .background(StrandPalette.surfaceBase.ignoresSafeArea())
     }
 
