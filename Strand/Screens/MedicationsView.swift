@@ -1,22 +1,23 @@
 import SwiftUI
 import Charts
 import StrandDesign
+import WhoopStore
 
-/// Placeholder Medications screen — dose logging + a "vital response" preview, occupying the
-/// fourth tab slot on iPhone (the spot Coach held before it moved back to the More list).
-///
-/// Everything on this screen is MOCK: the medications, dose states and the before/after vitals
-/// are in-memory sample data that resets on relaunch. Nothing is persisted, synced or scored,
-/// and the vital-response card is labelled as such. The screen exists to pin down the layout
-/// and interaction model before a real store lands behind it.
+/// Medications tab — dose logging for the session plus a vital-response preview from real nightly metrics.
+/// Nothing is persisted yet; added medications reset on relaunch. The response chart reads Repository
+/// daily rows around each medication's start date.
 struct MedicationsView: View {
+    @EnvironmentObject var repo: Repository
+
     /// One scheduled dose row in today's plan. `due` marks the dose currently actionable
     /// (shows the "Log dose" affordance); `taken` marks it logged.
-    private struct MockDose: Identifiable {
+    private struct ScheduledDose: Identifiable {
         let id = UUID()
         var time: String
         var name: String
         var detail: String
+        var startDate: Date
+        var trackVitals: Bool
         var taken: Bool
         var due: Bool
     }
@@ -30,20 +31,30 @@ struct MedicationsView: View {
 
     private struct VitalPoint: Identifiable {
         let id = UUID()
+        let dayKey: String
         let date: Date
         let value: Double
     }
 
-    @State private var doses: [MockDose] = [
-        MockDose(time: "8:00 AM",  name: "Metoprolol", detail: "25 mg · with breakfast", taken: true,  due: false),
-        MockDose(time: "9:30 AM",  name: "Vitamin D3", detail: "2,000 IU",               taken: true,  due: false),
-        MockDose(time: "2:00 PM",  name: "Magnesium",  detail: "400 mg · glycinate",     taken: false, due: true),
-        MockDose(time: "9:30 PM",  name: "Melatonin",  detail: "3 mg · before bed",      taken: false, due: false),
-    ]
-    @State private var medications = ["Metoprolol", "Melatonin", "Magnesium"]
-    @State private var selectedMedication = "Metoprolol"
+    @State private var doses: [ScheduledDose] = []
+    @State private var selectedMedication = ""
     @State private var selectedMetric: VitalMetric = .restingHR
     @State private var showAddSheet = false
+
+    private var medicationNames: [String] {
+        Array(Set(doses.map(\.name))).sorted()
+    }
+
+    private var trackedMedications: [String] {
+        Array(Set(doses.filter(\.trackVitals).map(\.name))).sorted()
+    }
+
+    private static let dayKeyParser: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
 
     var body: some View {
         ScreenScaffold(
@@ -53,7 +64,9 @@ struct MedicationsView: View {
         ) {
             VStack(alignment: .leading, spacing: NoopMetrics.sectionSpacing) {
                 scheduleCard
-                vitalResponseCard
+                if !trackedMedications.isEmpty {
+                    vitalResponseCard
+                }
             }
         }
         .sheet(isPresented: $showAddSheet) {
@@ -64,6 +77,11 @@ struct MedicationsView: View {
                 #if os(macOS)
                 .frame(minWidth: NoopMetrics.editorSheetMinWidth, minHeight: NoopMetrics.editorSheetMinHeight)
                 #endif
+        }
+        .onChangeCompat(of: medicationNames) { names in
+            if selectedMedication.isEmpty || !names.contains(selectedMedication) {
+                selectedMedication = names.first ?? ""
+            }
         }
     }
 
@@ -88,18 +106,22 @@ struct MedicationsView: View {
                     .foregroundStyle(StrandPalette.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
 
-                doseProgress
+                if doses.isEmpty {
+                    emptyScheduleState
+                } else {
+                    doseProgress
 
-                VStack(spacing: 0) {
-                    ForEach($doses) { $dose in
-                        doseRow(dose: dose) {
-                            withAnimation(.timingCurve(0.22, 1, 0.36, 1, duration: 0.24)) {
-                                dose.taken = true
-                                dose.due = false
+                    VStack(spacing: 0) {
+                        ForEach($doses) { $dose in
+                            doseRow(dose: dose) {
+                                withAnimation(.timingCurve(0.22, 1, 0.36, 1, duration: 0.24)) {
+                                    dose.taken = true
+                                    dose.due = false
+                                }
                             }
-                        }
-                        if dose.id != doses.last?.id {
-                            Rectangle().fill(StrandPalette.hairline).frame(height: 1)
+                            if dose.id != doses.last?.id {
+                                Rectangle().fill(StrandPalette.hairline).frame(height: 1)
+                            }
                         }
                     }
                 }
@@ -109,6 +131,26 @@ struct MedicationsView: View {
                 }
             }
         }
+    }
+
+    private var emptyScheduleState: some View {
+        VStack(spacing: NoopMetrics.space3) {
+            Image(systemName: "pills")
+                .font(.system(size: 28, weight: .semibold))
+                .foregroundStyle(StrandPalette.textTertiary)
+                .accessibilityHidden(true)
+            Text("No medications yet")
+                .font(StrandFont.headline)
+                .foregroundStyle(StrandPalette.textPrimary)
+            Text("Add a medication to build today's schedule and optionally track how your vitals respond.")
+                .font(StrandFont.subhead)
+                .foregroundStyle(StrandPalette.textSecondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, NoopMetrics.space4)
+        .background(StrandPalette.surfaceInset, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
     private var takenCount: Int { doses.filter(\.taken).count }
@@ -130,7 +172,7 @@ struct MedicationsView: View {
         }
     }
 
-    private func doseRow(dose: MockDose, onLog: @escaping () -> Void) -> some View {
+    private func doseRow(dose: ScheduledDose, onLog: @escaping () -> Void) -> some View {
         HStack(spacing: NoopMetrics.space3) {
             Text(dose.time)
                 .font(StrandFont.captionNumber)
@@ -182,7 +224,7 @@ struct MedicationsView: View {
         StrandCard(padding: NoopMetrics.space5) {
             VStack(alignment: .leading, spacing: NoopMetrics.space4) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Placeholder").strandOverline()
+                    Text("Vitals").strandOverline()
                     HStack(spacing: NoopMetrics.space2 + 2) {
                         Image(systemName: "waveform.path.ecg")
                             .foregroundStyle(StrandPalette.liquidHeart)
@@ -190,7 +232,6 @@ struct MedicationsView: View {
                         Text("Vital response")
                             .font(StrandFont.title2)
                             .foregroundStyle(StrandPalette.textPrimary)
-                        mockBadge
                     }
                 }
                 Text("Resting heart rate, HRV and sleep in the 7 days before vs after a start date.")
@@ -200,14 +241,21 @@ struct MedicationsView: View {
 
                 medicationChips
 
-                SegmentedPillControl(VitalMetric.allCases, selection: $selectedMetric,
-                                     fillsAvailableWidth: true) { $0.rawValue }
+                if vitalPoints.isEmpty {
+                    Text("Not enough nights yet to compare before and after the start date.")
+                        .font(StrandFont.subhead)
+                        .foregroundStyle(StrandPalette.textTertiary)
+                        .frame(maxWidth: .infinity, minHeight: 120, alignment: .center)
+                } else {
+                    SegmentedPillControl(VitalMetric.allCases, selection: $selectedMetric,
+                                         fillsAvailableWidth: true) { $0.rawValue }
 
-                vitalChart
+                    vitalChart
 
-                deltaTiles
+                    deltaTiles
+                }
 
-                Text("7-day averages before vs after the start date. Correlation, not causation — placeholder data, not medical advice.")
+                Text("7-day averages before vs after the start date. Correlation, not causation — not medical advice.")
                     .font(StrandFont.footnote)
                     .foregroundStyle(StrandPalette.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -215,22 +263,9 @@ struct MedicationsView: View {
         }
     }
 
-    private var mockBadge: some View {
-        Text("Mock data")
-            .font(StrandFont.overlineScaled(10))
-            .tracking(0.5)
-            .textCase(.uppercase)
-            .foregroundStyle(StrandPalette.statusWarning)
-            .padding(.horizontal, 7)
-            .frame(height: NoopMetrics.sourceBadgeHeight)
-            .background(StrandPalette.statusWarning.opacity(0.16), in: Capsule())
-            .overlay(Capsule().strokeBorder(StrandPalette.statusWarning.opacity(0.34), lineWidth: 1))
-            .accessibilityHidden(true)
-    }
-
     private var medicationChips: some View {
         HStack(spacing: NoopMetrics.space2) {
-            ForEach(medications, id: \.self) { med in
+            ForEach(trackedMedications, id: \.self) { med in
                 let selected = med == selectedMedication
                 Button {
                     withAnimation(.timingCurve(0.22, 1, 0.36, 1, duration: 0.24)) {
@@ -252,41 +287,58 @@ struct MedicationsView: View {
         }
     }
 
-    // MARK: Vital chart (mock before/after series)
+    // MARK: Vital chart (Repository-backed before/after series)
 
-    /// Fourteen daily readings ending today; the medication "start" sits between day 7 and 8.
-    private var vitalPoints: [VitalPoint] {
-        let values: [Double]
-        switch (selectedMetric, selectedMedication) {
-        case (.restingHR, _):            values = [63, 62, 64, 63, 62, 63, 62, 60, 59, 60, 58, 59, 58, 58]
-        case (.hrv, "Melatonin"):        values = [44, 45, 43, 46, 44, 45, 44, 49, 51, 50, 52, 53, 52, 54]
-        case (.hrv, _):                  values = [48, 47, 49, 48, 50, 49, 48, 51, 52, 51, 53, 54, 53, 54]
-        case (.sleep, "Melatonin"):      values = [70, 73, 68, 72, 71, 69, 72, 80, 83, 81, 85, 86, 84, 88]
-        case (.sleep, _):                values = [72, 75, 70, 74, 73, 71, 74, 78, 80, 79, 82, 84, 83, 86]
+    private var selectedStartDate: Date? {
+        guard !selectedMedication.isEmpty else { return nil }
+        return doses.filter { $0.name == selectedMedication && $0.trackVitals }
+            .map(\.startDate)
+            .min()
+    }
+
+    private func vitalValue(for metric: VitalMetric, day: DailyMetric) -> Double? {
+        switch metric {
+        case .restingHR:
+            return day.restingHr.map(Double.init)
+        case .hrv:
+            return day.avgHrv
+        case .sleep:
+            if let efficiency = day.efficiency { return efficiency * 100 }
+            return day.totalSleepMin
         }
+    }
+
+    private func metricPoints(for metric: VitalMetric) -> [VitalPoint] {
+        guard let start = selectedStartDate else { return [] }
         let cal = Calendar.current
-        let today = cal.startOfDay(for: Date())
-        return values.enumerated().map { index, value in
-            VitalPoint(date: cal.date(byAdding: .day, value: index - (values.count - 1), to: today)!,
-                       value: value)
-        }
+        let startDay = cal.startOfDay(for: start)
+        let windowStart = cal.date(byAdding: .day, value: -13, to: startDay) ?? startDay
+        let windowEnd = cal.date(byAdding: .day, value: 13, to: startDay) ?? startDay
+        let fromKey = Repository.localDayKey(windowStart)
+        let toKey = Repository.localDayKey(windowEnd)
+        let rows = repo.days.filter { $0.day >= fromKey && $0.day <= toKey }
+        return rows.compactMap { row -> VitalPoint? in
+            guard let value = vitalValue(for: metric, day: row) else { return nil }
+            guard let date = Self.dayKeyParser.date(from: row.day) else { return nil }
+            return VitalPoint(dayKey: row.day, date: date, value: value)
+        }.sorted { $0.dayKey < $1.dayKey }
     }
 
-    /// Midpoint between the last "before" day and the first "after" day, for the dashed start rule.
-    private var startMarkerDate: Date {
-        let points = vitalPoints
-        guard points.count > 7 else { return Date() }
-        return points[6].date.addingTimeInterval(12 * 3600)
+    private var vitalPoints: [VitalPoint] {
+        let points = metricPoints(for: selectedMetric)
+        return points.count >= 4 ? points : []
     }
 
-    private var beforeAverage: Double {
-        let before = vitalPoints.prefix(7).map(\.value)
-        return before.reduce(0, +) / Double(max(before.count, 1))
+    private var startMarkerDate: Date? {
+        selectedStartDate
     }
 
-    private var afterAverage: Double {
-        let after = vitalPoints.suffix(7).map(\.value)
-        return after.reduce(0, +) / Double(max(after.count, 1))
+    private func beforeAverage(for metric: VitalMetric) -> Double? {
+        average(for: metric, beforeStart: true)
+    }
+
+    private func afterAverage(for metric: VitalMetric) -> Double? {
+        average(for: metric, beforeStart: false)
     }
 
     private var metricColor: Color {
@@ -308,29 +360,33 @@ struct MedicationsView: View {
                     .fontWeight(.semibold)
                     .foregroundStyle(metricColor)
                 Spacer(minLength: 0)
-                Text("Last 14 days")
+                Text("Around start date")
                     .font(StrandFont.footnote)
                     .foregroundStyle(StrandPalette.textTertiary)
             }
             Chart {
-                // Dotted before/after average segments.
-                RuleMark(y: .value("Before avg", beforeAverage))
-                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [2, 4]))
-                    .foregroundStyle(StrandPalette.textTertiary.opacity(0.8))
-                RuleMark(y: .value("After avg", afterAverage))
-                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [2, 4]))
-                    .foregroundStyle(StrandPalette.textTertiary.opacity(0.8))
-                // Dashed vertical rule at the medication start date.
-                RuleMark(x: .value("Started", startMarkerDate))
-                    .lineStyle(StrokeStyle(lineWidth: 1.2, dash: [5, 4]))
-                    .foregroundStyle(StrandPalette.accent)
-                    .annotation(position: .top, alignment: .center) {
-                        Text("Started")
-                            .font(StrandFont.overlineScaled(9))
-                            .tracking(0.5)
-                            .textCase(.uppercase)
-                            .foregroundStyle(StrandPalette.accent)
-                    }
+                if let before = beforeAverage(for: selectedMetric) {
+                    RuleMark(y: .value("Before avg", before))
+                        .lineStyle(StrokeStyle(lineWidth: 1, dash: [2, 4]))
+                        .foregroundStyle(StrandPalette.textTertiary.opacity(0.8))
+                }
+                if let after = afterAverage(for: selectedMetric) {
+                    RuleMark(y: .value("After avg", after))
+                        .lineStyle(StrokeStyle(lineWidth: 1, dash: [2, 4]))
+                        .foregroundStyle(StrandPalette.textTertiary.opacity(0.8))
+                }
+                if let marker = startMarkerDate {
+                    RuleMark(x: .value("Started", marker))
+                        .lineStyle(StrokeStyle(lineWidth: 1.2, dash: [5, 4]))
+                        .foregroundStyle(StrandPalette.accent)
+                        .annotation(position: .top, alignment: .center) {
+                            Text("Started")
+                                .font(StrandFont.overlineScaled(9))
+                                .tracking(0.5)
+                                .textCase(.uppercase)
+                                .foregroundStyle(StrandPalette.accent)
+                        }
+                }
                 ForEach(points) { point in
                     AreaMark(x: .value("Day", point.date), y: .value("Value", point.value))
                         .interpolationMethod(.catmullRom)
@@ -362,36 +418,61 @@ struct MedicationsView: View {
                 }
             }
             .frame(height: 160)
-            .accessibilityLabel(Text("Fourteen-day \(selectedMetric.rawValue) trend with a marker at the medication start date"))
+            .accessibilityLabel(Text("\(selectedMetric.rawValue) trend around the medication start date"))
         }
     }
 
     private var deltaTiles: some View {
         HStack(spacing: NoopMetrics.space2) {
-            deltaTile(label: "Resting HR", value: "−4", unit: "bpm", color: StrandPalette.liquidHeart)
-            deltaTile(label: "HRV", value: "+6", unit: "ms", color: StrandPalette.metricPurple)
-            deltaTile(label: "Deep sleep", value: "+12", unit: "min", color: StrandPalette.sleepDeep)
+            deltaTile(label: "Resting HR", value: deltaText(metric: .restingHR, unit: "bpm"),
+                      color: StrandPalette.liquidHeart)
+            deltaTile(label: "HRV", value: deltaText(metric: .hrv, unit: "ms"),
+                      color: StrandPalette.metricPurple)
+            deltaTile(label: "Sleep", value: deltaText(metric: .sleep, unit: sleepDeltaUnit),
+                      color: StrandPalette.sleepDeep)
         }
     }
 
-    private func deltaTile(label: LocalizedStringKey, value: String, unit: String, color: Color) -> some View {
+    private var sleepDeltaUnit: String {
+        guard let start = selectedStartDate else { return "min" }
+        let startKey = Repository.localDayKey(start)
+        let row = repo.days.first(where: { $0.day == startKey })
+        if let efficiency = row?.efficiency { return "%" }
+        return "min"
+    }
+
+    private func deltaText(metric: VitalMetric, unit: String) -> String {
+        guard let before = average(for: metric, beforeStart: true),
+              let after = average(for: metric, beforeStart: false) else { return "—" }
+        let delta = after - before
+        let sign = delta >= 0 ? "+" : "−"
+        return "\(sign)\(Int(abs(delta).rounded())) \(unit)"
+    }
+
+    private func average(for metric: VitalMetric, beforeStart: Bool) -> Double? {
+        guard let start = selectedStartDate else { return nil }
+        let startKey = Repository.localDayKey(start)
+        let slice = metricPoints(for: metric).filter {
+            beforeStart ? $0.dayKey < startKey : $0.dayKey >= startKey
+        }
+        let values = beforeStart ? slice.suffix(7).map(\.value) : slice.prefix(7).map(\.value)
+        guard values.count >= 3 else { return nil }
+        return values.reduce(0, +) / Double(values.count)
+    }
+
+    private func deltaTile(label: LocalizedStringKey, value: String, color: Color) -> some View {
         VStack(spacing: 3) {
             Text(label).strandOverline()
-            HStack(alignment: .firstTextBaseline, spacing: 4) {
-                Text(value)
-                    .font(StrandFont.number(16))
-                    .foregroundStyle(color)
-                Text(unit)
-                    .font(StrandFont.caption)
-                    .foregroundStyle(StrandPalette.textTertiary)
-            }
+            Text(value)
+                .font(StrandFont.number(16))
+                .foregroundStyle(color)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, NoopMetrics.space2 + 1)
         .background(StrandPalette.surfaceInset, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
-    // MARK: - Add medication sheet (placeholder form)
+    // MARK: - Add medication sheet
 
     @State private var draftName = ""
     @State private var draftDose = ""
@@ -420,7 +501,7 @@ struct MedicationsView: View {
                 .accessibilityLabel(Text("Close"))
             }
 
-            formField(label: String(localized: "Name"), text: $draftName, prompt: "Metoprolol")
+            formField(label: String(localized: "Name"), text: $draftName, prompt: "Medication name")
             formField(label: String(localized: "Dose"), text: $draftDose, prompt: "25 mg")
 
             VStack(alignment: .leading, spacing: 6) {
@@ -534,19 +615,21 @@ struct MedicationsView: View {
         }
     }
 
-    /// Placeholder save: keeps the new medication in memory for the session so the schedule and
-    /// the chip row react, then resets the draft. No persistence layer exists yet.
+    /// Session-only save: keeps the new medication in memory for the session so the schedule and
+    /// the chip row react, then resets the draft.
     private func saveDraft() {
         let name = draftName.trimmingCharacters(in: .whitespaces)
         guard !name.isEmpty else { return }
         let detail = draftDose.trimmingCharacters(in: .whitespaces)
         for time in draftTimes {
-            doses.append(MockDose(time: time, name: name,
-                                  detail: detail.isEmpty ? "—" : detail,
-                                  taken: false, due: false))
+            doses.append(ScheduledDose(time: time, name: name,
+                                       detail: detail.isEmpty ? "—" : detail,
+                                       startDate: draftStartDate,
+                                       trackVitals: draftTrackVitals,
+                                       taken: false, due: false))
         }
         doses.sort { $0.time < $1.time }
-        if !medications.contains(name) { medications.append(name) }
+        if selectedMedication.isEmpty { selectedMedication = name }
         draftName = ""; draftDose = ""; draftTimes = ["8:00 AM"]
         draftStartDate = Date(); draftReminders = true; draftTrackVitals = true
         showAddSheet = false

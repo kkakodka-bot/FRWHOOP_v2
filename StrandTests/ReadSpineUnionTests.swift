@@ -15,11 +15,12 @@ final class ReadSpineUnionTests: XCTestCase {
                     totalSleepMin: Double? = nil, efficiency: Double? = nil, deepMin: Double? = nil,
                     remMin: Double? = nil, lightMin: Double? = nil, disturbances: Int? = nil,
                     restingHr: Int? = nil, avgHrv: Double? = nil, recovery: Double? = nil,
-                    strain: Double? = nil, exerciseCount: Int? = nil, steps: Int? = nil) -> DailyMetric {
+                    strain: Double? = nil, exerciseCount: Int? = nil, steps: Int? = nil,
+                    spo2Pct: Double? = nil) -> DailyMetric {
         DailyMetric(day: day, totalSleepMin: totalSleepMin, efficiency: efficiency, deepMin: deepMin,
                     remMin: remMin, lightMin: lightMin, disturbances: disturbances, restingHr: restingHr,
                     avgHrv: avgHrv, recovery: recovery, strain: strain, exerciseCount: exerciseCount,
-                    steps: steps)
+                    spo2Pct: spo2Pct, steps: steps)
     }
 
     /// A hollow winner (steps and nothing else) keeps every column the other strap's fully-scored row
@@ -48,6 +49,17 @@ final class ReadSpineUnionTests: XCTestCase {
         XCTAssertEqual(merged.steps, 0)
         XCTAssertEqual(merged.strain, 0)
         XCTAssertEqual(merged.avgHrv, 0)
+    }
+
+    /// Imported recovery/HRV/SpO₂ on the winner are never overwritten by a computed filler's nils.
+    func testImportedVitalsSurviveComputedNilFiller() {
+        let day = "2026-07-29"
+        let imported = dm(day, avgHrv: 52, recovery: 78, spo2Pct: 97)
+        let computed = dm(day, avgHrv: nil, recovery: nil, spo2Pct: nil)
+        let merged = Repository.coalesceDay(imported, computed)
+        XCTAssertEqual(merged.avgHrv, 52)
+        XCTAssertEqual(merged.recovery, 78)
+        XCTAssertEqual(merged.spo2Pct, 97)
     }
 
     /// The sleep block moves as a GROUP: a winner carrying a sleep total keeps its OWN (nil) stages rather

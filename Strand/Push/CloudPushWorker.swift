@@ -16,7 +16,12 @@ enum CloudPushWorker {
         #endif
     }
 
-    static func runOnce(db: any DatabaseWriter, trigger: String) async {
+    static func runOnce(
+        db: any DatabaseWriter,
+        trigger: String,
+        markOwed: (@Sendable () async -> Void)? = nil,
+        settleOwed: (@Sendable () async -> Bool)? = nil
+    ) async {
         guard CloudPushSettings.enabledEndpoint() != nil else { return }
         guard !isRunning else { return }
         isRunning = true
@@ -27,6 +32,7 @@ enum CloudPushWorker {
             CloudPushSettings.recordRetrying(
                 message: String(localized: "Waiting for a network allowed by the Wi‑Fi only setting.")
             )
+            await markOwed?()
             CloudPushBackgroundScheduler.scheduleIfNeeded()
             return
         }
@@ -56,6 +62,7 @@ enum CloudPushWorker {
                 )
                 if retryable {
                     CloudPushSettings.recordRetrying(message: message)
+                    await markOwed?()
                     #if os(iOS)
                     CloudPushBackgroundScheduler.scheduleIfNeeded()
                     #endif
@@ -109,6 +116,7 @@ enum CloudPushWorker {
             CloudPushSettings.recordRetrying(
                 message: CloudPushMessaging.pushFailureMessage(run.failure ?? PushFailure(code: .networkIO))
             )
+            await markOwed?()
             #if os(iOS)
             CloudPushBackgroundScheduler.scheduleIfNeeded()
             #endif
@@ -122,11 +130,13 @@ enum CloudPushWorker {
         }
         if !cycleCompleted || cycleNeedsAnotherPass {
             CloudPushSettings.recordContinuation()
+            await markOwed?()
             #if os(iOS)
             CloudPushBackgroundScheduler.scheduleIfNeeded()
             #endif
             return
         }
         CloudPushSettings.recordSuccess()
+        _ = await settleOwed?()
     }
 }

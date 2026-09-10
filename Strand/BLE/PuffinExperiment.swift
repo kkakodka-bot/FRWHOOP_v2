@@ -73,8 +73,22 @@ enum PuffinExperiment {
     /// ON. Mirrors the Android `NoopPrefs.KEY_SPO2_CANDIDATE_DISPLAY`.
     static let spo2CandidateDisplayKey = "noopSpo2CandidateDisplay"
 
+    /// Default ON for this fork so the Blood Oxygen tile can surface the unverified strap estimate when no
+    /// calibrated import exists. An explicit user choice (including OFF) is always honoured.
     static var spo2CandidateDisplayEnabled: Bool {
-        UserDefaults.standard.object(forKey: spo2CandidateDisplayKey) as? Bool ?? true
+        let defaults = UserDefaults.standard
+        if defaults.object(forKey: spo2CandidateDisplayKey) == nil { return true }
+        return defaults.bool(forKey: spo2CandidateDisplayKey)
+    }
+
+    /// Pins the ON default for installs that never chose. Idempotent; returns whether a write happened so
+    /// the caller can trigger one immediate re-score (the engine only banks `spo2_candidate` while ON).
+    /// Twin of the Android `NoopPrefs.migrateSpo2CandidateDisplayDefault`.
+    static func migrateSpo2CandidateDisplayDefault() -> Bool {
+        let defaults = UserDefaults.standard
+        guard defaults.object(forKey: spo2CandidateDisplayKey) == nil else { return false }
+        defaults.set(true, forKey: spo2CandidateDisplayKey)
+        return true
     }
 
     /// Opt-in "Personal daytime-stress baseline" (#463): score TODAY's intraday stress timeline against a

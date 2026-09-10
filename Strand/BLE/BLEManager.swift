@@ -890,6 +890,9 @@ public final class BLEManager: NSObject, ObservableObject {
     /// re-subscribe so delivery — and the settle/alarm-re-arm chain — is re-established. Cleared the moment
     /// `connectSettled` bumps, and on disconnect.
     private var restoreNeedsResubscribe = false
+    /// True when this process was relaunched via CoreBluetooth state restoration (`willRestoreState`).
+    /// Used by the iOS shell to distinguish a cold force-quit from a bluetooth-central relaunch.
+    private(set) var launchedViaStateRestoration = false
     /// Re-entrancy guard for captureRawAccel: true while a bounded on-demand window is running.
     /// A second tap is a no-op until the active capture's asyncAfter block fires and clears this.
     private var rawCaptureInFlight = false
@@ -5991,6 +5994,7 @@ extension BLEManager: @preconcurrency CBCentralManagerDelegate {
     /// notifications are re-routed without user interaction.
     public func centralManager(_ central: CBCentralManager,
                                willRestoreState dict: [String: Any]) {
+        launchedViaStateRestoration = true
         guard let peripherals = dict[CBCentralManagerRestoredStatePeripheralsKey] as? [CBPeripheral],
               let p = peripherals.first else {
             log("Restore: no peripherals in state dict")

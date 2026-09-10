@@ -656,6 +656,36 @@ data class CoachMessageRow(
 )
 
 /**
+ * Device-local post-offload sync debt (Room v38 / MIGRATION_37_38). Swift twin: WhoopStore
+ * `syncJob` (Database.swift `v44-sync-jobs` migration). Schema parity only on Android for now —
+ * the SyncEngine orchestrator is Apple-side; Android's foreground service + WorkManager already
+ * provide reliability. NEVER added to the `.noopbak` backup whitelist.
+ */
+@Entity(tableName = "syncJob")
+data class SyncJobEntity(
+    @PrimaryKey val kind: String,
+    val owedAt: Long,
+    val token: String,
+    val attempts: Int = 0,
+    val lastNote: String? = null,
+)
+
+/**
+ * One completed sync-drain journal row (Room v38). Swift twin: `syncJournalEntry`. Capped at ~200
+ * rows on the Apple side; the table exists here for schema parity only.
+ */
+@Entity(tableName = "syncJournalEntry")
+data class SyncJournalEntryEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val ts: Long,
+    val wakeReason: String,
+    val stagesRun: String,
+    val stagesOwed: String,
+    val durationMs: Long,
+    val note: String? = null,
+)
+
+/**
  * The RAW WHOOP 5.0 v26 optical PPG waveform, one record per second (v27 / MIGRATION_18_19, issue #156
  * follow-up). Swift `ppgWaveformSample` (WhoopStore Database.swift `v27-ppg-waveform` migration). The
  * strap's 24 Hz buffer was fully decoded but only ever used to derive [PpgHrSample]; the samples

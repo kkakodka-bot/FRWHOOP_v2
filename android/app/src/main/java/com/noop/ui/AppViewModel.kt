@@ -1086,6 +1086,19 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     ownerSource = RegistryDayOwnerSource(noopApp.deviceRegistry),
                 )
             }.onFailure { if (it is kotlin.coroutines.cancellation.CancellationException) throw it }
+            // One-shot on-upgrade: the SpO₂ strap-estimate toggle now defaults ON for installs that never
+            // chose. Re-score once so `spo2_candidate` is banked immediately instead of waiting for the tick.
+            if (NoopPrefs.migrateSpo2CandidateDisplayDefault(appContext)) {
+                runCatching {
+                    IntelligenceEngine.analyzeRecent(
+                        repo = repository,
+                        profile = currentProfile(),
+                        importedDeviceId = deviceId,
+                        maxHROverride = profileStore.hrMaxOverride.takeIf { it > 0 }?.toDouble(),
+                        ownerSource = RegistryDayOwnerSource(noopApp.deviceRegistry),
+                    )
+                }.onFailure { if (it is kotlin.coroutines.cancellation.CancellationException) throw it }
+            }
             while (isActive) {
                 // #547 RE-POLLUTION: a sync since the last tick may have flagged a re-heal (its ingest gate
                 // dropped bad-clock records). Re-run the purge BEFORE this tick's rescore so the affected days

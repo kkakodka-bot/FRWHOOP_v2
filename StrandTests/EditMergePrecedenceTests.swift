@@ -31,6 +31,23 @@ final class EditMergePrecedenceTests: XCTestCase {
         XCTAssertEqual(merged[0].strain, 9.0)
     }
 
+    /// Imported recovery/HRV/SpO₂ survive `fillingNilFields` when the computed row scored nil for them.
+    func testImportedVitalsSurviveComputedNilMerge() {
+        let imported = DailyMetric(day: "2026-06-12", totalSleepMin: 480, efficiency: 0.92,
+                                   deepMin: 90, remMin: 110, lightMin: 280, disturbances: nil,
+                                   restingHr: 52, avgHrv: 55, recovery: 80, strain: 9.0,
+                                   exerciseCount: nil, spo2Pct: 96)
+        let computed = DailyMetric(day: "2026-06-12", totalSleepMin: 300, efficiency: 0.85,
+                                   deepMin: 50, remMin: 70, lightMin: 180, disturbances: nil,
+                                   restingHr: 58, avgHrv: nil, recovery: nil, strain: 14.0,
+                                   exerciseCount: nil)
+        let merged = imported.fillingNilFields(from: computed)
+        XCTAssertEqual(merged.recovery, 80)
+        XCTAssertEqual(merged.avgHrv, 55)
+        XCTAssertEqual(merged.spo2Pct, 96)
+        XCTAssertEqual(merged.strain, 9.0)
+    }
+
     /// A NON-edited day is unchanged: imports win for sleep too (the regression guard for the default path).
     func testNonEditedDayImportWinsSleep() {
         let imported = full(day: "2026-06-12", totalSleepMin: 480, deepMin: 90, remMin: 110,

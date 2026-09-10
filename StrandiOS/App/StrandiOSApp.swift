@@ -81,10 +81,15 @@ struct StrandiOSApp: App {
         // Registered before launch finishes and permitted in project.yml, or iOS never delivers it.
         RescoreBackgroundScheduler.register { [weak model] in
             await model?.runDeferredRescoreIfOwed()
+            await model?.syncEngine.drain(reason: .backgroundTask)
         }
         CloudPushBackgroundScheduler.register { [weak model] in
             guard let writer = await model?.repo.registryWriterForPush() else { return }
             await CloudPushWorker.runOnce(db: writer, trigger: "background")
+            await model?.syncEngine.drain(reason: .backgroundTask)
+        }
+        SyncMaintenanceBackgroundScheduler.register { [weak model] in
+            await model?.syncEngine.drain(reason: .backgroundTask)
         }
         let bridge = HealthKitBridge(
             repo: model.repo,
@@ -95,7 +100,7 @@ struct StrandiOSApp: App {
         // Register a separate, always-on-while-authorized refresh task for Apple Health write-back.
         // The operation is write-only and bounded to the bridge's recent window; fresh BLE offloads still
         // use the immediate hook below. BGTaskScheduler chooses the actual wake time.
-        HealthWritebackBackgroundScheduler.register { [weak bridge] in
+        HealthWritebackBackgroundScheduler.register { [weak bridge, weak model] in
             guard let bridge else { return false }
             let succeeded = await bridge.writeBackAfterNewData()
             // A person can revoke every write type in Settings while NOOP is closed. Stop requesting
@@ -103,6 +108,7 @@ struct StrandiOSApp: App {
             if bridge.auth != .authorized {
                 HealthWritebackBackgroundScheduler.cancel()
             }
+            await model?.syncEngine.drain(reason: .backgroundTask)
             return succeeded
         }
         // #1021: publish to Apple Health when an offload lands, not only on foreground entry - the
@@ -110,7 +116,7 @@ struct StrandiOSApp: App {
         // synced on open only reached Health at the next launch. Weak so the scene owns the bridge's
         // lifetime; the bridge no-ops unless Health was authorized.
         model.healthWriteBack = { [weak bridge] in
-            _ = await bridge?.writeBackAfterNewData()
+            await bridge?.writeBackAfterNewData() ?? true
         }
     }
 
@@ -316,6 +322,7 @@ struct StrandiOSApp: App {
                 // opened, which is a worse regression than the bug being fixed. `analyzeRecent`
                 // serialises itself, so overlapping with the sync this foreground also kicks off is safe.
                 Task { await model.runDeferredRescoreIfOwed() }
+                Task { await model.syncEngine.drain(reason: .foreground) }
                 Task {
                     health.refreshAuthIfPreviouslyGranted()
                     HealthWritebackBackgroundScheduler.updateSchedule(
@@ -344,6 +351,11 @@ struct StrandiOSApp: App {
                 // or the next launch to drain it. Re-submitting on the way out costs nothing when
                 // nothing is owed, because it is skipped entirely.
                 if RescoreBackgroundScheduler.isRescoreOwed { RescoreBackgroundScheduler.schedule() }
+                Task {
+                    if await model.syncEngine.hasOwedWork() {
+                        SyncMaintenanceBackgroundScheduler.scheduleIfNeeded()
+                    }
+                }
                 // #114: capture the LAST in-app live state on the way out so the Home widget matches what
                 // the user just saw — its battery/HR/score otherwise lag to the last FOREGROUND refreshSeq
                 // bump. One reload per app-exit is low-frequency and well within WidgetKit's daily budget.
