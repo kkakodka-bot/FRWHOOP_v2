@@ -447,6 +447,13 @@ final class AppModel: ObservableObject {
             // history once, so any deep-history rows an older build left on the 0–21 axis regenerate on
             // the 0–100 axis. Guarded by a persisted flag, so this is a no-op on every subsequent launch.
             await self.intelligence.runEffortRescoreIfNeeded()
+            // One-shot on-upgrade: the SpO₂ strap-estimate toggle now defaults ON for installs that never
+            // chose. The engine only writes `spo2_candidate` while the toggle is ON, so pin the default and
+            // re-score once so the Blood Oxygen tile fills immediately instead of waiting for the backstop.
+            if PuffinExperiment.migrateSpo2CandidateDisplayDefault() {
+                await self.intelligence.analyzeRecent()
+                await self.repo.refresh()
+            }
             while !Task.isCancelled {
                 // #547 RE-POLLUTION: a sync since the last tick may have armed a re-heal (its ingest gate
                 // dropped bad-clock records). `runTimestampHealIfNeeded` honours the pending flag even after

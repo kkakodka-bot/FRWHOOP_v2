@@ -124,6 +124,7 @@ struct LiquidTodayView: View {
     @State private var cachedVitalsDay: DailyMetric?
     @State private var cachedRespDay: DailyMetric?
     @State private var cachedHrvDay: DailyMetric?
+    @State private var cachedSpo2Day: DailyMetric?
     @State private var cachedRestingHrDay: DailyMetric?
     @State private var cachedSkinTempReadingDay: DailyMetric?
     /// The Charge hero's resolved state (#543 carry + the honest label), resolved ONCE in load() alongside
@@ -196,6 +197,10 @@ struct LiquidTodayView: View {
     /// them — a respiratory-only row blanks HRV and Resting HR on both the vitals card and the Key Metrics
     /// tiles. Twins of `DailyMetric.lastHrvDay` / `lastRestingHrDay`; mirror the Android per-field rows.
     private var hrvDay: DailyMetric? { cachedHrvDay }
+
+    /// PER-FIELD SpO₂ carry — twin of `DailyMetric.lastSpo2Day`; `vitalsDay`'s OR predicate can land on a
+    /// row with HRV/RHR but no calibrated SpO₂, so the tile needs the freshest row that actually has one.
+    private var spo2Day: DailyMetric? { cachedSpo2Day }
 
     private var restingHrDay: DailyMetric? { cachedRestingHrDay }
 
@@ -908,13 +913,21 @@ struct LiquidTodayView: View {
             cardLink(.metric("vitality"), title: card.title, sub: card.subtitle,
                      value: intText(vitality), tint: liquidPurple, frac: frac(vitality))
         case .hrv:
-            cardLink(.metric("hrv"), title: card.title, sub: card.subtitle,
-                     value: unitText(displayDay?.avgHrv, card.unit), tint: StrandPalette.metricCyan,
-                     frac: fracOver(displayDay?.avgHrv, 120))
+            let hrvCard = displayDay?.avgHrv ?? hrvDay?.avgHrv
+            let hrvSub = liquidVitalCardSubtitle(today: displayDay?.avgHrv, carryDay: hrvDay,
+                                                 prior: { $0.avgHrv }, fallback: card.subtitle)
+            cardLink(.metric("hrv"), title: card.title, sub: hrvSub,
+                     value: unitText(hrvCard, card.unit), tint: StrandPalette.metricCyan,
+                     frac: fracOver(hrvCard, 120))
         case .restingHr:
-            cardLink(.metric("rhr"), title: card.title, sub: card.subtitle,
-                     value: unitText(displayDay?.restingHr.map(Double.init), card.unit),
-                     tint: StrandPalette.metricRose, frac: fracOver(displayDay?.restingHr.map(Double.init), 100))
+            let rhrCard = (displayDay?.restingHr ?? restingHrDay?.restingHr).map(Double.init)
+            let rhrSub = liquidVitalCardSubtitle(today: displayDay?.restingHr.map(Double.init),
+                                                 carryDay: restingHrDay,
+                                                 prior: { $0.restingHr.map(Double.init) },
+                                                 fallback: card.subtitle)
+            cardLink(.metric("rhr"), title: card.title, sub: rhrSub,
+                     value: unitText(rhrCard, card.unit),
+                     tint: StrandPalette.metricRose, frac: fracOver(rhrCard, 100))
         case .respiratory:
             cardLink(.metric("resp_rate"), title: card.title, sub: card.subtitle,
                      value: unitText(displayDay?.respRateBpm, card.unit, decimals: 1),
@@ -935,12 +948,22 @@ struct LiquidTodayView: View {
             // candidate fallback and experimental gating included — so the card and the tile cannot
             // disagree about the same day's number. The tile's key/route handling is deliberately NOT
             // copied; see below for why the two are not interchangeable.
-            let spo2Real = displayDay?.spo2Pct ?? vitalsDay?.spo2Pct
+            let spo2Real = displayDay?.spo2Pct ?? vitalsDay?.spo2Pct ?? spo2Day?.spo2Pct
             let spo2CandidateOn = PuffinExperiment.spo2CandidateDisplayEnabled
             let spo2Candidate = spo2Real == nil && spo2CandidateOn
                 ? spo2CandidateByDay[cachedDisplayDay?.day ?? selectedDayKey]
                 : nil
             let spo2 = spo2Real ?? spo2Candidate
+            let spo2Sub: String = {
+                if spo2Candidate != nil {
+                    return String(localized: "strap estimate (unverified)")
+                }
+                if displayDay?.spo2Pct == nil, let carry = spo2Day, carry.spo2Pct != nil {
+                    return TodayView.carriedCaption(priorDayKey: carry.day,
+                                                    todayKey: displayDay?.day ?? selectedDayKey)
+                }
+                return card.subtitle
+            }()
             // ALWAYS routes to "spo2", never "spo2_candidate". The Key Metrics tile switches that string,
             // but there it is a SPARKLINE SERIES key (ktile feeds it to windowedSpark; navigation goes
             // through its separate detailMetric argument). Here the string is a NAVIGATION route resolved
@@ -954,7 +977,7 @@ struct LiquidTodayView: View {
             // is the DEFAULT Today screen on iOS 26. The subtitle is the slot this card has.
             cardLink(.metric("spo2"),
                      title: card.title,
-                     sub: spo2Candidate != nil ? String(localized: "strap estimate (unverified)") : card.subtitle,
+                     sub: spo2Sub,
                      // Em dash, not the en dash the stub used: the classic Blood Oxygen card and
                      // skinTempCardValue both return "—", so the stub's "–" would have left the two
                      // adjacent cards printing different glyphs for the same "no reading" state.
@@ -1296,7 +1319,8 @@ struct LiquidTodayView: View {
         case .rest:
             ktile(String(localized: "Rest"), icon: keyMetricIcon(metric), intText(restScore), "%", StrandPalette.restColor, frac(restScore), key: "sleep_performance")
         case .hrv:
-            ktile("HRV", icon: keyMetricIcon(metric), intText(hrv), "ms", StrandPalette.metricCyan, fracOver(hrv, 120), key: "hrv")
+            ktile("HRV", icon: keyMetricIcon(metric), intText(hrv), "ms", StrandPalette.metricCyan, fracOver(hrv, 120), key: "hrv",
+                  caption: liquidVitalTileCaption(today: displayDay?.avgHrv, carryDay: hrvDay, prior: { $0.avgHrv }))
         case .restingHr:
             ktile(String(localized: "Rest HR"), icon: keyMetricIcon(metric), intText(rhr), "bpm", StrandPalette.metricRose, fracOver(rhr, 100), key: "rhr")
         case .bloodOxygen:
@@ -1306,14 +1330,21 @@ struct LiquidTodayView: View {
             // device-conditional "spo2_candidate" mean (WHOOP: `spo2_candidate_82`; Oura: ceiling@100
             // `0x6F`, see `AnalyticsEngine.nightlySpo2CeilingMean`) only when `spo2Pct` is nil AND the
             // toggle is ON — same gating as the classic tile, never as the default.
-            let spo2Real = displayDay?.spo2Pct ?? vitalsDay?.spo2Pct
+            let spo2Real = displayDay?.spo2Pct ?? vitalsDay?.spo2Pct ?? spo2Day?.spo2Pct
             let spo2CandidateOn = PuffinExperiment.spo2CandidateDisplayEnabled
             let spo2CandidateValue = spo2Real == nil && spo2CandidateOn
                 ? spo2CandidateByDay[cachedDisplayDay?.day ?? selectedDayKey]
                 : nil
             let spo2 = spo2Real ?? spo2CandidateValue
+            let spo2Caption: String? = {
+                if spo2CandidateValue != nil {
+                    return String(localized: "strap estimate (unverified)")
+                }
+                return liquidVitalTileCaption(today: displayDay?.spo2Pct, carryDay: spo2Day,
+                                              prior: { $0.spo2Pct })
+            }()
             ktile(String(localized: "Blood Oxygen"), icon: keyMetricIcon(metric), intText(spo2), "%", StrandPalette.metricCyan, fracOver(spo2, 100), key: spo2CandidateValue != nil ? "spo2_candidate" : "spo2",
-                  caption: spo2CandidateValue != nil ? String(localized: "strap estimate (unverified)") : nil)
+                  caption: spo2Caption)
         case .respiratory:
             let resp = displayDay?.respRateBpm ?? vitalsDay?.respRateBpm ?? respDay?.respRateBpm
             ktile(String(localized: "Respiratory"), icon: keyMetricIcon(metric), resp.map { String(format: "%.1f", locale: AppLanguage.activeLocale, $0) } ?? "—", "rpm", StrandPalette.accent, fracOver(resp, 24), key: "resp_rate")
@@ -1534,6 +1565,7 @@ struct LiquidTodayView: View {
         cachedVitalsDay = (selectedDayOffset == 0) ? Repository.lastVitalsDay(days: repo.days, todayKey: tkey) : nil
         cachedRespDay = (selectedDayOffset == 0) ? Repository.lastRespDay(days: repo.days, todayKey: tkey) : nil
         cachedHrvDay = (selectedDayOffset == 0) ? Repository.lastHrvDay(days: repo.days, todayKey: tkey) : nil
+        cachedSpo2Day = (selectedDayOffset == 0) ? Repository.lastSpo2Day(days: repo.days, todayKey: tkey) : nil
         cachedRestingHrDay = (selectedDayOffset == 0) ? Repository.lastRestingHrDay(days: repo.days, todayKey: tkey) : nil
         cachedSkinTempReadingDay = (selectedDayOffset == 0) ? Repository.lastSkinTempReadingDay(days: repo.days, todayKey: tkey) : nil
         // Charge carry (#543) + the honest label, resolved here for the same reason as the two above: the
@@ -1949,6 +1981,22 @@ struct LiquidTodayView: View {
             .dateTime.weekday(.wide).day().month(.wide).locale(AppLanguage.activeLocale))
     }
 
+    /// Subtitle for a dashboard vital card when the value is carried from a prior night.
+    private func liquidVitalCardSubtitle<T>(today: T?, carryDay: DailyMetric?,
+                                            prior: (DailyMetric) -> T?, fallback: String) -> String {
+        guard today == nil, let carry = carryDay, prior(carry) != nil else { return fallback }
+        return TodayView.carriedCaption(priorDayKey: carry.day,
+                                        todayKey: displayDay?.day ?? selectedDayKey)
+    }
+
+    /// Caption under a Key Metrics tile when the value is carried from a prior night.
+    private func liquidVitalTileCaption<T>(today: T?, carryDay: DailyMetric?,
+                                           prior: (DailyMetric) -> T?) -> String? {
+        guard today == nil, let carry = carryDay, prior(carry) != nil else { return nil }
+        return TodayView.carriedCaption(priorDayKey: carry.day,
+                                        todayKey: displayDay?.day ?? selectedDayKey)
+    }
+
     /// Provenance caption for the recovery-vitals card, keyed on the row a vital actually came from — NOT a
     /// hardcoded "yesterday". If ANY shown vital fell back to `vitalsDay` (today's own value is nil and the
     /// carried row supplies it), it stamps that row's date via the shared `TodayView.carriedCaption`, so a
@@ -1963,7 +2011,8 @@ struct LiquidTodayView: View {
         let fromHrv: DailyMetric? = (displayDay?.avgHrv == nil && hrvDay?.avgHrv != nil) ? hrvDay : nil
         let fromRhr: DailyMetric? = (displayDay?.restingHr == nil && restingHrDay?.restingHr != nil) ? restingHrDay : nil
         let fromResp: DailyMetric? = (displayDay?.respRateBpm == nil && vitalsDay?.respRateBpm != nil) ? vitalsDay : nil
-        let sources: [DailyMetric] = [fromHrv, fromRhr, fromResp].compactMap { $0 }
+        let fromSpo2: DailyMetric? = (displayDay?.spo2Pct == nil && spo2Day?.spo2Pct != nil) ? spo2Day : nil
+        let sources: [DailyMetric] = [fromHrv, fromRhr, fromResp, fromSpo2].compactMap { $0 }
         guard let carried = sources.min(by: { $0.day < $1.day }) else { return nil }
         return TodayView.carriedCaption(priorDayKey: carried.day,
                                         todayKey: displayDay?.day ?? selectedDayKey)

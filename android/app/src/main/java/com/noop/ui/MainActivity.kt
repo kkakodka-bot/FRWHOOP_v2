@@ -582,9 +582,24 @@ object NoopPrefs {
     }
 
     /** #103: whether the SpO₂ candidate @82 strap estimate is surfaced in the Blood Oxygen tile.
-     *  Default false — the @82 candidate has split cross-device evidence and ships behind a toggle. */
-    fun spo2CandidateDisplay(context: Context): Boolean =
-        of(context).getBoolean(KEY_SPO2_CANDIDATE_DISPLAY, false)
+     *  Default ON for this fork so the tile can fill when no calibrated import exists; an explicit user
+     *  choice (including OFF) is always honoured. Twin of iOS `PuffinExperiment.spo2CandidateDisplayEnabled`. */
+    fun spo2CandidateDisplay(context: Context): Boolean {
+        val prefs = of(context)
+        if (!prefs.contains(KEY_SPO2_CANDIDATE_DISPLAY)) return true
+        return prefs.getBoolean(KEY_SPO2_CANDIDATE_DISPLAY, false)
+    }
+
+    /**
+     * Pins the ON default for installs that never chose. Idempotent; returns whether a write happened so the
+     * caller can trigger one immediate re-score. Twin of iOS `PuffinExperiment.migrateSpo2CandidateDisplayDefault`.
+     */
+    fun migrateSpo2CandidateDisplayDefault(context: Context): Boolean {
+        val prefs = of(context)
+        if (prefs.contains(KEY_SPO2_CANDIDATE_DISPLAY)) return false
+        prefs.edit().putBoolean(KEY_SPO2_CANDIDATE_DISPLAY, true).apply()
+        return true
+    }
 
     /**
      * [spo2CandidateDisplay] as a flow that re-emits when the user changes it.
@@ -612,7 +627,7 @@ object NoopPrefs {
             // `key` is @Nullable on modern SDKs — it arrives null when the whole file is cleared, which
             // reads as "everything changed". The null check is required to compile, not just defensive.
             if (key == null || key == KEY_SPO2_CANDIDATE_DISPLAY) {
-                trySend(changed.getBoolean(KEY_SPO2_CANDIDATE_DISPLAY, false))
+                trySend(spo2CandidateDisplay(context.applicationContext))
             }
         }
         prefs.registerOnSharedPreferenceChangeListener(listener)
@@ -621,7 +636,7 @@ object NoopPrefs {
         // would serve a stale value indefinitely, which is the failure this whole function exists to
         // remove. In this order the same interleaving costs at most a duplicate emit, and
         // `distinctUntilChanged` drops it.
-        trySend(prefs.getBoolean(KEY_SPO2_CANDIDATE_DISPLAY, false))
+        trySend(spo2CandidateDisplay(context.applicationContext))
         awaitClose { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
     }.distinctUntilChanged()
 
