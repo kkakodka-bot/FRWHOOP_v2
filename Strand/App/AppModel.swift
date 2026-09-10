@@ -134,6 +134,10 @@ final class AppModel: ObservableObject {
     /// Illness/strain early-warning (recent RHR up + HRV down + skin-temp up vs baseline). nil = clear.
     @Published var healthAlert: HealthAlert?
 
+    /// Trailing-window RMSSD from the last successful strap sync (~30 min of R-R rows). Separate from
+    /// nightly `avgHrv` (recovery input); nil when the window is stale, sparse, or fails coverage gates.
+    @Published var currentHrv: CurrentHRV.Snapshot?
+
     // MARK: - v5 pillar snapshot (engines run in the analytics pass; the views read these)
     //
     // The Insights / skin-temp Health-hub cards take pure engine RESULTS by value. The analytics pass
@@ -652,11 +656,30 @@ final class AppModel: ObservableObject {
     private func refreshAfterCompletedBackfill() async {
         live.append(log: "Backfill: refreshing dashboard cache from completed sync")
         await repo.refresh(days: 120)
+        await deriveCurrentHRV()
         // Post-offload pipeline: re-score (#1538 deferral still inside RescoreBackgroundScheduler.run),
         // cloud push, Apple Health write-back (#1021), and widget publish (#980) all drain through one
         // orchestrator so owed work survives suspension and every wake can settle every stage.
         await syncEngine.drain(reason: .offloadComplete)
         await refreshV5Signals()
+    }
+
+    /// Lightweight trailing-window HRV readout — one small R-R window, not the 21-day rescore. Runs off
+    /// the main actor; publishes on success only. No-ops when the newest R-R row is older than the
+    /// backfill interval (stale strap / app was asleep).
+    private func deriveCurrentHRV() async {
+        guard let store = await repo.storeHandle() else { return }
+        let now = Int(Date().timeIntervalSince1970)
+        let from = now - CurrentHRV.windowSeconds
+        let deviceId = repo.deviceId
+        guard let rows = try? await store.rrIntervals(deviceId: deviceId, from: from, to: now, limit: 10_000),
+              let newest = rows.map(\.ts).max(),
+              now - newest <= CurrentHRV.staleThresholdSeconds else { return }
+
+        let snapshot = await Task.detached(priority: .utility) {
+            CurrentHRV.derive(rows: rows, nowUnix: now)
+        }.value
+        if let snapshot { currentHrv = snapshot }
     }
 
     /// Fold a fresh reading into the smoothing window and republish a stable bpm.
