@@ -657,9 +657,9 @@ data class CoachMessageRow(
 
 /**
  * Device-local post-offload sync debt (Room v38 / MIGRATION_37_38). Swift twin: WhoopStore
- * `syncJob` (Database.swift `v44-sync-jobs` migration). Schema parity only on Android for now —
- * the SyncEngine orchestrator is Apple-side; Android's foreground service + WorkManager already
- * provide reliability. NEVER added to the `.noopbak` backup whitelist.
+ * `syncJob` (Database.swift `v44-sync-jobs` migration). Android uses it to coalesce rescore,
+ * Health Connect, and widget debt across deep-backlog slices and process death. The self-hosted HTTP
+ * push keeps its independent WorkManager/cursor durability. NEVER added to the `.noopbak` whitelist.
  */
 @Entity(tableName = "syncJob")
 data class SyncJobEntity(
@@ -671,8 +671,8 @@ data class SyncJobEntity(
 )
 
 /**
- * One completed sync-drain journal row (Room v38). Swift twin: `syncJournalEntry`. Capped at ~200
- * rows on the Apple side; the table exists here for schema parity only.
+ * One completed sync-drain journal row (Room v38). Swift twin: `syncJournalEntry`. The minimal
+ * Android debt drain does not write the journal yet; the table remains schema-compatible.
  */
 @Entity(tableName = "syncJournalEntry")
 data class SyncJournalEntryEntity(

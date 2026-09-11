@@ -202,16 +202,23 @@ final class BackfillerSessionTallyTests: XCTestCase {
     /// A store that forwards the real decoded counts so the session tally reflects rows that genuinely
     /// landed (the v25 record frames below each decode to one gravity sample).
     private final class TallyStore: BackfillStoreWriting {
+        var operations: [String] = []
+
         @discardableResult
         func insert(_ streams: Streams, deviceId: String) async throws
             -> (hr: Int, rr: Int, events: Int, battery: Int,
                 spo2: Int, skinTemp: Int, resp: Int, gravity: Int) {
-            (streams.hr.count, streams.rr.count, 0, 0,
-             streams.spo2.count, streams.skinTemp.count, streams.resp.count, streams.gravity.count)
+            operations.append("insert")
+            return (streams.hr.count, streams.rr.count, 0, 0,
+                    streams.spo2.count, streams.skinTemp.count, streams.resp.count, streams.gravity.count)
         }
         func enqueueRawBatch(_ meta: RawBatchMeta, frames: [[UInt8]]) async throws {}
-        func setCursor(_ name: String, _ value: Int) async throws {}
+        func setCursor(_ name: String, _ value: Int) async throws { operations.append("cursor") }
         func cursor(_ name: String) async throws -> Int? { nil }
+        func markJobsOwed(kinds: [String], note: String?) async throws -> [String: String] {
+            operations.append("debt")
+            return Dictionary(uniqueKeysWithValues: kinds.map { ($0, "token") })
+        }
     }
 
     private func hexBytes(_ s: String) -> [UInt8] {
@@ -264,6 +271,31 @@ final class BackfillerSessionTallyTests: XCTestCase {
         XCTAssertFalse(joined.contains("fully charge it"))
         XCTAssertTrue(joined.contains("reached the end of available history"),
                       "it should log the neutral caught-up line instead")
+    }
+
+    @MainActor func testProductionStoreConformanceUsesDurableDebtWriter() async throws {
+        let store = try await WhoopStore.inMemory()
+        let writer: BackfillStoreWriting = store
+        _ = try await writer.markJobsOwed(
+            kinds: [SyncJobKind.rescore.rawValue, SyncJobKind.widgetPublish.rawValue],
+            note: "witness-test")
+        let jobs = try await store.owedJobs()
+        XCTAssertEqual(Set(jobs.map(\.kind)),
+                       Set([SyncJobKind.rescore.rawValue, SyncJobKind.widgetPublish.rawValue]))
+    }
+
+    @MainActor func testProductiveChunkMarksDebtBeforeCursorAndAck() async {
+        let store = TallyStore()
+        let backfiller = Backfiller(
+            store: store,
+            deviceId: "test",
+            ackTrim: { _, _ in store.operations.append("ack") },
+            postOffloadJobKinds: SyncJobKind.allCases.map(\.rawValue))
+        backfiller.begin(family: .whoop4)
+        for frame in v25RecordFrames { await backfiller.ingest(frame) }
+        await backfiller.ingest(historyEndFrame(trim: 123))
+
+        XCTAssertEqual(Array(store.operations.prefix(4)), ["insert", "debt", "cursor", "ack"])
     }
 
     /// #1 (the critical other half): a genuinely empty session (a 0xFFFFFFFF END with no accumulated

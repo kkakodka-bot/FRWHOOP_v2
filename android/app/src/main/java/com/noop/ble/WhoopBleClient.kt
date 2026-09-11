@@ -32,6 +32,10 @@ import com.noop.data.EventEntry
 import com.noop.data.StandardHrMapping
 import com.noop.data.StreamBatch
 import com.noop.data.StreamPersistence
+import com.noop.data.BacklogBurstDrainPolicy
+import com.noop.data.SyncDrainPolicy
+import com.noop.data.SyncJobKind
+import com.noop.data.SyncWakeReason
 import com.noop.protocol.Whoop5RawImu
 import com.noop.testcentre.ImuSessionFileStore
 import com.noop.data.WhoopRepository
@@ -70,6 +74,7 @@ import com.noop.analytics.NapDetector
 import com.noop.analytics.NapPrefs
 import com.noop.analytics.NapVerdict
 import com.noop.analytics.RegistryDayOwnerSource
+import com.noop.analytics.RestScorer
 import com.noop.analytics.SedentaryDetector
 import com.noop.analytics.StressOnsetDetector
 import com.noop.analytics.WorkoutDetector
@@ -84,6 +89,8 @@ import com.noop.ui.NotifPrefs
 import com.noop.ui.ProfileStore
 import com.noop.ui.StressNudgeCenter
 import com.noop.ui.UnitPrefs
+import com.noop.widget.WidgetSnapshot
+import com.noop.widget.WidgetSnapshotStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -95,6 +102,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.util.UUID
+import kotlin.math.roundToInt
 import java.io.BufferedOutputStream
 import java.io.DataOutputStream
 import java.io.File
@@ -516,7 +524,7 @@ class WhoopBleClient(
      * call site unchanged.
      */
     private val gattOpsFactory: (BluetoothGatt) -> GattOps = ::RealGattOps,
-    /** Fire-and-forget notification after a true HISTORY_COMPLETE only. The sink must only enqueue. */
+    /** Fire-and-forget notification once a successful physical backlog burst ends. The sink only enqueues. */
     private val successfulOffloadSink: () -> Unit = {},
 ) {
 
@@ -958,7 +966,7 @@ class WhoopBleClient(
         /** 5/MG zero-frame retry: pause before re-requesting history when a session timed out having
          *  produced nothing (the first request after connect can go entirely unanswered). */
         private const val WHOOP5_HISTORY_RETRY_DELAY_MS = 700L
-        /** Debounce between a committed backfill chunk and the on-device scoring pass it schedules. */
+        /** Quiet grace between a terminal backlog decision and its durable post-offload drain. */
         private const val POST_BACKFILL_ANALYZE_DELAY_MS = 1_500L
         /** #174: window after the last offload frame/HISTORY_COMPLETE during which a type-0x2F frame is
          *  treated as trailing-historical, not live. Mirrors macOS deepPacketLiveCooldownSeconds (10s). */
@@ -3061,22 +3069,21 @@ class WhoopBleClient(
     )
 
     /**
-     * Fresh history just landed durably (a backfill chunk committed + acked) — schedule one debounced
-     * on-device scoring pass so recovery/strain/sleep appear right away instead of waiting for the
-     * UI's 15-min analysis tick (which also doesn't run at all with the app UI closed and only the
-     * foreground service alive). Mirrors the AppViewModel loop's profile + writeback behaviour. (#78 fork)
+     * One decoded history chunk committed. The repository has already marked durable post-offload debt
+     * in the same Room transaction as any newly inserted scoring rows. Keep only the session tally here;
+     * the terminal continuation decision starts one drain for the complete oldest-first burst.
      */
     @Suppress("UNUSED_PARAMETER")
     private fun onBackfillChunkCommitted(batch: StreamBatch) {
         decodedChunksThisSession += 1   // invoked once per non-empty decoded chunk (#77 family tally)
-        schedulePostBackfillAnalysis()
+        // No scoring here. The productive insert atomically marked durable syncJob debt before ACK;
+        // the terminal BackfillContinuation decision drains it once for the whole oldest-first burst.
     }
 
-    private fun schedulePostBackfillAnalysis() {
+    private fun schedulePostBackfillDrain(reason: SyncWakeReason) {
         if (!analyzeAfterBackfillScheduled.compareAndSet(false, true)) {
-            // A later chunk arrived while the debounce or scoring pass was already active. Remember it:
-            // sleep-critical gravity commonly trails HR, and dropping this signal is how a partial first
-            // pass could become the final answer until the 15-minute backstop.
+            // A second terminal/disconnect/restart wake raced the active drain. Coalesce one successor;
+            // compare-token settlement makes it cheap when the active pass already cleared every debt.
             analyzeAfterBackfillPending.set(true)
             return
         }
@@ -3085,7 +3092,20 @@ class WhoopBleClient(
         _state.update { it.copy(analyzingHistory = true) }
         ioScope.launch {
             try {
-                delay(POST_BACKFILL_ANALYZE_DELAY_MS) // let trailing chunks of the same session land
+                delay(POST_BACKFILL_ANALYZE_DELAY_MS) // let terminal frames and Room invalidations settle
+                val initialJobs = repository.owedSyncJobs()
+                if (initialJobs.isEmpty() || backfilling || backlogContinuationDecisionPending) return@launch
+                val initialKinds = initialJobs.mapNotNull { row ->
+                    SyncJobKind.entries.firstOrNull { it.rawValue == row.kind }
+                }.toSet()
+                log("post-offload drain: wake=${reason.rawValue} owed=${SyncDrainPolicy.stagesToRun(initialKinds).joinToString { it.rawValue }}")
+
+                val rescoreJob = initialJobs.firstOrNull { it.kind == SyncJobKind.RESCORE.rawValue }
+                if (rescoreJob != null) {
+                    if (!repository.recordSyncJobAttempt(rescoreJob)) {
+                        analyzeAfterBackfillPending.set(true)
+                        return@launch
+                    }
                 val profileStore = ProfileStore.from(context)
                 // #1493: was built longhand here and silently omitted waistCm, so this pass scored VO₂max
                 // with the Uth fallback while the 15-minute pass used the waist-based Nes estimate — the
@@ -3120,7 +3140,7 @@ class WhoopBleClient(
                 log("re-score: trigger=post-offload newData=" +
                     if (newData) "yes"
                     else "no (empty/duplicate offload — nothing changed since last run) — skipping (#1146)")
-                if (newData) runCatching {
+                val rescoreResult = if (newData) runCatching {
                     // #1816: set the motion sink so a fresh strap's first backfill flips the Today caption
                     // from "No motion synced yet" to the phone-step-days countdown as soon as it lands.
                     IntelligenceEngine.stepsHasMotionSink = { hasMotion ->
@@ -3212,9 +3232,11 @@ class WhoopBleClient(
                         effortMethod = NoopPrefs.effortMethod(context),
                         dayCycleMode = NoopPrefs.dayCycleMode(context),
                     )
-                }.onSuccess {
-                    // Advance the shared watermark so the next 15-min tick sees no change and skips (#836).
-                    NoopPrefs.setAnalyzeWatermark(context, analyzeFp)
+                } else Result.success(emptyList())
+                rescoreResult.onSuccess {
+                    // Advance the shared watermark only after a real completed score pass.
+                    if (newData) NoopPrefs.setAnalyzeWatermark(context, analyzeFp)
+                    if (!newData) return@onSuccess
                     // #1735: stamp the post-sync pass too, not just the idle one in AppViewModel. This is
                     // the pass that runs right after an offload, so it is the one a "synced but nothing
                     // appeared" report is actually asking about.
@@ -3242,32 +3264,113 @@ class WhoopBleClient(
                 }
                 // #1816: clear the motion sink after the post-backfill pass completes.
                 IntelligenceEngine.stepsHasMotionSink = null
-                // Keep the opt-in Health Connect writeback fresh in background-only operation too.
-                if (NoopPrefs.hcWriteback(context)) {
-                    // #660: log the count AND any PII-safe failure categories (the writer also persists
-                    // the outcome to prefs, so Data Sources surfaces a failing background share).
-                    runCatching { HealthConnectWriter.write(context, repository, deviceId) }
-                        .onSuccess { r -> log("HC writeback: ${r.written} record(s)" + if (r.ok) "" else " (failed: ${r.failures.joinToString()})") }
+                if (rescoreResult.isFailure) return@launch
+                // A newer productive chunk replaced this token while scoring. Do not export a partial
+                // snapshot; leave the fresh debt and coalesce one retry through the existing latch.
+                if (!repository.settleSyncJob(rescoreJob)) {
+                    analyzeAfterBackfillPending.set(true)
+                    return@launch
+                }
+                }
+
+                // Health Connect and widget publication are separate durable stages. They run only after
+                // the newest rescore debt settled, and compare-token deletion cannot clear later work.
+                val afterRescore = repository.owedSyncJobs()
+                if (afterRescore.any { it.kind == SyncJobKind.RESCORE.rawValue }) {
+                    analyzeAfterBackfillPending.set(true)
+                    return@launch
+                }
+                val healthJob = afterRescore
+                    .firstOrNull { it.kind == SyncJobKind.HEALTH_WRITEBACK.rawValue }
+                if (healthJob != null) {
+                    if (!repository.recordSyncJobAttempt(healthJob)) {
+                        analyzeAfterBackfillPending.set(true)
+                        return@launch
+                    }
+                    val healthOk = if (!NoopPrefs.hcWriteback(context)) true else {
+                        runCatching { HealthConnectWriter.write(context, repository, deviceId) }
+                            .onSuccess { r ->
+                                log("HC writeback: ${r.written} record(s)" +
+                                    if (r.ok) "" else " (failed: ${r.failures.joinToString()})")
+                            }
+                            .getOrNull()?.ok == true
+                    }
+                    if (healthOk && !repository.settleSyncJob(healthJob)) {
+                        analyzeAfterBackfillPending.set(true)
+                        return@launch
+                    }
+                    // A Health Connect failure keeps only its token owed; widget publication is independent.
+                }
+
+                val afterHealth = repository.owedSyncJobs()
+                if (afterHealth.any { it.kind == SyncJobKind.RESCORE.rawValue }) {
+                    analyzeAfterBackfillPending.set(true)
+                    return@launch
+                }
+                val widgetJob = afterHealth
+                    .firstOrNull { it.kind == SyncJobKind.WIDGET_PUBLISH.rawValue }
+                if (widgetJob != null) {
+                    if (!repository.recordSyncJobAttempt(widgetJob)) {
+                        analyzeAfterBackfillPending.set(true)
+                        return@launch
+                    }
+                    val widgetOk = runCatching { publishPostBackfillWidget() }.isSuccess
+                    if (!widgetOk) return@launch
+                    if (!repository.settleSyncJob(widgetJob)) {
+                        analyzeAfterBackfillPending.set(true)
+                        return@launch
+                    }
                 }
             } finally {
                 val retryAlreadyQueued = analyzeAfterBackfillPending.getAndSet(false)
                 if (!retryAlreadyQueued) _state.update { it.copy(analyzingHistory = false) }
                 analyzeAfterBackfillScheduled.set(false)
-                // If anything landed after this pass was scheduled, run once more after the same quiet
-                // grace. The complete analysis fingerprint makes a duplicate retry cheap, while a trailing
-                // gravity/RR/sleep-state chunk now gets the decisive sleep-detection pass immediately.
-                // Check pending again after releasing the scheduled latch so a chunk racing this finally
-                // block cannot strand its retry signal.
+                // A stale token or concurrent wake requests one coalesced successor. Check pending again
+                // after releasing the scheduled latch so a wake racing this finally block cannot strand debt.
                 if (retryAlreadyQueued || analyzeAfterBackfillPending.getAndSet(false)) {
-                    schedulePostBackfillAnalysis()
+                    schedulePostBackfillDrain(reason)
                 }
             }
         }
     }
 
+    /** Publish the scored logical-day snapshot even when no UI/service collector is alive. */
+    private suspend fun publishPostBackfillWidget() {
+        val days = repository.daysMerged(deviceId)
+        val logicalKey = com.noop.ui.logicalDayKeyNow()
+        val localKey = java.time.LocalDate.now().toString()
+        val row = com.noop.ui.widgetAnchorRow(days, logicalKey, localKey)
+        val live = _state.value
+        WidgetSnapshotStore.push(
+            context,
+            WidgetSnapshot(
+                recoveryPct = row?.recovery?.roundToInt(),
+                restPct = row?.let { RestScorer.restFromDaily(it)?.roundToInt() },
+                effortPct = row?.strain?.roundToInt(),
+                heartRate = live.heartRate,
+                batteryPct = live.batteryPct?.roundToInt(),
+                connected = live.connected,
+                updatedAtMs = System.currentTimeMillis(),
+            ),
+        )
+    }
+
+    /** Enqueue the independent durable HTTP worker once for the completed physical backlog burst. */
+    private fun flushSuccessfulOffloadIfOwed() {
+        if (!successfulOffloadOwedForBurst) return
+        successfulOffloadOwedForBurst = false
+        runCatching { successfulOffloadSink() }
+    }
+
     /** True while a historical offload is in progress (offload frames route to the Backfiller). */
     @Volatile
     private var backfilling = false
+    /** True between a session exit and the async frontier decision that either re-kicks or ends the burst. */
+    @Volatile
+    private var backlogContinuationDecisionPending = false
+    /** A successful session occurred in the current auto-continue burst. Flushed once at its terminal
+     * continuation decision (or disconnect), so the durable HTTP worker is not kicked once per slice. */
+    private var successfulOffloadOwedForBurst = false
     /** Chunks acked this offload session — feeds LiveState.syncChunksThisSession (throttled). Only
      *  touched on the serial backfill drain coroutine + the begin/exit lifecycle. */
     private var ackedChunksThisSession = 0
@@ -3377,7 +3480,7 @@ class WhoopBleClient(
     private var historicalKickSent = false
     /** 5/MG zero-frame retries used this CONNECTION (max 2 — then the 900s periodic timer owns it). */
     private var whoop5HistoryAttempts = 0
-    /** One-shot debounce: a post-backfill scoring pass is already scheduled/running. */
+    /** One post-offload debt drain may run at a time; concurrent wakes coalesce to one successor. */
     private val analyzeAfterBackfillScheduled = java.util.concurrent.atomic.AtomicBoolean(false)
     private val analyzeAfterBackfillPending = java.util.concurrent.atomic.AtomicBoolean(false)
 
@@ -9920,6 +10023,15 @@ class WhoopBleClient(
         handler.post { requestSync(BackfillTrigger.MANUAL) }
     }
 
+    /** Resume durable post-offload debt after Android recreated the process. */
+    fun resumeOwedPostBackfillWork(reason: SyncWakeReason = SyncWakeReason.PROCESS_RESTART) {
+        ioScope.launch {
+            if (runCatching { repository.hasOwedSyncJobs() }.getOrDefault(false)) {
+                handler.post { schedulePostBackfillDrain(reason) }
+            }
+        }
+    }
+
     /**
      * App-active entry point (#267): call when NOOP comes to the foreground so opening the app pulls a
      * reasonably fresh sync instead of relying on the 900s periodic timer or an incidental reconnect.
@@ -10268,7 +10380,9 @@ class WhoopBleClient(
         // Downstream export also treats a WHOOP 4 idle timeout with persisted rows as successful: that
         // firmware routinely finishes productive offloads without emitting HISTORY_COMPLETE.
         if (shouldNotifySuccessfulOffload(reason, persistedSensorRows)) {
-            runCatching { successfulOffloadSink() }
+            // Coalesce cloud export at the same burst boundary as scoring/Health/widgets. A deep backlog
+            // can end many productive sessions before the continuation predicate finally stops.
+            successfulOffloadOwedForBurst = true
         }
         // Existing inactivity/stress/nap hooks retain their stricter HISTORY_COMPLETE semantics.
         if (reason == "HISTORY_COMPLETE") {
@@ -10354,7 +10468,11 @@ class WhoopBleClient(
             // it here let an empty session (which persisted 0 new rows) still look like real backlog and spin
             // to the cap. Snapshotting `> 0` at classify time = the auto-continue can't disagree with the
             // empty verdict, and a dup-only re-offload (0 new rows) stops instead of spinning.
+            backlogContinuationDecisionPending = true
             maybeAutoContinueBackfill(trimAdvanced, persistedSensorRows)
+        } else {
+            flushSuccessfulOffloadIfOwed()
+            resumeOwedPostBackfillWork(SyncWakeReason.NON_CONTINUING_EXIT)
         }
     }
 
@@ -10373,7 +10491,12 @@ class WhoopBleClient(
      */
     private fun maybeAutoContinueBackfill(trimAdvanced: Boolean, persistedSensorRows: Boolean) {
         val s = _state.value
-        if (!s.connected || !s.bonded) return
+        if (!s.connected || !s.bonded) {
+            backlogContinuationDecisionPending = false
+            flushSuccessfulOffloadIfOwed()
+            resumeOwedPostBackfillWork(SyncWakeReason.DISCONNECT)
+            return
+        }
         val newest = strapNewestTs
         val count = consecutiveAutoContinues
         ioScope.launch {
@@ -10406,16 +10529,16 @@ class WhoopBleClient(
             // own verdict fresh from [strapNewestTs] on every call, so a stale value here can't leak forward.
             val clockUntrusted = isFutureDatedNewest(newest, wallNow)
             val stillConnected = _state.value.connected && _state.value.bonded
-            if (!shouldAutoContinue(
-                    stillConnected = stillConnected,
-                    strapNewestTs = newest,
-                    ourFrontierTs = frontier,
-                    wallNowUnix = wallNow,
-                    lastTrimAdvanced = trimAdvanced,
-                    consecutiveCount = count,
-                    persistedSensorRows = persistedSensorRows,
-                )
-            ) {
+            val willAutoContinue = shouldAutoContinue(
+                stillConnected = stillConnected,
+                strapNewestTs = newest,
+                ourFrontierTs = frontier,
+                wallNowUnix = wallNow,
+                lastTrimAdvanced = trimAdvanced,
+                consecutiveCount = count,
+                persistedSensorRows = persistedSensorRows,
+            )
+            if (!willAutoContinue) {
                 // #1012: name the stop honestly when the future-clock gate is what ended the chain —
                 // without this line the log just goes quiet after one pass and a strap-log export can't
                 // tell "caught up" from "future-dated range refused". Fires ONLY when 2b would otherwise
@@ -10440,15 +10563,24 @@ class WhoopBleClient(
                 // we stopped because the per-connection CAP is hit, leave the streak at/over the cap so it
                 // STAYS engaged for the rest of this connection (the 900s floor takes over); zeroing it here
                 // would immediately re-arm the cap and let a runaway strap spin again.
-                if (count < MAX_AUTO_CONTINUES) {
-                    handler.post { consecutiveAutoContinues = 0 }
+                val hasOwedWork = runCatching { repository.hasOwedSyncJobs() }.getOrDefault(false)
+                handler.post {
+                    backlogContinuationDecisionPending = false
+                    if (count < MAX_AUTO_CONTINUES) consecutiveAutoContinues = 0
+                    flushSuccessfulOffloadIfOwed()
+                    if (BacklogBurstDrainPolicy.shouldDrain(hasOwedWork, willAutoContinue = false)) {
+                        schedulePostBackfillDrain(SyncWakeReason.BACKLOG_TERMINAL)
+                    }
                 }
                 return@launch
             }
             handler.post {
                 // Re-check on the main looper: a real backfill may already have re-started (periodic) in
                 // the gap. requestSync's own gate handles that, but skip the log/counter churn if so.
-                if (backfilling) return@post
+                if (backfilling) {
+                    backlogContinuationDecisionPending = false
+                    return@post
+                }
                 consecutiveAutoContinues += 1
                 log(
                     "Backfill: auto-continuing (#364/#451) — the trim advanced and the strap is still " +
@@ -10457,6 +10589,7 @@ class WhoopBleClient(
                         "without waiting the 15-min floor.",
                 )
                 requestSync(BackfillTrigger.AUTO_CONTINUE)
+                backlogContinuationDecisionPending = false
             }
         }
     }
@@ -11044,6 +11177,11 @@ class WhoopBleClient(
                 System.currentTimeMillis() - backfillStartedAtMs)} (interrupted)")
         }
         backfilling = false
+        backlogContinuationDecisionPending = false
+        // A disconnect can cut the burst between committed chunks and its continuation decision.
+        // Flush the independent HTTP signal once; durable score/health/widget debt owns the other work.
+        flushSuccessfulOffloadIfOwed()
+        resumeOwedPostBackfillWork(SyncWakeReason.DISCONNECT)
         backfillDrain.reset()
         strapNewestTs = null
         strapNewestTsWall = null

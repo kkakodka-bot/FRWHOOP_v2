@@ -15,6 +15,10 @@ import UIKit
 final class SyncEngine {
 
     private weak var host: AppModel?
+    /// Async actor methods are reentrant. Coalesce overlapping foreground/BG/offload wakes into one
+    /// serial drain plus at most one trailing pass, so stage tokens cannot be churned by parallel loops.
+    private var draining = false
+    private var trailingDrainRequested = false
 
     init() {}
 
@@ -43,29 +47,56 @@ final class SyncEngine {
 
     /// The single entry point every wake calls.
     func drain(reason: SyncDrainPolicy.WakeReason) async {
+        guard !draining else {
+            trailingDrainRequested = true
+            return
+        }
+        draining = true
+        var passReason = reason
+        repeat {
+            trailingDrainRequested = false
+            await drainOnce(reason: passReason)
+            passReason = .bleEvent
+        } while trailingDrainRequested
+        draining = false
+    }
+
+    private func drainOnce(reason: SyncDrainPolicy.WakeReason) async {
         guard let host else { return }
+        // Durable jobs may be visible after the first productive chunk, but export surfaces must describe
+        // the terminal backlog, not an intermediate oldest-first slice. A disconnect clears this process-
+        // local flag; the jobs remain in SQLite and the next wake resumes them.
+        guard SyncDrainPolicy.shouldStartDrain(
+            backlogBurstInProgress: host.live.postOffloadBurstInProgress) else { return }
         guard let store = await host.repo.storeHandle() else { return }
 
         await mirrorRescoreDebt(store: store)
 
         let owedRows = (try? await store.owedJobs()) ?? []
         let owedKinds = Set(owedRows.compactMap { SyncJobKind(rawValue: $0.kind) })
+        let capturedTokens = Dictionary(uniqueKeysWithValues: owedRows.map { ($0.kind, $0.token) })
 
         let started = Date()
         var stagesRun: [SyncJobKind] = []
         var stagesFailed: [SyncJobKind] = []
 
         for stage in SyncDrainPolicy.stageOrder {
-            guard SyncDrainPolicy.shouldRun(stage: stage, owedKinds: owedKinds, reason: reason) else {
-                continue
-            }
+            guard SyncDrainPolicy.shouldRun(stage: stage, owedKinds: owedKinds, reason: reason),
+                  let token = capturedTokens[stage.rawValue] else { continue }
             #if !os(iOS)
             if stage == .cloudPush || stage == .healthWriteback || stage == .widgetPublish { continue }
             #endif
 
-            try? await store.recordJobAttempt(kind: stage.rawValue)
-            let ok = await runStage(stage, reason: reason, host: host)
+            try? await store.recordJobAttempt(kind: stage.rawValue, token: token)
+            let ok = await runStage(stage, token: token, reason: reason, host: host)
             if ok { stagesRun.append(stage) } else { stagesFailed.append(stage) }
+
+            let rescoreStillOwed = ((try? await store.owedJobs()) ?? [])
+                .contains { $0.kind == SyncJobKind.rescore.rawValue }
+            guard SyncDrainPolicy.shouldContinue(
+                after: stage, succeeded: ok, rescoreStillOwed: rescoreStillOwed) else {
+                break
+            }
         }
 
         let stillOwed = (try? await store.owedJobs()) ?? []
@@ -85,81 +116,86 @@ final class SyncEngine {
 
     // MARK: - Stage runners
 
-    private func runStage(_ stage: SyncJobKind,
-                            reason: SyncDrainPolicy.WakeReason,
-                            host: AppModel) async -> Bool {
+    private func runStage(_ stage: SyncJobKind, token: String,
+                          reason: SyncDrainPolicy.WakeReason,
+                          host: AppModel) async -> Bool {
         switch stage {
         case .rescore:
-            return await runRescore(reason: reason, host: host)
+            return await runRescore(token: token, reason: reason, host: host)
         case .cloudPush:
-            return await runCloudPush(host: host)
+            return await runCloudPush(token: token, host: host)
         case .healthWriteback:
-            return await runHealthWriteback(host: host)
+            return await runHealthWriteback(token: token, host: host)
         case .widgetPublish:
-            return await runWidgetPublish(host: host)
+            return await runWidgetPublish(token: token, host: host)
         }
     }
 
-    private func runRescore(reason: SyncDrainPolicy.WakeReason, host: AppModel) async -> Bool {
+    private func runRescore(token: String, reason: SyncDrainPolicy.WakeReason,
+                            host: AppModel) async -> Bool {
         switch reason {
-        case .offloadComplete:
+        case .offloadComplete, .bleEvent:
             await RescoreBackgroundScheduler.run(log: { [live = host.live] line in
                 live.append(log: line)
             }) {
                 await host.intelligence.analyzeRecent(skipIfUnchanged: true)
             }
         default:
-            guard RescoreBackgroundScheduler.isRescoreOwed else { return true }
-            await host.runDeferredRescoreIfOwed()
+            if RescoreBackgroundScheduler.isRescoreOwed {
+                await host.runDeferredRescoreIfOwed()
+            } else {
+                await RescoreBackgroundScheduler.run(log: { [live = host.live] line in
+                    live.append(log: line)
+                }) {
+                    await host.intelligence.analyzeRecent(skipIfUnchanged: true)
+                }
+            }
         }
 
-        if !RescoreBackgroundScheduler.isRescoreOwed {
-            try? await host.repo.storeHandle()?.clearJob(kind: SyncJobKind.rescore.rawValue)
-            return true
-        }
-        return false
+        guard !RescoreBackgroundScheduler.isRescoreOwed else { return false }
+        // A productive chunk can re-mark rescore while this pass is running. Compare-token settle then
+        // fails and blocks exports, leaving the newer generation for the trailing/next wake.
+        return await settle(.rescore, token: token)
     }
 
-    private func runCloudPush(host: AppModel) async -> Bool {
-        guard CloudPushSettings.ready else { return true }
-        guard let writer = await host.repo.registryWriterForPush() else { return true }
-        await CloudPushWorker.runOnce(
+    private func runCloudPush(token: String, host: AppModel) async -> Bool {
+        guard CloudPushSettings.ready else {
+            return await settle(.cloudPush, token: token)
+        }
+        guard let writer = await host.repo.registryWriterForPush() else { return false }
+        let outcome = await CloudPushWorker.runOnce(
             db: writer,
             trigger: "sync-engine",
-            markOwed: { [weak self] in await self?.markOwed(.cloudPush) },
-            settleOwed: { [weak self] in
-                guard let store = await host.repo.storeHandle(),
-                      let job = try? await store.owedJobs().first(where: {
-                          $0.kind == SyncJobKind.cloudPush.rawValue
-                      }) else { return false }
-                return await self?.settle(.cloudPush, token: job.token) ?? false
-            }
+            markOwed: { [weak self] in await self?.markOwed(.cloudPush) }
         )
-        let stillOwed = (try? await host.repo.storeHandle()?.owedJobs())?
-            .contains(where: { $0.kind == SyncJobKind.cloudPush.rawValue }) ?? false
-        return !stillOwed
+        switch outcome {
+        case .completed:
+            return await settle(.cloudPush, token: token)
+        case .deferred:
+            return false
+        case .terminalFailure:
+            // The error is already persisted for the UI. Retrying an unrecoverable response on every wake
+            // would create a zombie job, so settle exactly the generation that produced this attempt.
+            _ = await settle(.cloudPush, token: token)
+            return false
+        }
     }
 
-    private func runHealthWriteback(host: AppModel) async -> Bool {
+    private func runHealthWriteback(token: String, host: AppModel) async -> Bool {
         #if os(iOS)
-        let token = await markOwed(.healthWriteback, note: "health write-back")
-        let ok = await host.healthWriteBack?() ?? true
-        if ok {
-            if let token { _ = await settle(.healthWriteback, token: token) }
-            return true
-        }
-        return false
+        guard let healthWriteBack = host.healthWriteBack else { return false }
+        let ok = await healthWriteBack()
+        guard ok else { return false }
+        return await settle(.healthWriteback, token: token)
         #else
         return true
         #endif
     }
 
-    private func runWidgetPublish(host: AppModel) async -> Bool {
+    private func runWidgetPublish(token: String, host: AppModel) async -> Bool {
         #if os(iOS)
-        let token = await markOwed(.widgetPublish, note: "widget publish")
         await WidgetSnapshot.publish(from: host)
-        if let token { _ = await settle(.widgetPublish, token: token) }
-        return true
+        return await settle(.widgetPublish, token: token)
         #else
         return true
         #endif
@@ -167,14 +203,13 @@ final class SyncEngine {
 
     // MARK: - Rescore mirror
 
-    /// `RescoreBackgroundScheduler` remains the rescore source of truth; mirror its debt into
-    /// `syncJob` so all owed work is visible in one place.
+    /// Mirror an in-flight/deferred legacy rescore mark into `syncJob`. Absence of that UserDefaults mark
+    /// must not clear a row stamped by a productive history chunk; the database row is now the earlier,
+    /// durable source of truth for work that has not started yet.
     private func mirrorRescoreDebt(store: WhoopStore) async {
         if RescoreBackgroundScheduler.isRescoreOwed,
            let token = RescoreBackgroundScheduler.currentOwedToken {
             try? await store.mirrorRescoreJob(token: token)
-        } else {
-            try? await store.clearJob(kind: SyncJobKind.rescore.rawValue)
         }
     }
 

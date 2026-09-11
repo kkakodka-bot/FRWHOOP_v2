@@ -437,6 +437,14 @@ public final class LiveState: ObservableObject {
     /// came — i.e. caught up). Drives the sync tile + the staleness nudge.
     @Published public var lastSyncedAt: TimeInterval?
 
+    /// Monotonic terminal-burst signal for expensive post-offload work. Unlike `lastSyncedAt`, this also
+    /// covers a productive idle timeout and fires only after auto-continuation has decided the backlog is
+    /// finished. Intermediate HISTORY_COMPLETE slices never bump it.
+    @Published public var postOffloadBurstCompleted: UInt64 = 0
+    /// True across the short false→true gaps between auto-continued sessions. Durable debts may accrue,
+    /// but foreground/background wakes defer them until the terminal decision clears this flag.
+    @Published public var postOffloadBurstInProgress = false
+
     /// Set when an offload ended abnormally (the idle watchdog fired — the strap went quiet mid-sync),
     /// so a stalled history download isn't silent. Cleared by the next successful HISTORY_COMPLETE.
     /// Process-local on purpose (mirrors Android, ed6a31d): the next connect / 15-min tick re-offloads

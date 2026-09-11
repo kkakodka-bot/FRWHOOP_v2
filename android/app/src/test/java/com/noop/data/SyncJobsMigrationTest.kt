@@ -4,7 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** GRDB `v44-sync-jobs` twin (Room v38). Schema parity only — SyncEngine is Apple-side for now. */
+/** GRDB `v44-sync-jobs` twin (Room v38), now used for durable Android post-offload debt. */
 class SyncJobsMigrationTest {
 
     @Test

@@ -12,9 +12,35 @@ protocol BackfillStoreWriting: AnyObject {
     func insert(_ streams: Streams, deviceId: String) async throws
         -> (hr: Int, rr: Int, events: Int, battery: Int,
             spo2: Int, skinTemp: Int, resp: Int, gravity: Int)
+    /// Insert AND, when any scoring row actually landed, upsert the durable post-offload debts in the
+    /// same transaction. Production `WhoopStore` implements this atomically (safe-trim invariant: a
+    /// crash between rows and debt must roll both back so the unacked chunk replays). Test/replay
+    /// stores use the non-atomic default below; nothing in production takes it.
+    @discardableResult
+    func insertAndMarkJobsOwed(_ streams: Streams, deviceId: String,
+                               postOffloadJobKinds: [String],
+                               note: String?) async throws -> BackfillInsertOutcome
     func enqueueRawBatch(_ meta: RawBatchMeta, frames: [[UInt8]]) async throws
     func setCursor(_ name: String, _ value: Int) async throws
     func cursor(_ name: String) async throws -> Int?
+    @discardableResult
+    func markJobsOwed(kinds: [String], note: String?) async throws -> [String: String]
+}
+
+/// Test/replay stores do not own the app's post-offload pipeline. Production `WhoopStore` supplies
+/// the durable atomic implementation; these defaults keep the narrow spy stores source-compatible.
+extension BackfillStoreWriting {
+    @discardableResult
+    func insertAndMarkJobsOwed(_ streams: Streams, deviceId: String,
+                               postOffloadJobKinds: [String],
+                               note: String? = nil) async throws -> BackfillInsertOutcome {
+        let counts = try await insert(streams, deviceId: deviceId)
+        let tokens = try await markJobsOwed(kinds: postOffloadJobKinds, note: note)
+        return BackfillInsertOutcome(counts: counts, markedJobs: !tokens.isEmpty)
+    }
+
+    @discardableResult
+    func markJobsOwed(kinds: [String], note: String?) async throws -> [String: String] { [:] }
 }
 
 extension WhoopStore: BackfillStoreWriting {}
@@ -210,6 +236,9 @@ final class Backfiller {
     /// on EVERY export, not only in Connection mode. Called UNCONDITIONALLY (it is observability, not gated)
     /// once per distinct layout this session. Default nil (inert) so tests / non-prod inits are untouched.
     private let firmwareLayout: ((Int) -> Void)?
+    /// Durable post-offload work to stamp after a chunk inserts new biometric rows and before trim ack.
+    /// Raw string values keep this state machine independent of app-only scheduling types.
+    private let postOffloadJobKinds: [String]
 
     init(store: BackfillStoreWriting,
          deviceId: String,
@@ -224,6 +253,7 @@ final class Backfiller {
          connectionActive: @escaping () -> Bool = { false },
          connectionLog: ((String) -> Void)? = nil,
          firmwareLayout: ((Int) -> Void)? = nil,
+         postOffloadJobKinds: [String] = [SyncJobKind.rescore.rawValue],
          // The default (prod) Extractor reads the opt-in HR-from-PPG sub-lag interpolation flag (Test Centre →
          // Experimental algorithms) at decode time and threads it into the pure decoder, so the pure package
          // never reaches for UserDefaults. Default OFF = byte-identical to today. Tests inject their own seam.
@@ -241,6 +271,7 @@ final class Backfiller {
         self.connectionActive = connectionActive
         self.connectionLog = connectionLog
         self.firmwareLayout = firmwareLayout
+        self.postOffloadJobKinds = postOffloadJobKinds
         self.extract = extract
     }
 
@@ -716,16 +747,23 @@ final class Backfiller {
             // has already absorbed part of it.
             let rrCensus = RrEmissionStats.compute(decoded.rr.map { (ts: $0.ts, rrMs: $0.rrMs) })
             do {
-                counts = try await store.insert(decoded, deviceId: deviceId)
-                onBankedOffload(counts)
+                // The durable debt is part of the SAME transaction as the decoded rows (safe trim): if the
+                // job upsert fails, the insert rolls back too and this chunk stays on the strap for replay.
+                let outcome = try await store.insertAndMarkJobsOwed(
+                    decoded,
+                    deviceId: deviceId,
+                    postOffloadJobKinds: postOffloadJobKinds,
+                    note: "historical rows committed before trim=\(trim)")
+                counts = outcome.counts
             } catch {
-                // Diag (#601): the decoded rows couldn't be written — this is the "history stalls but live HR
-                // works" class. We return WITHOUT acking so the strap keeps this chunk and re-sends it next
-                // session (no data loss), but a silent return left a strap log with no trace of the stall.
-                log?("Backfill: failed to persist decoded rows (trim=\(trim)): \(error) — holding ack so the strap re-sends this chunk; history won't advance until the write succeeds.")
+                // Diag (#601): the decoded rows and/or the post-offload debt couldn't be written — we
+                // return WITHOUT acking so the strap keeps this chunk and re-sends everything next
+                // session (no data loss, and the debt is re-recorded with the rows).
+                log?("Backfill: failed to persist decoded rows/debt (trim=\(trim)): \(error) — holding ack so the strap re-sends this chunk; history won't advance until the write succeeds.")
                 persistStalled = true   // #57: stall ALL further acks so an empty END can't advance past this
                 return
             }
+            onBankedOffload(counts)
             // Success-side observability (#150): tally what actually persisted so the session can emit
             // "persisted N rows (M with motion) across K night(s)" — the win-rate signal a log never had.
             let tally = Backfiller.chunkTally(counts: counts, timestamps: decoded.gravity.map(\.ts) + decoded.hr.map(\.ts))

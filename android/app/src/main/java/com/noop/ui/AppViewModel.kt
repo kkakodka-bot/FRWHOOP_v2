@@ -37,6 +37,8 @@ import androidx.health.connect.client.HealthConnectClient
 import com.noop.data.DailyMetric
 import com.noop.data.CycleTrackingStore
 import com.noop.data.HrSample
+import com.noop.data.SyncJobKind
+import com.noop.data.SyncWakeReason
 import com.noop.data.WhoopRepository
 import com.noop.data.WorkoutRow
 import com.noop.ingest.ActivityFileImporter
@@ -808,6 +810,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val salvageProbeLifecycleCallbacks = object : Application.ActivityLifecycleCallbacks {
         override fun onActivityResumed(activity: android.app.Activity) {
             ble.salvageProbeIfBondLoopPaused()
+            ble.resumeOwedPostBackfillWork(SyncWakeReason.FOREGROUND)
             // #386 self-heal: nudge the analyze loop so a night the killed overnight tick never scored is
             // caught up now. Gated + coalesced downstream, so a healthy resume costs one fingerprint read.
             analyzeKick.trySend(Unit)
@@ -1115,6 +1118,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                         NoopPrefs.setTsHealPending(appContext, false)
                     }
                 }.onFailure { if (it is kotlin.coroutines.cancellation.CancellationException) throw it }
+                // Historical chunks atomically mark durable rescore debt. Let the single post-offload
+                // drain own that pass instead of racing it from this 15-minute backstop mid-burst. A failed
+                // prior drain is retried here through the same token-safe runner.
+                val durableRescoreOwed = runCatching { repository.owedSyncJobs() }
+                    .getOrDefault(emptyList())
+                    .any { it.kind == SyncJobKind.RESCORE.rawValue }
+                if (durableRescoreOwed) {
+                    ble.resumeOwedPostBackfillWork(SyncWakeReason.IDLE_BACKSTOP)
+                    withTimeoutOrNull(ANALYZE_INTERVAL_MS) { analyzeKick.receive() }
+                    continue
+                }
+
                 // #836 parity (Android): the 15-min tick is a backstop, not a data-driven refresh. Every real
                 // update (sync, import, edit, recalibrate, the #547 heal above) rescores via its own path and
                 // moves the complete raw-input fingerprint, so skip the heavy 21-day rescore when every scoring stream is unchanged

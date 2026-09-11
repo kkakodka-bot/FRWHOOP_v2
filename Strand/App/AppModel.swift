@@ -355,25 +355,14 @@ final class AppModel: ObservableObject {
             self.ble.setKeepRealtimeForData(PuffinExperiment.keepRealtimeForDataEnabled)
             self.applyPowerSaving()
         }.store(in: &hrCancellables)
-        // A completed backfill has just written strap history. Refresh the dashboard cache,
-        // but leave heavyweight analysis to its own guarded/background-friendly path.
-        //
-        // #755 COALESCE: a strap whose firmware segments a deep offload into many small HISTORY_COMPLETE
-        // slices stamps `lastSyncedAt` once PER slice (BLEManager.exitBackfilling), seconds apart, for the
-        // whole multi-minute download. Without coalescing each slice fired refreshAfterCompletedBackfill()
-        // , a full repo.refresh (~50 store reads) + analyzeRecent , and every one re-fired TodayView's
-        // ~50-read loadAll, all contending with the backfill's bulk writes on the single-connection store.
-        // On a heavy + actively-syncing history that stacked into a ~10s freeze. `.debounce` collapses the
-        // slice storm: it suppresses the intermediate emissions and fires ONCE, 2s after the stream goes
-        // quiet , i.e. after the LAST slice lands (the backfill is done). Crucially it ALWAYS delivers the
-        // trailing edge, so the dashboard still refreshes with the newly-synced data , freshness is kept,
-        // we just stop re-doing it dozens of times mid-download. removeDuplicates() still drops a slice that
-        // stamped an identical second; the trailing refresh after a real change is never dropped.
-        live.$lastSyncedAt
+        // Heavy post-offload work follows the BLE manager's terminal BURST decision, not the display-only
+        // `lastSyncedAt`. A deep oldest-first backlog may emit many HISTORY_COMPLETE slices or productive
+        // timeouts; each can immediately auto-continue. The manager publishes this monotonic counter only
+        // when the continuation predicate finally stops (caught up, duplicate/frozen/future/cap). Productive
+        // chunks have already stamped durable syncJob rows before trim ack, so a disconnect publishes no
+        // false final event and a later foreground/background wake can resume those debts.
+        live.$postOffloadBurstCompleted
             .dropFirst()
-            .compactMap { $0 }
-            .removeDuplicates()
-            .debounce(for: .seconds(2), scheduler: DispatchQueue.main)
             .sink { [weak self] _ in
                 Task { [weak self] in await self?.refreshAfterCompletedBackfill() }
             }
@@ -423,6 +412,9 @@ final class AppModel: ObservableObject {
             }
             #endif
             await self.repo.refresh()                          // surface any imported data at once
+            // A link can drop after a productive chunk stamped syncJob debt but before the terminal-burst
+            // event. Resume that durable handoff on launch; this is a no-op when no job is owed.
+            await self.syncEngine.drain(reason: .stateRestoration)
             await self.wireSourceCoordinator()                 // dormant unless a generic strap is active
             await self.recordAppVersionChangeIfNeeded()        // #1410: stamp an update transition once
             try? await Task.sleep(nanoseconds: 6_000_000_000)  // give the first offload a moment
@@ -646,14 +638,17 @@ final class AppModel: ObservableObject {
         guard RescoreBackgroundScheduler.isRescoreOwed else { return }
         live.append(log: "re-score: resuming a pass an earlier attempt could not finish (#1538)")
         await intelligence.analyzeRecent()
-        #if os(iOS)
-        // The deferred pass is the one that finally produces today's score, and it runs with no UI
-        // attached — so publish the snapshot here too, for the same reason the post-offload path does.
-        await WidgetSnapshot.publish(from: self)
-        #endif
+        // Export surfaces remain owed in SyncEngine and run only after the captured rescore token settles.
     }
 
     private func refreshAfterCompletedBackfill() async {
+        // Terminal empty/duplicate sessions still publish the BLE boundary so an earlier durable burst can
+        // flush. If no job is owed, there is no earlier productive work: avoid a 120-day refresh and the
+        // rest of the expensive tail for a phantom/console-only completion.
+        guard await syncEngine.hasOwedWork() else {
+            live.append(log: "Backfill: burst terminal with no new durable rows; downstream drain skipped")
+            return
+        }
         live.append(log: "Backfill: refreshing dashboard cache from completed sync")
         await repo.refresh(days: 120)
         await deriveCurrentHRV()

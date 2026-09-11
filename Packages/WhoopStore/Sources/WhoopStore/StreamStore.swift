@@ -2,6 +2,23 @@ import Foundation
 import GRDB
 import WhoopProtocol
 
+/// Result of the Backfiller's atomic insert-and-mark call: the per-stream actual insert counts
+/// (rows that were NOT already present) plus whether durable post-offload jobs were written for
+/// this chunk. `markedJobs` is decided inside the same transaction from the SAME counts, so the
+/// job rows can never disagree with what actually landed.
+public struct BackfillInsertOutcome: Sendable {
+    public var counts: (hr: Int, rr: Int, events: Int, battery: Int,
+                        spo2: Int, skinTemp: Int, resp: Int, gravity: Int)
+    public var markedJobs: Bool
+
+    public init(counts: (hr: Int, rr: Int, events: Int, battery: Int,
+                         spo2: Int, skinTemp: Int, resp: Int, gravity: Int),
+                markedJobs: Bool) {
+        self.counts = counts
+        self.markedJobs = markedJobs
+    }
+}
+
 extension WhoopStore {
     /// Deterministic JSON for an event payload (sorted keys so the same payload always
     /// serializes byte-identically, important for the natural-key dedupe and parity).
@@ -178,12 +195,63 @@ extension WhoopStore {
                 ppgWaveformPruneEveryRows: Int = WhoopStore.ppgWaveformPruneEveryRows) async throws
         -> (hr: Int, rr: Int, events: Int, battery: Int,
             spo2: Int, skinTemp: Int, resp: Int, gravity: Int) {
+        try await insertAndMarkIfNeeded(
+            streams,
+            deviceId: deviceId,
+            postOffloadJobKinds: [],
+            note: nil,
+            v18AuxRetentionRows: v18AuxRetentionRows,
+            v18AuxPruneEveryRows: v18AuxPruneEveryRows,
+            ppgWaveformRetentionRows: ppgWaveformRetentionRows,
+            ppgWaveformPruneEveryRows: ppgWaveformPruneEveryRows
+        ).counts
+    }
+
+    /// Backfill-only atomic variant: insert the decoded streams and, when any scoring input actually
+    /// landed, upsert the durable post-offload `syncJob` rows in the SAME transaction. A throw rolls
+    /// everything back, so the Backfiller holds the trim ack and an unacked chunk replayed after
+    /// process death re-inserts its still-absent rows and re-records the debt. Mirrors Android's
+    /// atomic `WhoopRepository.insert(... markPostBackfillDebt = true)`.
+    ///
+    /// `synced`-relevant columns are untouched (see `insert(_:deviceId:)`); only the `syncJob` rows are
+    /// new here. `BackfillInsertOutcome.markedJobs` tells the Backfiller whether this chunk generated a
+    /// fresh generation of downstream work.
+    @discardableResult
+    public func insertAndMarkJobsOwed(_ streams: Streams, deviceId: String,
+                                      postOffloadJobKinds: [String],
+                                      note: String? = nil) async throws -> BackfillInsertOutcome {
+        try await insertAndMarkIfNeeded(
+            streams,
+            deviceId: deviceId,
+            postOffloadJobKinds: postOffloadJobKinds,
+            note: note,
+            v18AuxRetentionRows: WhoopStore.v18AuxRetentionRows,
+            v18AuxPruneEveryRows: WhoopStore.v18AuxPruneEveryRows
+        )
+    }
+
+    /// The single write transaction behind both entry points. `postOffloadJobKinds` upserts one fresh
+    /// token per kind on the first chunk that inserts a scoring row; a duplicate-only replay inserts
+    /// zero rows and therefore neither refreshes nor removes the debt.
+    @discardableResult
+    private func insertAndMarkIfNeeded(_ streams: Streams, deviceId: String,
+                                       postOffloadJobKinds: [String],
+                                       note: String?,
+                                       v18AuxRetentionRows: Int,
+                                       v18AuxPruneEveryRows: Int,
+                                       ppgWaveformRetentionRows: Int = WhoopStore.ppgWaveformRetentionRows,
+                                       ppgWaveformPruneEveryRows: Int = WhoopStore.ppgWaveformPruneEveryRows
+    ) async throws -> BackfillInsertOutcome {
         // Banked rows, accumulated across batches so the sweep does not run on every one.
         var v18Written = 0
         var ppgWaveformWritten = 0
-        let result: (Int, Int, Int, Int, Int, Int, Int, Int) = try syncWrite { db in
+        let result: (counts: (Int, Int, Int, Int, Int, Int, Int, Int), markedJobs: Bool)
+            = try syncWrite { db in
             var hr = 0, rr = 0, ev = 0, bat = 0
             var spo2 = 0, skin = 0, resp = 0, grav = 0
+            var stepsInserted = 0
+            var sleepStateInserted = 0
+            var ppgHrInserted = 0
             // Reuse one prepared statement per table instead of recompiling the same SQL on every
             // row. This is the hottest write path (every Collector.flush + every Backfiller chunk
             // over potentially millions of historical rows). cachedStatement persists the compiled
@@ -315,12 +383,11 @@ extension WhoopStore {
                     INSERT INTO stepSample (deviceId, ts, counter, activityClass) VALUES (?, ?, ?, ?)
                     ON CONFLICT(deviceId, ts) DO NOTHING
                     """)
-                var insertedSteps = 0
                 var insertedStepTimestamps: [Int] = []
                 for s in streams.steps {
                     try stmt.execute(arguments: [deviceId, s.ts, s.counter, s.activityClass])
                     let inserted = db.changesCount
-                    insertedSteps += inserted
+                    stepsInserted += inserted
                     if inserted > 0 { insertedStepTimestamps.append(s.ts) }
                 }
                 stepDataRevision.record(deviceId: deviceId, insertedTimestamps: insertedStepTimestamps)
@@ -338,6 +405,7 @@ extension WhoopStore {
                     """)
                 for s in streams.sleepState {
                     try stmt.execute(arguments: [deviceId, s.ts, s.state, s.rawByte])
+                    sleepStateInserted += db.changesCount
                 }
             }
             // PPG-derived HR from the v26 optical buffer (#156). Persist-only, same as steps, the count
@@ -351,6 +419,7 @@ extension WhoopStore {
                     """)
                 for s in streams.ppgHr {
                     try stmt.execute(arguments: [deviceId, s.ts, s.bpm, s.conf])
+                    ppgHrInserted += db.changesCount
                 }
             }
             // RAW v26 optical PPG waveform (#156 follow-up) — the samples `ppgHr` above is derived FROM.
@@ -385,7 +454,29 @@ extension WhoopStore {
                     v18Written += 1
                 }
             }
-            return (hr, rr, ev, bat, spo2, skin, resp, grav)
+            // The debt decision lives on the ACTUAL insert counts (including streams the 8-field tuple
+            // does not carry): a duplicate-only replay inserts zero rows and must neither eat the debt
+            // nor refresh it. Every stream that appears in the scoring fingerprint is represented here.
+            let scoringInserted = hr + rr + ev + spo2 + skin + resp + grav
+                + stepsInserted + sleepStateInserted + ppgHrInserted
+            var markedJobs = false
+            if scoringInserted > 0, !postOffloadJobKinds.isEmpty {
+                let now = Int(Date().timeIntervalSince1970)
+                let stmt = try db.cachedStatement(sql: """
+                    INSERT INTO syncJob (kind, owedAt, token, attempts, lastNote)
+                    VALUES (?, ?, ?, 0, ?)
+                    ON CONFLICT(kind) DO UPDATE SET
+                        owedAt = excluded.owedAt,
+                        token = excluded.token,
+                        attempts = 0,
+                        lastNote = excluded.lastNote
+                    """)
+                for kind in postOffloadJobKinds {
+                    try stmt.execute(arguments: [kind, now, UUID().uuidString, note])
+                }
+                markedJobs = true
+            }
+            return (counts: (hr, rr, ev, bat, spo2, skin, resp, grav), markedJobs: markedJobs)
         }
 
         // Rolling retention is amortised. The delete finds the Nth-newest row by rank, so it walks up to
@@ -430,7 +521,7 @@ extension WhoopStore {
                 ppgWaveformRowsSincePrune[deviceId] = 0
             }
         }
-        return result
+        return BackfillInsertOutcome(counts: result.counts, markedJobs: result.markedJobs)
     }
 
     // MARK: - Raw sensor CSV export (diagnostic)

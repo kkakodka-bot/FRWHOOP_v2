@@ -49,7 +49,7 @@ enum CloudPushPeriodicScheduler {
                 lastRunAt = Date()
                 lock.unlock()
             }
-            await CloudPushWorker.runOnce(db: db, trigger: reason)
+            _ = await CloudPushWorker.runOnce(db: db, trigger: reason)
         }
         pendingTask = task
         lock.unlock()

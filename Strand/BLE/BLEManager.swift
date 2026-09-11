@@ -1457,6 +1457,11 @@ public final class BLEManager: NSObject, ObservableObject {
         // The store can finish bootstrapping AFTER connect(model:) already ran (both wait on
         // poweredOn), so apply the family/clock configuration here too — whichever runs last wins.
         configureCollectorFamily()
+        #if os(iOS)
+        let postOffloadJobKinds = SyncJobKind.allCases.map(\.rawValue)
+        #else
+        let postOffloadJobKinds = [SyncJobKind.rescore.rawValue]
+        #endif
         backfiller = Backfiller(store: store, deviceId: deviceId,
                                 ackTrim: { [weak self] trim, endData in
                                     self?.ackHistoricalChunk(trim: trim, endData: endData)
@@ -1484,7 +1489,8 @@ public final class BLEManager: NSObject, ObservableObject {
                                 connectionLog: { [weak self] s in self?.state.append(log: s, domain: .connection) },
                                 // UNIVERSAL clock-drift: bank the strap's historical layout so the export's
                                 // universal clock-drift line is firmware-aware on every export. Unconditional.
-                                firmwareLayout: { [weak self] v in self?.state.setStrapFirmwareLayout(v) })
+                                firmwareLayout: { [weak self] v in self?.state.setStrapFirmwareLayout(v) },
+                                postOffloadJobKinds: postOffloadJobKinds)
         // Strand: no server uploader/sync — all data stays on-device.
 
         // Retro-decode: when the decoder gains a historical layout (e.g. WHOOP 4.0 v25), re-run every
@@ -2478,6 +2484,7 @@ public final class BLEManager: NSObject, ObservableObject {
         backfiller.begin(family: selectedModel.deviceFamily, continuedAfterRows: consecutiveAutoContinues > 0)
         backfilling = true
         state.backfilling = true
+        state.postOffloadBurstInProgress = true
         state.syncChunksThisSession = 0
         state.rejectedFramesThisSession = 0
         state.rejectedFramesUnarchived = 0
@@ -2720,6 +2727,10 @@ public final class BLEManager: NSObject, ObservableObject {
         // never a fresh `backfiller.sessionRowsPersisted` re-read that a re-kicked session / trailing frames
         // could have mutated across the offload boundary.
         let persistedSensorRows = (backfiller?.sessionRowsPersisted ?? 0) > 0
+        let successfulDataExit = BacklogBurstDrainPolicy.committedDataExit(
+            historyComplete: reason == "HISTORY_COMPLETE",
+            timedOut: reason == "timeout",
+            persistedSensorRows: persistedSensorRows)
         if persistedSensorRows { consecutiveEmptyOffloads = 0 }
         else if consecutiveAutoContinues == 0 { consecutiveEmptyOffloads += 1 }
         if reason == "HISTORY_COMPLETE" {
@@ -2906,7 +2917,15 @@ public final class BLEManager: NSObject, ObservableObject {
             // Snapshotting `> 0` = the auto-continue can't disagree with the empty verdict, and a dup-only
             // re-offload (0 new rows) stops instead of spinning on already-synced data.
             maybeAutoContinueBackfill(trimAdvanced: trimAdvanced,
-                                      persistedSensorRows: persistedSensorRows)
+                                      persistedSensorRows: persistedSensorRows,
+                                      successfulDataExit: successfulDataExit)
+        } else {
+            // User abort is terminal too. It never changes lastSyncedAt, but rows from this or an earlier
+            // auto-continued slice are already durable and must not leave the burst gate latched forever.
+            state.postOffloadBurstInProgress = false
+            if persistedSensorRows || consecutiveAutoContinues > 0 {
+                state.postOffloadBurstCompleted &+= 1
+            }
         }
     }
 
@@ -2921,30 +2940,24 @@ public final class BLEManager: NSObject, ObservableObject {
     /// `trimAdvanced` is the spin-detector signal computed in exitBackfilling (did this session move the
     /// trim cursor vs the previous one) — passed in because exitBackfilling has already advanced
     /// `lastSessionEndTrim` past the comparison point by the time this Task runs.
-    private func maybeAutoContinueBackfill(trimAdvanced: Bool, persistedSensorRows: Bool) {
-        // Cheap pre-checks first (no Task if we already know we won't continue): still connected, under
-        // the cap, and the trim moved. The frontier read only happens when those already hold.
-        guard state.connected, state.bonded else { return }
+    private func maybeAutoContinueBackfill(trimAdvanced: Bool, persistedSensorRows: Bool,
+                                               successfulDataExit: Bool) {
         let newest = strapNewestTs
         let count = consecutiveAutoContinues
+        let linkUsableAtExit = state.connected && state.bonded
+        guard BacklogBurstDrainPolicy.action(
+            linkUsable: linkUsableAtExit,
+            anotherSessionInFlight: false,
+            continuationAllowed: true) != .deferUntilWake else {
+            // Productive chunks already recorded durable syncJob rows before their trim ack. A disconnect
+            // deliberately emits no process-local final event; launch/foreground/background maintenance
+            // will drain those rows when execution is reliable again.
+            return
+        }
+
         Task { @MainActor in
             let frontier = await collector?.latestHRSampleTs() ?? nil
-            let wallNow = Int(Date().timeIntervalSince1970)   // #928: real wall clock, at decision time
-            // #1164: publish whether the strap has banked records newer than our local frontier, so the
-            // Today Rest card can show "Pending sync" instead of a provisional number. Same behind check
-            // the auto-continue predicate uses (5-min gap), computed here because this is the one path
-            // that already reads both values. Caught-up (or unknown) → false, never a stale "pending".
-            // #1164 + #928/#1012 + #1144: the bare gap is not enough. Both traps that
-            // `shouldAutoContinue` guards against latch this flag TRUE forever, which would pin Rest to
-            // "Pending sync" and never show a score — strictly worse than the provisional number this
-            // exists to hide.
-            //  - a strap whose clock is set in the FUTURE reads ahead of ANY frontier, so the gap never
-            //    closes (there is a user-facing banner for exactly that state);
-            //  - a PHANTOM gap (a timestamp the strap will not actually offload, a console-only tail, a
-            //    dup re-offload) advertises newer data while banking no new rows, so the frontier cannot
-            //    advance and the gap stays open. `persistedSensorRows` is the same evidence #1144 added to
-            //    the auto-continue predicate for this exact latch; a caught-up strap is already false via
-            //    the gap, so gating on it only bites the phantom case.
+            let wallNow = Int(Date().timeIntervalSince1970)
             if let n = newest, let f = frontier {
                 state.historyPendingSync =
                     !BackfillContinuation.isFutureDatedNewest(n, wallNowUnix: wallNow)
@@ -2952,47 +2965,48 @@ public final class BLEManager: NSObject, ObservableObject {
                     && (n - f) > BackfillContinuation.defaultBehindGapSeconds
             }
             let stillConnected = state.connected && state.bonded
-            guard BackfillContinuation.shouldAutoContinue(
+            let continuationAllowed = BackfillContinuation.shouldAutoContinue(
                 stillConnected: stillConnected,
                 strapNewestTs: newest,
                 ourFrontierTs: frontier,
                 wallNowUnix: wallNow,
                 persistedSensorRows: persistedSensorRows,
                 lastTrimAdvanced: trimAdvanced,
-                consecutiveCount: count) else {
-                // #1012: name the stop honestly when the future-clock gate is what ended the chain —
-                // without this line the log just goes quiet after one pass and a strap-log export can't
-                // tell "caught up" from "future-dated range refused". Fires ONLY when 2b would otherwise
-                // have continued (still connected, rows banked, trim advanced, under the cap), so a
-                // frozen-trim / cap / disconnect stop is never misattributed to the clock.
+                consecutiveCount: count)
+            let action = BacklogBurstDrainPolicy.action(
+                linkUsable: stillConnected,
+                anotherSessionInFlight: backfilling,
+                continuationAllowed: continuationAllowed)
+
+            switch action {
+            case .deferUntilWake:
+                return
+            case .continueBurst:
+                // A periodic/foreground session may have won the await race. It owns the next terminal
+                // decision, so this completed slice must not publish a false final-burst event.
+                guard continuationAllowed, !backfilling else { return }
+                consecutiveAutoContinues += 1
+                log("Backfill: auto-continuing (#364/#451) — the trim advanced and the strap is still handing over real records (frontier \(frontier.map(String.init) ?? "?"), strap-reported newest \(newest.map(String.init) ?? "?")); re-kicking offload \(consecutiveAutoContinues)/\(BackfillContinuation.defaultMaxAutoContinues) without waiting the 15-min floor.")
+                requestSync(.autoContinue)
+            case .finishBurst:
                 if stillConnected, persistedSensorRows, trimAdvanced,
                    count < BackfillContinuation.defaultMaxAutoContinues,
                    BackfillContinuation.isFutureDatedNewest(newest, wallNowUnix: wallNow) {
                     let aheadH = ((newest ?? wallNow) - wallNow) / 3600
                     log("Backfill: not auto-continuing (#1012) - the strap-reported newest banked record reads \(aheadH)h AHEAD of the wall clock, so the range is future-dated and the strap clock is likely wrong (#928). Stopping after one pass instead of chasing future-dated ranges; the periodic sync keeps draining across connects.")
                 }
-                // No re-kick. THIS is the real "we're done draining" signal (#25): clear the auto-continue
-                // streak so the NEXT deep backlog (e.g. after the app's been off again) gets a fresh budget
-                // of re-kicks. Reset here — NOT unconditionally on every HISTORY_COMPLETE — so a strap that
-                // slices one offload into many completions can't keep resetting the cap and spin forever.
-                // EXCEPTION: if we stopped because the per-connection CAP is hit, leave the streak at/over
-                // the cap so it STAYS engaged for the rest of this connection (the 15-min floor takes over);
-                // zeroing it here would immediately re-arm the cap and let a runaway strap spin again.
+                // Do not re-arm a cap that ended a pathological burst. Every other terminal condition gets
+                // a fresh budget for the next independent backlog.
                 if count < BackfillContinuation.defaultMaxAutoContinues {
                     consecutiveAutoContinues = 0
                 }
-                return
+                log("Backfill: burst terminal — downstream work ready (successfulExit=\(successfulDataExit ? "yes" : "no"), rows=\(persistedSensorRows ? "yes" : "no"))")
+                state.postOffloadBurstInProgress = false
+                state.postOffloadBurstCompleted &+= 1
+                #if os(iOS)
+                SyncMaintenanceBackgroundScheduler.scheduleIfNeeded()
+                #endif
             }
-            // Guard against a race: a real backfill may already have re-started (periodic/connect) in the
-            // gap before this Task ran. requestSync's own gate (!backfilling) handles that, but skip the
-            // log/counter churn if so.
-            guard !backfilling else { return }
-            consecutiveAutoContinues += 1
-            log("Backfill: auto-continuing (#364/#451) — the trim advanced and the strap is still handing over real records (frontier \(frontier.map(String.init) ?? "?"), strap-reported newest \(newest.map(String.init) ?? "?")); re-kicking offload \(consecutiveAutoContinues)/\(BackfillContinuation.defaultMaxAutoContinues) without waiting the 15-min floor.")
-            // .autoContinue bypasses the BackfillPolicy floor (the whole point — don't wait 15 min);
-            // requestSync still re-checks connected/bonded/not-backfilling before kicking, and the
-            // consecutive-cap above is the runaway guard.
-            requestSync(.autoContinue)
         }
     }
 
@@ -5839,8 +5853,20 @@ extension BLEManager: @preconcurrency CBCentralManagerDelegate {
         // fresh budget of back-to-back re-kicks and starts its trim-advance comparison from scratch.
         consecutiveAutoContinues = 0
         lastSessionEndTrim = nil
+        let interruptedBacklogBurst = BacklogBurstDrainPolicy.shouldPublishAfterDisconnect(
+            burstInProgress: state.postOffloadBurstInProgress)
         backfilling = false
         state.backfilling = false
+        state.postOffloadBurstInProgress = false
+        if interruptedBacklogBurst {
+            // Rows from completed chunks already carry durable syncJob tokens. Wake the tail once now that
+            // no further slice can arrive on this link; if iOS suspends it, syncmaintenance/foreground sees
+            // the same still-owed tokens and resumes safely.
+            state.postOffloadBurstCompleted &+= 1
+            #if os(iOS)
+            SyncMaintenanceBackgroundScheduler.scheduleIfNeeded()
+            #endif
+        }
         state.historyPendingSync = false   // #1164: a stale "pending" must not outlive the link
         state.syncChunksThisSession = 0
         // A mid-sync disconnect bypasses exitBackfilling, so clear the reject counters here too —

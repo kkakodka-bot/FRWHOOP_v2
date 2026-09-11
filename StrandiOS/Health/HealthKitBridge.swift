@@ -712,7 +712,9 @@ final class HealthKitBridge: ObservableObject {
         guard auth == .authorized else { return true }
         guard !syncing else {
             writeBackPending = true
-            return true
+            // The coalesced follow-up is process-local. Report deferred so SyncEngine keeps its captured
+            // durable token; a suspension before finishHealthPass must not turn queued work into success.
+            return false
         }
         syncing = true
         defer { finishHealthPass() }

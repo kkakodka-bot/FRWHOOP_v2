@@ -80,7 +80,6 @@ struct StrandiOSApp: App {
         // the long, deferrable kind rather than the metered refresh kind the two schedulers above use.
         // Registered before launch finishes and permitted in project.yml, or iOS never delivers it.
         RescoreBackgroundScheduler.register { [weak model] in
-            await model?.runDeferredRescoreIfOwed()
             await model?.syncEngine.drain(reason: .backgroundTask)
         }
         CloudPushBackgroundScheduler.register { [weak model] in
@@ -321,7 +320,6 @@ struct StrandiOSApp: App {
                 // and the watch showing stale numbers for the entire re-score every time the app is
                 // opened, which is a worse regression than the bug being fixed. `analyzeRecent`
                 // serialises itself, so overlapping with the sync this foreground also kicks off is safe.
-                Task { await model.runDeferredRescoreIfOwed() }
                 Task { await model.syncEngine.drain(reason: .foreground) }
                 Task {
                     health.refreshAuthIfPreviouslyGranted()

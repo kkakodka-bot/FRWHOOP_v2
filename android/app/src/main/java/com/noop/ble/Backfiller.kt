@@ -570,7 +570,7 @@ class Backfiller(
                 // emission can be measured, since every existing R-R number is taken after the conflict
                 // key has already absorbed part of it.
                 val rrCensus = com.noop.analytics.RrEmissionStats.compute(decoded.rr.map { it.ts.toInt() to it.rrMs })
-                val counts = repository.insert(decoded, deviceId)
+                val counts = repository.insert(decoded, deviceId, markPostBackfillDebt = true)
                 onBankedOffload(counts)
                 committed = decoded
                 // Success-side observability (#150): tally what actually persisted so the session can emit
@@ -909,6 +909,10 @@ interface TrimCursorStore {
     suspend fun get(name: String): Long?
 }
 
+internal fun requireDurableCursorCommit(committed: Boolean) {
+    check(committed) { "Could not persist backfill trim cursor" }
+}
+
 /** Default [TrimCursorStore] backed by a private SharedPreferences file. */
 class PrefsTrimCursorStore(context: Context) : TrimCursorStore {
     private val prefs = context.applicationContext
@@ -916,7 +920,7 @@ class PrefsTrimCursorStore(context: Context) : TrimCursorStore {
 
     override suspend fun set(name: String, value: Long) {
         // commit() (synchronous) so durability is established before we ack the strap.
-        prefs.edit().putLong(name, value).commit()
+        requireDurableCursorCommit(prefs.edit().putLong(name, value).commit())
     }
 
     override suspend fun get(name: String): Long? =

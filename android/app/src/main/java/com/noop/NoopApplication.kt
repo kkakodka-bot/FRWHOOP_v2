@@ -15,6 +15,10 @@ import com.noop.data.WhoopRepository
 import com.noop.ui.NoopPrefs
 import com.noop.ui.AppLanguagePrefs
 import com.noop.push.SelfHostedPushScheduler
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 
 /**
@@ -33,6 +37,8 @@ import kotlinx.coroutines.runBlocking
  */
 class NoopApplication : Application() {
 
+    private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     override fun attachBaseContext(base: Context) {
         super.attachBaseContext(AppLanguagePrefs.wrap(base))
         // UI resource lookup is intentionally available before onCreate: data-driven presentation
@@ -50,6 +56,13 @@ class NoopApplication : Application() {
         // #1008: pin the pre-change Overnight-only default for existing installs before anything
         // reads it. Idempotent; a no-op on fresh installs and on every launch after the first.
         com.noop.ui.NoopPrefs.migrateContinuousHrvOvernightDefault(this)
+        // Productive history inserts mark syncJob in the same Room transaction before the strap ACK.
+        // Re-open the process-level BLE owner only when debt survived a prior process, then drain it.
+        applicationScope.launch {
+            if (runCatching { repository.hasOwedSyncJobs() }.getOrDefault(false)) {
+                ble.resumeOwedPostBackfillWork()
+            }
+        }
     }
 
     /** Process-wide Room-backed store. One instance shared by the UI and the background service. */

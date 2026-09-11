@@ -85,19 +85,33 @@ extension WhoopStore {
     /// captured. Re-marking the same kind replaces the token so a stale pass cannot clear new work.
     @discardableResult
     public func markJobOwed(kind: String, note: String? = nil) async throws -> String {
-        let token = UUID().uuidString
+        try await markJobsOwed(kinds: [kind], note: note)[kind] ?? ""
+    }
+
+    /// Atomically record a set of post-offload debts. Each kind receives a fresh token, and all rows
+    /// commit together. This is used by the historical safe-trim path: downstream work becomes durable
+    /// after decoded rows land but before the strap is allowed to discard the chunk.
+    @discardableResult
+    public func markJobsOwed(kinds: [String], note: String? = nil) async throws -> [String: String] {
+        let uniqueKinds = Array(Set(kinds.filter { !$0.isEmpty })).sorted()
+        guard !uniqueKinds.isEmpty else { return [:] }
+        let tokens = Dictionary(uniqueKeysWithValues: uniqueKinds.map { ($0, UUID().uuidString) })
         let now = Int(Date().timeIntervalSince1970)
         try syncWrite { db in
-            try db.execute(sql: """
+            let statement = try db.cachedStatement(sql: """
                 INSERT INTO syncJob (kind, owedAt, token, attempts, lastNote)
                 VALUES (?, ?, ?, 0, ?)
                 ON CONFLICT(kind) DO UPDATE SET
                     owedAt = excluded.owedAt,
                     token = excluded.token,
+                    attempts = 0,
                     lastNote = excluded.lastNote
-                """, arguments: [kind, now, token, note])
+                """)
+            for kind in uniqueKinds {
+                try statement.execute(arguments: [kind, now, tokens[kind], note])
+            }
         }
-        return token
+        return tokens
     }
 
     /// Mirror an external rescore debt without minting a new token — `RescoreBackgroundScheduler`
@@ -143,12 +157,19 @@ extension WhoopStore {
         }
     }
 
-    /// Bump the attempt counter before starting a stage pass.
-    public func recordJobAttempt(kind: String) async throws {
+    /// Bump the attempt counter before starting a stage pass. When a token is supplied, a stale pass
+    /// cannot charge its attempt to a newer generation that arrived after the pass captured its inputs.
+    public func recordJobAttempt(kind: String, token: String? = nil) async throws {
         try syncWrite { db in
-            try db.execute(sql: """
-                UPDATE syncJob SET attempts = attempts + 1 WHERE kind = ?
-                """, arguments: [kind])
+            if let token {
+                try db.execute(sql: """
+                    UPDATE syncJob SET attempts = attempts + 1 WHERE kind = ? AND token = ?
+                    """, arguments: [kind, token])
+            } else {
+                try db.execute(sql: """
+                    UPDATE syncJob SET attempts = attempts + 1 WHERE kind = ?
+                    """, arguments: [kind])
+            }
         }
     }
 

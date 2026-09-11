@@ -437,4 +437,43 @@ final class BackfillContinuationTests: XCTestCase {
         XCTAssertTrue(BackfillContinuation.derivesClockCorrelation(.whoop4))
         XCTAssertFalse(BackfillContinuation.derivesClockCorrelation(.whoop5))
     }
+
+
+    // MARK: - Terminal backlog-burst handoff
+
+    func testIntermediateContinuationDoesNotFinishBurst() {
+        XCTAssertEqual(BacklogBurstDrainPolicy.action(
+            linkUsable: true, anotherSessionInFlight: false, continuationAllowed: true),
+            .continueBurst)
+        XCTAssertEqual(BacklogBurstDrainPolicy.action(
+            linkUsable: true, anotherSessionInFlight: true, continuationAllowed: false),
+            .continueBurst)
+    }
+
+    func testConnectedTerminalConditionsFinishBurst() {
+        // Caught-up completion, productive timeout, frozen trim, duplicate rows, future clock and cap all
+        // have continuationAllowed=false after the existing predicate classifies their detailed cause.
+        for _ in 0..<6 {
+            XCTAssertEqual(BacklogBurstDrainPolicy.action(
+                linkUsable: true, anotherSessionInFlight: false, continuationAllowed: false),
+                .finishBurst)
+        }
+    }
+
+    func testDisconnectDefersContinuationAndPublishesOneTerminalWake() {
+        XCTAssertEqual(BacklogBurstDrainPolicy.action(
+            linkUsable: false, anotherSessionInFlight: false, continuationAllowed: false),
+            .deferUntilWake)
+        XCTAssertTrue(BacklogBurstDrainPolicy.shouldPublishAfterDisconnect(burstInProgress: true))
+        XCTAssertFalse(BacklogBurstDrainPolicy.shouldPublishAfterDisconnect(burstInProgress: false))
+    }
+
+    func testProductiveTimeoutCountsAsCommittedWithoutChangingDisplayCompletion() {
+        XCTAssertTrue(BacklogBurstDrainPolicy.committedDataExit(
+            historyComplete: false, timedOut: true, persistedSensorRows: true))
+        XCTAssertFalse(BacklogBurstDrainPolicy.committedDataExit(
+            historyComplete: false, timedOut: true, persistedSensorRows: false))
+        XCTAssertTrue(BacklogBurstDrainPolicy.committedDataExit(
+            historyComplete: true, timedOut: false, persistedSensorRows: false))
+    }
 }

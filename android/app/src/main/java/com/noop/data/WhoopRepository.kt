@@ -317,6 +317,10 @@ data class InsertCounts(
     val gravity: Int = 0,
 )
 
+internal fun shouldMarkPostBackfillDebt(counts: InsertCounts, sleepStateInserted: Int): Boolean =
+    counts.hr + counts.rr + counts.events + counts.spo2 + counts.skinTemp + counts.steps +
+        counts.resp + counts.gravity + sleepStateInserted > 0
+
 data class StepTimestampCoverage(val firstTs: Long?, val lastTs: Long?)
 
 internal fun newlyInsertedStepTimestamps(timestamps: List<Long>, rowIds: List<Long>): List<Long> =
@@ -506,6 +510,8 @@ class WhoopRepository(
         v18AuxPruneEveryRows: Int = V18_AUX_PRUNE_EVERY_ROWS,
         ppgWaveformRetentionRows: Int = PPG_WAVEFORM_RETENTION_ROWS,
         ppgWaveformPruneEveryRows: Int = PPG_WAVEFORM_PRUNE_EVERY_ROWS,
+        /** Backfiller-only: atomically coalesce post-offload stage debt with productive raw inserts. */
+        markPostBackfillDebt: Boolean = false,
     ): InsertCounts {
         if (streams.isEmpty) return InsertCounts()
 
@@ -517,6 +523,7 @@ class WhoopRepository(
                 v18AuxPruneEveryRows = v18AuxPruneEveryRows,
                 ppgWaveformRetentionRows = ppgWaveformRetentionRows,
                 ppgWaveformPruneEveryRows = ppgWaveformPruneEveryRows,
+                markPostBackfillDebt = markPostBackfillDebt,
             )
         }
         val counts = result.counts
@@ -551,6 +558,7 @@ class WhoopRepository(
         v18AuxPruneEveryRows: Int,
         ppgWaveformRetentionRows: Int,
         ppgWaveformPruneEveryRows: Int,
+        markPostBackfillDebt: Boolean,
     ): InsertResult {
         val hrIds = if (streams.hr.isEmpty()) emptyList() else
             dao.insertHr(streams.hr.map { HrSample(deviceId, it.ts, it.bpm) })
@@ -577,11 +585,10 @@ class WhoopRepository(
         // (0 wake/1 still/2 asleep/3 up), decoded and streamed but dropped at storage until now. Idempotent
         // by (deviceId, ts); not counted into InsertCounts (no consumer reads a count). The raw 0-3 code is
         // stored verbatim — a strap that never reports it inserts nothing.
-        if (streams.sleepState.isNotEmpty()) {
+        val sleepStateIds = if (streams.sleepState.isEmpty()) emptyList() else
             dao.insertSleepState(
                 streams.sleepState.map { SleepStateSampleEntity(deviceId, it.ts, it.state, it.rawByte) },
             )
-        }
         val respIds = if (streams.resp.isEmpty()) emptyList() else
             dao.insertResp(streams.resp.map { RespSample(deviceId, it.ts, it.raw) })
         val gravIds = if (streams.gravity.isEmpty()) emptyList() else
@@ -665,6 +672,21 @@ class WhoopRepository(
             resp = respIds.countInserted(),
             gravity = gravIds.countInserted(),
         )
+        // The debt rows are in THIS Room transaction with the raw rows. A process death can therefore
+        // expose either both or neither; it can never leave an ACKed productive chunk with no rescore debt.
+        // Battery-only chunks do not affect scoring and deliberately create no post-offload work.
+        val productiveForScoring = shouldMarkPostBackfillDebt(counts, sleepStateIds.countInserted())
+        if (markPostBackfillDebt && productiveForScoring) {
+            val now = System.currentTimeMillis() / 1000L
+            SyncDrainPolicy.stageOrder.forEach { kind ->
+                dao.markSyncJobOwed(
+                    kind = kind.rawValue,
+                    owedAt = now,
+                    token = java.util.UUID.randomUUID().toString(),
+                    lastNote = "historical chunk committed",
+                )
+            }
+        }
         return InsertResult(
             counts,
             newlyInsertedStepTimestamps(streams.steps.map { it.ts }, stepIds),
@@ -679,6 +701,15 @@ class WhoopRepository(
     /** Complete cross-device scoring-input change detector. Unlike [hrFingerprint], this also moves when
      * a trailing sleep-critical stream (especially gravity) lands after HR in the same history sync. */
     suspend fun analysisFingerprint(): String = dao.analysisFingerprint()
+
+    // MARK: - Durable post-offload sync debt
+
+    suspend fun owedSyncJobs(): List<SyncJobEntity> = dao.owedSyncJobs()
+    suspend fun hasOwedSyncJobs(): Boolean = dao.hasOwedSyncJobs()
+    suspend fun recordSyncJobAttempt(job: SyncJobEntity): Boolean =
+        dao.recordSyncJobAttempt(job.kind, job.token) > 0
+    suspend fun settleSyncJob(job: SyncJobEntity): Boolean =
+        dao.settleSyncJob(job.kind, job.token) > 0
 
     /** #1005 — per-day (device + window) HR fingerprint as (count, newestTs) for analyzeRecent's per-day
      *  reuse cache. Cheap COUNT/MAX aggregate, never a row fetch; mirrors Swift

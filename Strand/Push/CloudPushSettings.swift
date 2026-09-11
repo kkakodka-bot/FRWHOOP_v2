@@ -55,6 +55,13 @@ enum CloudPushSettings {
         return value
     }
 
+    /// The first-run consent record. The Terms overlay is visual-only (it renders ABOVE the engine),
+    /// so the data plane needs its own gate: no push may start until the current Terms version is
+    /// accepted. Key matches `ContentView`'s `@AppStorage("noop.acceptedTermsVersion")`.
+    static var termsAccepted: Bool {
+        UserDefaults.standard.string(forKey: "noop.acceptedTermsVersion") == Terms.currentVersion
+    }
+
     static var isEnabled: Bool {
         if UserDefaults.standard.object(forKey: K.enabled) == nil { return true }
         return UserDefaults.standard.bool(forKey: K.enabled)
@@ -77,7 +84,7 @@ enum CloudPushSettings {
         return UserDefaults.standard.bool(forKey: K.wifiOnly)
     }
 
-    static var ready: Bool { isEnabled && isConfigured }
+    static var ready: Bool { isEnabled && termsAccepted && isConfigured }
 
     private static var isConfigured: Bool {
         guard case .valid = PushEndpointPolicy.validate(endpointText) else { return false }
@@ -112,7 +119,7 @@ enum CloudPushSettings {
     }
 
     static func enabledEndpoint() -> PushValidEndpoint? {
-        guard isEnabled else { return nil }
+        guard isEnabled, termsAccepted else { return nil }
         guard case .valid(let endpoint) = PushEndpointPolicy.validate(endpointText) else { return nil }
         return endpoint
     }

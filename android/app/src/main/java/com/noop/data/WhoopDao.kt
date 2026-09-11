@@ -89,6 +89,37 @@ internal const val DAY_STREAM_FINGERPRINT_SQL =
 @Dao
 interface WhoopDao : DeviceRegistryDao {
 
+    // MARK: - Durable post-offload sync debt
+
+    @Query("""
+        INSERT INTO syncJob (kind, owedAt, token, attempts, lastNote)
+        VALUES (:kind, :owedAt, :token, 0, :lastNote)
+        ON CONFLICT(kind) DO UPDATE SET
+            owedAt = excluded.owedAt,
+            token = excluded.token,
+            attempts = 0,
+            lastNote = excluded.lastNote
+    """)
+    suspend fun markSyncJobOwed(
+        kind: String,
+        owedAt: Long,
+        token: String,
+        lastNote: String?,
+    )
+
+    @Query("SELECT * FROM syncJob ORDER BY owedAt ASC")
+    suspend fun owedSyncJobs(): List<SyncJobEntity>
+
+    @Query("SELECT EXISTS(SELECT 1 FROM syncJob)")
+    suspend fun hasOwedSyncJobs(): Boolean
+
+    @Query("UPDATE syncJob SET attempts = attempts + 1 WHERE kind = :kind AND token = :token")
+    suspend fun recordSyncJobAttempt(kind: String, token: String): Int
+
+    /** Compare-token delete: a pass can settle only the exact debt it captured. */
+    @Query("DELETE FROM syncJob WHERE kind = :kind AND token = :token")
+    suspend fun settleSyncJob(kind: String, token: String): Int
+
     // MARK: - Device
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)

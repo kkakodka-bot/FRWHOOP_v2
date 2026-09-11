@@ -2,6 +2,14 @@ import Foundation
 import GRDB
 import NoopPush
 
+/// Result of one bounded cloud-push attempt. The orchestrator settles a captured token only for a
+/// terminal outcome; busy/network/continuation exits keep the durable debt.
+enum CloudPushRunOutcome: Equatable {
+    case completed
+    case deferred
+    case terminalFailure
+}
+
 /// Runs one bounded cloud-push cycle after a successful offload or manual trigger.
 enum CloudPushWorker {
     private static let maxDevicesPerRun = 4
@@ -21,9 +29,9 @@ enum CloudPushWorker {
         trigger: String,
         markOwed: (@Sendable () async -> Void)? = nil,
         settleOwed: (@Sendable () async -> Bool)? = nil
-    ) async {
-        guard CloudPushSettings.enabledEndpoint() != nil else { return }
-        guard !isRunning else { return }
+    ) async -> CloudPushRunOutcome {
+        guard CloudPushSettings.enabledEndpoint() != nil else { return .completed }
+        guard !isRunning else { return .deferred }
         isRunning = true
         defer { isRunning = false }
 
@@ -34,7 +42,7 @@ enum CloudPushWorker {
             )
             await markOwed?()
             CloudPushBackgroundScheduler.scheduleIfNeeded()
-            return
+            return .deferred
         }
         #endif
 
@@ -43,7 +51,7 @@ enum CloudPushWorker {
             CloudPushSettings.recordError(
                 String(localized: "The saved token is unavailable. Save it again.")
             )
-            return
+            return .terminalFailure
         }
 
         CloudPushSettings.recordRunning()
@@ -70,7 +78,10 @@ enum CloudPushWorker {
                     CloudPushSettings.recordError(message)
                 }
             }
-            return
+            if case .rejected(_, let retryable, _) = capabilitiesResult {
+                return retryable ? .deferred : .terminalFailure
+            }
+            return .terminalFailure
         }
         CloudPushSettings.recordCapabilities(endpoint: endpoint, capabilities: capabilities)
         let namespace = CloudPushSettings.progressNamespace(
@@ -120,13 +131,13 @@ enum CloudPushWorker {
             #if os(iOS)
             CloudPushBackgroundScheduler.scheduleIfNeeded()
             #endif
-            return
+            return .deferred
         }
         if run.rejectedBatches > 0 {
             CloudPushSettings.recordError(
                 CloudPushMessaging.pushFailureMessage(run.failure ?? PushFailure(code: .httpClient))
             )
-            return
+            return .terminalFailure
         }
         if !cycleCompleted || cycleNeedsAnotherPass {
             CloudPushSettings.recordContinuation()
@@ -134,9 +145,10 @@ enum CloudPushWorker {
             #if os(iOS)
             CloudPushBackgroundScheduler.scheduleIfNeeded()
             #endif
-            return
+            return .deferred
         }
         CloudPushSettings.recordSuccess()
         _ = await settleOwed?()
+        return .completed
     }
 }
