@@ -1,4 +1,4 @@
-// Test doubles for the push function tests — port of backend/tests/fixtures/rawObjectLane.mjs.
+// Test doubles for the push function tests — port of the retired Node receiver
 // The fake bucket is reached through the REAL ported createS3 signer, so presigning, SigV4 header
 // signing, key encoding, HEAD and GET all run for real; only the socket is faked.
 // `putViaPresignedUrl` is the device's leg: it accepts ONLY a URL carrying a valid unexpired
@@ -120,10 +120,13 @@ export function makeMemRest() {
     return tables.get(table)!;
   }
 
+  const deletedAuthUsers: string[] = [];
+
   return {
     configured: true,
     manifests,
     tables,
+    deletedAuthUsers,
 
     rowCount(table: string) {
       return table === 'object_manifests' ? manifests.size : rowsFor(table).length;
@@ -138,6 +141,7 @@ export function makeMemRest() {
       const keys = String(opts.onConflict || '').split(',').map((k) => k.trim()).filter(Boolean);
       const list = rowsFor(table);
       for (const r of incoming) {
+        if (r.id == null && !keys.includes('id')) r.id = crypto.randomUUID();
         const idx = keys.length
           ? list.findIndex((existing) => keys.every((k) => existing[k] === r[k]))
           : -1;
@@ -148,15 +152,38 @@ export function makeMemRest() {
     },
 
     async select(table: string, query = '') {
+      if (table !== 'object_manifests') {
+        // Minimal PostgREST filter support for non-manifest tables: key=eq.value and key=is.null.
+        const terms = String(query).split('&').map((x) => x.trim()).filter(Boolean);
+        const filters = terms
+          .filter((t) => t.includes('='))
+          .map((t) => {
+            const [k, v] = t.split('=');
+            return { k, v };
+          });
+        let rows = rowsFor(table);
+        for (const { k, v } of filters) {
+          if (v === 'is.null') rows = rows.filter((r) => r[k] == null);
+          else if (v.startsWith('eq.')) rows = rows.filter((r) => String(r[k]) === v.slice(3));
+        }
+        return rows;
+      }
       if (table === 'object_manifests') {
-        const id = /id=eq\.([^&]+)/.exec(query)?.[1];
+        const idm = /(?:^|&)id=eq\.([^&]+)/.exec(query);
+        const id = idm?.[1];
         if (id) return [manifests.get(id)].filter(Boolean);
-        const key = /object_key=eq\.([^&]+)/.exec(query)?.[1];
+        const keym = /(?:^|&)object_key=eq\.([^&]+)/.exec(query);
+        const key = keym?.[1];
         if (key) {
           const want = decodeURIComponent(key);
           return [...manifests.values()].filter((r) => r.object_key === want);
         }
-        return [...manifests.values()];
+        let rows = [...manifests.values()];
+        const daym = /(?:^|&)period_day=eq\.([^&]+)/.exec(query);
+        if (daym?.[1]) rows = rows.filter((r) => r.period_day === daym[1]);
+        const uidm = /(?:^|&)user_id=eq\.([^&]+)/.exec(query);
+        if (uidm?.[1]) rows = rows.filter((r) => r.user_id === uidm[1]);
+        return rows;
       }
       return rowsFor(table);
     },
@@ -166,6 +193,31 @@ export function makeMemRest() {
       if (method === 'PATCH' && id && path.startsWith('object_manifests')) {
         manifests.set(id, { ...manifests.get(id), ...body });
         return [manifests.get(id)];
+      }
+      return [];
+    },
+
+    async rpc(name: string, args: unknown = {}) {
+      return [];
+    },
+
+    async patch(table: string, body: any, query = '') {
+      const id = /id=eq\.([^&]+)/.exec(query)?.[1];
+      const list = rowsFor(table);
+      let changed: any[] = [];
+      const apply = (r: any) => {
+        const hit = { ...r, ...body };
+        // emulate the real PostgREST `revoked_at=is.null` guard: only update unrevoked rows
+        if (/revoked_at=is\.null/.test(query) && r.revoked_at) return null;
+        return hit;
+      };
+      if (id) {
+        const idx = list.findIndex((r) => r.id === id);
+        if (idx >= 0) {
+          const hit = apply(list[idx]);
+          if (hit) { list[idx] = hit; changed = [hit]; }
+        }
+        return changed;
       }
       return [];
     },
@@ -180,6 +232,11 @@ export function makeMemRest() {
       const [, column, bound] = lt;
       tables.set(table, list.filter((r) => Number(r[column]) >= Number(bound)));
       return [];
+    },
+
+    async adminDeleteAuthUser(userId: string) {
+      deletedAuthUsers.push(userId);
+      return { deleted: true, missing: false };
     },
   };
 }

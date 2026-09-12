@@ -1,4 +1,4 @@
-// Deno mirror of the capabilities/negotiation cases from backend/tests/rawObjectHousing.test.js,
+// Deno mirror of the capabilities/negotiation cases from the retired Node receiver,
 // plus NDJSON parse and ack parity from the Node pushRegistry suite.
 import assert from 'node:assert/strict';
 import {

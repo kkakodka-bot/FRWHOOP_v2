@@ -1,4 +1,4 @@
-// Port of backend/ingest/pushRegistry.js — stream registry, projections, NDJSON parse, acks.
+// Port of the retired Node receiver — stream registry, projections, NDJSON parse, acks.
 // This is the wire contract with the NOOP clients; keep semantics byte-identical with Node.
 import {
   dailyMetricRow,

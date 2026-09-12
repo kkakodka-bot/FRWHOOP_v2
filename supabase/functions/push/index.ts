@@ -1,4 +1,4 @@
-// NOOP push receiver as a Supabase Edge Function — port of backend/routes/push.js.
+// NOOP push receiver as a Supabase Edge Function — port of the retired Node receiver
 //
 // Routes (path after /functions/v1/push):
 //   GET  /                        capabilities (version negotiation + objectLane advert)
@@ -30,7 +30,7 @@ import { createPushReplacementStaging } from '../_shared/staging.ts';
 import { createSupabaseRest, restConfigFromEnv } from '../_shared/rest.ts';
 import { createS3 } from '../_shared/s3.ts';
 import { pushConfig, defaultReceiverStateId } from '../_shared/config.ts';
-import { IdentityError, resolvePushUser } from '../_shared/tokens.ts';
+import { IdentityError, resolvePushUser, createIngestTokenStore } from '../_shared/tokens.ts';
 
 const MAX_BODY_BYTES = 4 * 1024 * 1024 + 64 * 1024;
 
@@ -42,6 +42,7 @@ const OBJECT_LANE_PATH = '/functions/v1/push/objects';
 
 const cfg = pushConfig();
 const rest = createSupabaseRest({ cfg: restConfigFromEnv() });
+const ingestTokenStore = createIngestTokenStore({ rest });
 const raw = cfg.b2KeyId && cfg.b2ApplicationKey && cfg.b2Bucket && cfg.b2S3Endpoint
   ? createS3({
     endpoint: cfg.b2S3Endpoint,
@@ -243,5 +244,67 @@ Deno.serve(async (req: Request) => {
   if (req.method === 'POST' && completeMatch) {
     return handleObjectComplete(req, completeMatch[1]);
   }
+  if (req.method === 'POST' && sub === '/tokens') {
+    return handleTokenMint(req);
+  }
+  if (req.method === 'GET' && sub === '/tokens') {
+    return handleTokenList(req);
+  }
+  const tokenRevoke = /^\/tokens\/([^/]+)$/.exec(sub);
+  if (req.method === 'DELETE' && tokenRevoke) {
+    return handleTokenRevoke(req, tokenRevoke[1]);
+  }
   return json({ type: 'error', protocolVersion: '1.2', code: 'not_found' }, 404);
 });
+
+async function requireTokenStore() {
+  if (!ingestTokenStore.configured) {
+    return json({ error: 'ingest token store unavailable' }, 503);
+  }
+  return null;
+}
+
+async function handleTokenMint(req: Request): Promise<Response> {
+  const user = await authenticate(req);
+  const storeError = await requireTokenStore();
+  if (storeError) return storeError;
+  try {
+    let label = '';
+    try {
+      const body = await req.json();
+      label = (body?.label ?? '') as string;
+    } catch { /* empty body is fine */ }
+    const minted = await ingestTokenStore.mint({ userId: user.id, label });
+    return json({ token: minted.token, ...minted.row }, 201);
+  } catch (err: any) {
+    console.error('[push] mint ingest token failed:', err?.stack || err);
+    return json({ error: 'ingest_token_mint_failed' }, 500);
+  }
+}
+
+async function handleTokenList(req: Request): Promise<Response> {
+  const user = await authenticate(req);
+  const storeError = await requireTokenStore();
+  if (storeError) return storeError;
+  try {
+    const tokens = await ingestTokenStore.list({ userId: user.id });
+    return json({ tokens });
+  } catch (err: any) {
+    console.error('[push] list ingest tokens failed:', err?.stack || err);
+    return json({ error: 'ingest_token_list_failed' }, 500);
+  }
+}
+
+async function handleTokenRevoke(req: Request, id: string): Promise<Response> {
+  const user = await authenticate(req);
+  const storeError = await requireTokenStore();
+  if (storeError) return storeError;
+  try {
+    const revoked = await ingestTokenStore.revoke({ userId: user.id, id });
+    if (!revoked) return json({ error: 'ingest_token_not_found' }, 404);
+    return json(revoked);
+  } catch (err: any) {
+    console.error('[push] revoke ingest token failed:', err?.stack || err);
+    return json({ error: 'ingest_token_revoke_failed' }, 500);
+  }
+}

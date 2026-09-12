@@ -1,4 +1,4 @@
-// Port of backend/ingest/pushReplacementStaging.js with one deliberate change: the generation
+// Port of the retired Node receiver with one deliberate change: the generation
 // store is Postgres (noop_push_staging_parts) instead of process memory, because edge isolates
 // are stateless — an in-memory port would silently drop parts whenever two invocations of the
 // same window land on different isolates. The observable state machine (error codes, completion

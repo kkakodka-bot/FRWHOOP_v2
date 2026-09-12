@@ -1,4 +1,4 @@
-// Port of backend/storage/keys.js — push-lane subset. Keep byte-identical semantics with the
+// Port of the retired Node receiver — push-lane subset. Keep byte-identical semantics with the
 // Node original: object keys, retention classes, and archive specs are a cross-process contract.
 import { createHash } from 'node:crypto';
 
@@ -273,4 +273,31 @@ export function looksLikePii(value: unknown): boolean {
 export function periodParts(isoDay: unknown) {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(isoDay));
   return m ? { yyyy: m[1], mm: m[2], dd: m[3] } : null;
+}
+
+/** v1 subject prefix. Mirrors the retired Node receiver userPrefix. */
+export function userPrefix(userId: string): string {
+  if (!isUuid(userId)) throw new Error('user id must be a uuid');
+  return `v1/users/${userId}/`;
+}
+
+/** v2 subject prefix. */
+export function userPrefixV2(userId: string): string {
+  if (!isUuid(userId)) throw new Error('user id must be a uuid');
+  return `v2/users/${userId}/`;
+}
+
+/**
+ * Every prefix a subject's bytes can live under. Per-subject deletion walks this list, so a new
+ * retention class that is not listed here leaves objects behind that no delete request can reach.
+ * RETENTION_CLASS is the source of truth; v3 entries are derived from it.
+ */
+export function allUserPrefixes(userId: string): string[] {
+  if (!isUuid(userId)) throw new Error('user id must be a uuid');
+  const classes = [...new Set(Object.values(RETENTION_CLASS))].sort();
+  return [
+    userPrefix(userId),
+    userPrefixV2(userId),
+    ...classes.map((cls) => `v3/${cls}/users/${userId}/`),
+  ];
 }

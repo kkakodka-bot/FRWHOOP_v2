@@ -23,7 +23,7 @@ Wire framing, acknowledgement rules, and the v1.1 stream registry live in
 
 ## B2 key scheme
 
-Hourly archives use FRWHOOP's v3 layout from `backend/storage/keys.js`:
+Hourly archives use FRWHOOP's v3 layout from `supabase/functions/_shared/keys.ts`:
 
 ```text
 v3/{retentionClass}/users/{userId}/devices/{deviceId}/{b2Stream}/{YYYY}/{MM}/{DD}/{HH}/{objectId}.{ext}
@@ -123,25 +123,24 @@ Existing tables reused with NOOP-shaped upserts (no server-side scoring):
 - Per-subject delete reaches B2 objects, `object_manifests`, and Supabase rows.
 - No PHI in logs.
 
-## Environment wiring (FRWHOOP backend vs NOOP client)
+## Environment wiring (Supabase Edge vs NOOP client)
 
-**B2 and Supabase keys stay server-side** in `backend/.env` (or the repo-root `.env` — `storage/config.js` aliases `PROJECT_URL` → `SUPABASE_URL`, `KEY_ID` → `B2_KEY_ID`, etc.). The phone never receives these.
+**B2 and Supabase keys stay server-side** in Supabase Edge Function secrets (`supabase secrets set …`) or the repo-root `.env` for local `supabase functions serve --env-file`. The phone never receives these.
 
 | Variable | Where | Purpose |
 |---|---|---|
-| `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` | `backend/.env` | Server upserts + `object_manifests` |
-| `B2_KEY_ID`, `B2_APPLICATION_KEY`, `B2_BUCKET`, `B2_S3_ENDPOINT`, `B2_REGION` | `backend/.env` | Hourly archive upload |
-| `INGEST_SECRET` | `backend/.env` | Engine RPC shared secret (settings sync, scoring) — **not** NOOP push identity |
-| `FRWHOOP_ALLOW_DEV_USER`, `FRWHOOP_LOCAL_USER_ID` | `backend/.env` (dev) | Dev-only: maps `INGEST_SECRET` bearer → fixed user UUID for local push smoke tests |
+| `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` | Edge secrets / root `.env` | PostgREST upserts + `object_manifests` |
+| `B2_KEY_ID`, `B2_APPLICATION_KEY`, `B2_BUCKET`, `B2_S3_ENDPOINT`, `B2_REGION` | Edge secrets / root `.env` | Hourly archive upload |
+| `WORKER_SECRET` | Edge secrets + Vault `edge_worker_secret` | pg_cron worker bearer (retention, reconcile, deletion) |
 
-**NOOP client (Deliverable 3)** stores only:
+**NOOP client** stores only:
 
 | Setting | Example | Notes |
 |---|---|---|
-| Push endpoint | `http://<mac-lan-ip>:8080/api/push` | `GET` capabilities + `POST` batches |
-| Bearer token | opaque ingest token from `POST /api/push/tokens` | Mint once while signed into FRWHOOP; Keychain, `kSecAttrAccessibleAfterFirstUnlock` |
+| Push endpoint | `https://<project-ref>.supabase.co/functions/v1/push` | `GET` capabilities + `POST` batches |
+| Bearer token | opaque ingest token from `POST /functions/v1/push/tokens` | Mint while signed in; Keychain / EncryptedSharedPreferences |
 
-Android Experimental push (already in tree): Settings → Self-hosted push → endpoint URL + token. iOS transport (`Strand/Push/`) is still TODO; the backend route is live for `hrSample` first.
+Apple (`Strand/Push/CloudPushView.swift`) and Android Experimental push ship pointed at the hosted Edge receiver.
 
 ### Apply Supabase migration
 
@@ -152,22 +151,10 @@ supabase db push   # or run supabase/migrations/20260907133000_noop_hr_samples.s
 ### Smoke test
 
 ```bash
-cd backend
-npm ci
-npm test -- tests/ingestTokens.test.js tests/pushIngest.test.js
-npm start
-# Sign into FRWHOOP, mint: curl -H "Authorization: Bearer <jwt>" -X POST localhost:8080/api/push/tokens -d '{"label":"phone"}'
-# Configure NOOP push endpoint to http://localhost:8080/api/push with the returned opaque token
-```
-
-### Docker (production-shaped)
-
-TLS terminates at your reverse proxy (Caddy, nginx, Traefik, platform load balancer). The container listens on plain HTTP port 8080.
-
-```bash
-# Repo-root .env supplies Supabase/B2 secrets (see backend/.env.example for the full list).
-docker compose up --build -d
-curl -fsS http://localhost:8080/health
+cd supabase/functions && deno test --allow-all tests/
+supabase functions serve push --env-file ../../.env
+# Mint: curl -H "Authorization: Bearer <jwt>" -X POST http://127.0.0.1:54321/functions/v1/push/tokens -d '{"label":"phone"}'
+BASE_URL=http://127.0.0.1:54321/functions/v1/push AUTH=noop_... node Tools/push-conformance/push-conformance.mjs
 ```
 
 | File | Role |
@@ -177,4 +164,4 @@ curl -fsS http://localhost:8080/health
 | `Packages/WhoopStore/Tests/.../CloudIngestionRegistryTests.swift` | GRDB coverage test |
 | `android/.../CloudIngestionRegistryTest.kt` | Room/schema-oracle coverage test |
 | `docs/PUSH_PROTOCOL.md` | Wire contract v1.1 |
-| `backend/storage/keys.js` | B2 stream registry (extended in Deliverable 4) |
+| `supabase/functions/_shared/keys.ts` | B2 stream registry |

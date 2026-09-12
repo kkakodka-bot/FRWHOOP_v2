@@ -119,12 +119,7 @@ tools/linux-capture/*.db-wal
 tools/linux-capture/*.db-shm
 tools/linux-capture/captures/
 
-# ── FRWHOOP backend (Node / Docker) ─────────────────────────────
-backend/node_modules/
-backend/data/
-backend/logs/
-backend/.env
-backend/.frwhoop-host-token
+# ── FRWHOOP hosted stack (Supabase / local CLI) ───────────────
 supabase/.temp/
 supabase/.branches/
 

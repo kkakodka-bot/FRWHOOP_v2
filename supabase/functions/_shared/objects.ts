@@ -1,4 +1,4 @@
-// Port of backend/ingest/pushObjects.js — the direct-to-bucket lane: intent, completion, and the
+// Port of the retired Node receiver — the direct-to-bucket lane: intent, completion, and the
 // coverage index. `verifyObjectDigest` deliberately stays in the Node backend (out-of-band job);
 // it is the only piece that needs zstd decompression, which keeps it out of the edge runtime.
 import {

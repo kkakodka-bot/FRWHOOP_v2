@@ -367,7 +367,7 @@ v18 â€” this is **v19**. The doc's schema table will be updated to reflect v10â€
 
 ## 13. Out of scope
 
-Background sync, webhooks, incremental "changed-since" diffing, a backend/token-proxy, OAuth-for-all-users
+Background sync, webhooks, incremental "changed-since" diffing, a hosted token-proxy, OAuth-for-all-users
 (BYO-app only for now), macOS, Android, and any change to NOOP's scoring math. All are reachable later behind
 the `AuthProvider` seam and the idempotent store upserts without reworking this lane.
 

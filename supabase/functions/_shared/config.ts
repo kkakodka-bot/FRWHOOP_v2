@@ -1,4 +1,4 @@
-// Edge-function config. Mirrors the names backend/storage/config.js resolves, sourced from the
+// Edge-function config. Mirrors the names the retired Node receiver resolves, sourced from the
 // function environment (platform-injected SUPABASE_* plus `supabase secrets` for B2).
 // Server-only: these values must never ship in a client bundle.
 
@@ -42,7 +42,7 @@ export function pushConfig(env: Record<string, string | undefined> = Deno.env.to
   };
 }
 
-/** Deterministic receiver id, ported from backend/routes/push.js defaultReceiverStateId. */
+/** Deterministic receiver id, ported from the retired Node receiver defaultReceiverStateId. */
 export function defaultReceiverStateId(cfg: { localUserId?: string; supabaseUrl?: string }): string {
   const seed = `${cfg?.localUserId || ''}|${cfg?.supabaseUrl || ''}|frwhoop-push`;
   let hash = 0;

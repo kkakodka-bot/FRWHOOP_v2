@@ -1,4 +1,4 @@
-// Port of backend/storage/s3.js — hand-rolled SigV4 for B2's S3-compatible API, path style.
+// Port of the retired Node receiver — hand-rolled SigV4 for B2's S3-compatible API, path style.
 // The functions need presignPut (object lane), head (completion check), and putObject (inline
 // archive). List/delete/discover stay in the Node backend's ops scripts.
 import { createHmac, createHash } from 'node:crypto';
@@ -184,6 +184,24 @@ export interface S3Config {
   style?: string;
 }
 
+
+/** S3 ListObjectsV2 parser (B2 returns XML). Mirrors the retired Node receiver */
+function parseListObjectsV2(xml: string): { keys: string[]; truncated: boolean; token: string | null } {
+  const keys: string[] = [];
+  const re = /<Key>([^<]+)<\/Key>/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(xml))) keys.push(m[1]);
+  const tag = (name: string) => {
+    const hit = new RegExp(`<${name}>([^<]+)</${name}>`).exec(xml);
+    return hit ? hit[1] : null;
+  };
+  return {
+    keys,
+    truncated: /<IsTruncated>\s*true\s*<\/IsTruncated>/i.test(xml),
+    token: tag('NextContinuationToken'),
+  };
+}
+
 export function createS3({
   endpoint,
   bucket,
@@ -249,6 +267,35 @@ export function createS3({
         throw new Error(`object put failed (${res.status}) ${text.slice(0, 180)}`);
       }
       return { etag: res.headers.get('etag'), bytes: buf.length };
+    },
+
+    async deleteObject(key: string) {
+      const { url, headers } = signedRequest({
+        method: 'DELETE', ...base, key, now: new Date(),
+      });
+      const res = await fetchImpl(url, { method: 'DELETE', headers });
+      if (res.status === 404) return { deleted: true, missing: true };
+      if (!res.ok) throw new Error('object delete failed');
+      return { deleted: true, missing: false };
+    },
+
+    async listPrefix(prefix: string) {
+      const keys: string[] = [];
+      let token: string | null = null;
+      for (let page = 0; page < 1000; page += 1) {
+        const query: Record<string, string> = { 'list-type': '2', prefix, 'max-keys': '1000' };
+        if (token) query['continuation-token'] = token;
+        const { url, headers } = signedRequest({
+          method: 'GET', ...base, key: '', now: new Date(), query,
+        });
+        const res = await fetchImpl(url, { method: 'GET', headers });
+        if (!res.ok) throw new Error('prefix list failed');
+        const parsed = parseListObjectsV2(await res.text());
+        keys.push(...parsed.keys);
+        if (!parsed.truncated || !parsed.token) return keys;
+        token = parsed.token;
+      }
+      return keys;
     },
   };
 }

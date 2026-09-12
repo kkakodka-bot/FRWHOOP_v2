@@ -48,3 +48,16 @@ enabled = true
 # ingest token), so the gateway's JWT verification must stay off — it would reject ingest tokens.
 [functions.push]
 verify_jwt = false
+
+# Scheduled workers + ops diagnostics use WORKER_SECRET or service-role bearer auth in-function.
+[functions.retention-sweep]
+verify_jwt = false
+
+[functions.reconcile]
+verify_jwt = false
+
+[functions.account-deletion]
+verify_jwt = false
+
+[functions.ingest-verify]
+verify_jwt = false

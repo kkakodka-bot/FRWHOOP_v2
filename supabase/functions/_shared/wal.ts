@@ -1,4 +1,4 @@
-// Port of backend/ingest/pushWalStore.js (Postgres backend) + pushWal.js facade +
+// Port of the retired Node receiver (Postgres backend) + pushWal.js facade +
 // pushIngestQuota.js. Durability lives in noop_push_wal / noop_push_acks / the two RPCs from
 // migration 20260907150000_noop_push_wal.sql — identical to the Node production path.
 import { PushProtocolError } from './registry.ts';

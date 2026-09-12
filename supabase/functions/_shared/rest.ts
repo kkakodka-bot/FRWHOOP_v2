@@ -1,4 +1,4 @@
-// Port of backend/persistence/supabaseRest.js — service-role PostgREST client.
+// Port of the retired Node receiver — service-role PostgREST client.
 // In the edge runtime SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY are injected by the platform;
 // locally they come from `supabase functions serve --env-file`.
 
@@ -87,6 +87,18 @@ export function createSupabaseRest({ cfg, fetchImpl = fetch }: { cfg: RestConfig
     },
     async rpc(name: string, args: unknown) {
       return request(`rpc/${name}`, { method: 'POST', body: args || {} });
+    },
+    async adminDeleteAuthUser(userId: string) {
+      const res = await fetchImpl(`${url}/auth/v1/admin/users/${userId}`, {
+        method: 'DELETE',
+        headers: {
+          apikey: cfg.supabaseServiceRoleKey,
+          authorization: `Bearer ${cfg.supabaseServiceRoleKey}`,
+        },
+      });
+      if (res.status === 404) return { deleted: true, missing: true };
+      if (!res.ok) throw new Error(`auth delete failed (${res.status})`);
+      return { deleted: true, missing: false };
     },
   };
 }

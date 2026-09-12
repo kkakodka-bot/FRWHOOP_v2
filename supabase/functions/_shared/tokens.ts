@@ -1,4 +1,4 @@
-// Port of backend/identity/ingestTokens.js + resolvePushUser.js, narrowed to the edge context:
+// Port of the retired Node receiver + resolvePushUser.js, narrowed to the edge context:
 // a bearer is either a Supabase Auth JWT (validated against auth/v1/user) or an opaque `noop_`
 // ingest token (SHA-256 lookup in noop_ingest_tokens). There is no dev-user or device-token
 // fallback here — the functions are always production.
@@ -89,4 +89,63 @@ export async function resolvePushUser({ headers, rest, supabaseUrl, anonKey, fet
     // Push auth must not fail because a best-effort last_used_at write missed.
   }
   return { id: row.user_id as string, email: null, source: 'ingest_token', tokenId: row.id };
+}
+
+/** Public shape of an ingest-token row (never the hash). Mirrors the retired Node receiver */
+export function publicIngestTokenRow(row: any): Record<string, unknown> | null {
+  if (!row) return null;
+  return {
+    id: row.id,
+    label: row.label || '',
+    createdAt: row.created_at,
+    lastUsedAt: row.last_used_at || null,
+    revokedAt: row.revoked_at || null,
+  };
+}
+
+/**
+ * Mint / list / revoke opaque `noop_` ingest tokens over the service-role REST client.
+ * Port of the retired Node receiver createIngestTokenStore — the Edge half of the
+ * token lifecycle that Phase 1 of the backend retirement adds (POST/GET/DELETE /tokens).
+ */
+/** Base64url (RFC 4648 §5) from raw bytes — mirrors Node Buffer.toString('base64url'). */
+function bytesToBase64Url(bytes: Uint8Array): string {
+  let bin = '';
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+export function createIngestTokenStore({ rest }: { rest: SupabaseRest }) {
+  return {
+    configured: rest.configured,
+    async mint({ userId, label = '' }: { userId: string; label?: string }) {
+      const bytes = new Uint8Array(32);
+      crypto.getRandomValues(bytes);
+      const token = `${INGEST_TOKEN_PREFIX}${bytesToBase64Url(bytes)}`;
+      const tokenHash = hashIngestToken(token);
+      const rows = await rest.upsert('noop_ingest_tokens', {
+        user_id: userId,
+        token_hash: tokenHash,
+        label: String(label || '').slice(0, 120),
+      });
+      const row = Array.isArray(rows) ? rows[0] : rows;
+      return { token, row: publicIngestTokenRow(row) };
+    },
+    async list({ userId }: { userId: string }) {
+      const rows = await rest.select(
+        'noop_ingest_tokens',
+        `user_id=eq.${userId}&order=created_at.desc&select=id,label,created_at,last_used_at,revoked_at`,
+      );
+      return (rows || []).map(publicIngestTokenRow);
+    },
+    async revoke({ userId, id }: { userId: string; id: string }) {
+      const rows = await rest.patch(
+        'noop_ingest_tokens',
+        { revoked_at: new Date().toISOString() },
+        `id=eq.${id}&user_id=eq.${userId}&revoked_at=is.null&select=id,label,created_at,last_used_at,revoked_at`,
+      );
+      const row = Array.isArray(rows) ? rows[0] : rows;
+      return publicIngestTokenRow(row);
+    },
+  };
 }

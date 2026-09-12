@@ -1,4 +1,4 @@
-// Port of backend/storage/manifests.js — object_manifests store + the idempotent completion helper.
+// Port of the retired Node receiver — object_manifests store + the idempotent completion helper.
 import type { SupabaseRest } from './rest.ts';
 
 export const READY_STATUSES = new Set(['verified', 'ready']);

@@ -1,4 +1,4 @@
-// Port of backend/ingest/pushIngest.js + pushArchive.js + pushDelete.js.
+// Port of the retired Node receiver + pushArchive.js + pushDelete.js.
 // acceptBatch: WAL commit → B2 archive → Supabase projection → ack. Scoring and frame decode are
 // intentionally absent, same as the Node push path. The observability counters (metrics.inc) are
 // a Node-process facility and are not ported.

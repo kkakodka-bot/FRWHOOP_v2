@@ -1,4 +1,4 @@
-// Port of backend/storage/retention.js — push-lane subset (lifecycle rules and the sweep stay in
+// Port of the retired Node receiver — push-lane subset (lifecycle rules and the sweep stay in
 // the Node backend; the functions only need per-stream expiry and the lane ceilings).
 import { OBJECT_LANE_STREAMS, retentionClassForStream } from './keys.ts';
 

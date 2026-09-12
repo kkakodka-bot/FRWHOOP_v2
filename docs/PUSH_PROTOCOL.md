@@ -304,7 +304,7 @@ rules as NDJSON batches (`protocolVersion`, `batchId`, `stream`, `deviceId`, `st
 then uploads to B2 and upserts `object_manifests`. Local `rawBatch` / waveform rows delete only after
 that acknowledgement.
 
-B2 keys follow FRWHOOP `backend/storage/keys.js`:
+B2 keys follow FRWHOOP `supabase/functions/_shared/keys.ts`:
 
 | Stream | Extension | Retention class |
 |---|---|---|

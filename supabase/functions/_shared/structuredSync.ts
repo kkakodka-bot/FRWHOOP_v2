@@ -1,4 +1,4 @@
-// Port of backend/storage/structuredSync.js — the three row builders the push projections use.
+// Port of the retired Node receiver — the three row builders the push projections use.
 // Row shapes feed daily_metrics / sessions directly; keep field-for-field identical to Node.
 import { createHash } from 'node:crypto';
 

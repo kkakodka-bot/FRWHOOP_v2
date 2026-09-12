@@ -1,4 +1,4 @@
-// Deno mirror of the portable cases in backend/tests/rawObjectHousing.test.js — the object-lane
+// Deno mirror of the portable cases in the retired Node receiver — the object-lane
 // state machine running on the PORTED modules (objects.ts, manifests.ts, s3.ts, keys.ts). The
 // reader/decode cases stay in Node with verifyObjectDigest; what is pinned here is the housing:
 // intents, resumes, refusals, coverage accounting.

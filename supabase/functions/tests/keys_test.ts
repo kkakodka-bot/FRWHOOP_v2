@@ -1,4 +1,4 @@
-// Deno mirror of the key-scheme cases from backend/tests/rawObjectHousing.test.js.
+// Deno mirror of the key-scheme cases from the retired Node receiver
 import assert from 'node:assert/strict';
 import {
   noopDeviceId,
