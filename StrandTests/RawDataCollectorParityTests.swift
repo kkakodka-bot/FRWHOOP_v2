@@ -28,6 +28,8 @@ final class RawDataCollectorParityTests: XCTestCase {
             "Strand/Collect/RawDataSessionStore.swift", "Strand/Collect/Collector.swift",
             "Strand/BLE/BLEManager.swift", "Strand/Screens/RawDataCollectorView.swift",
             "Strand/Collect/ImuSessionFileStore.swift",
+            "Strand/Collect/ImuContinuousRecorder.swift",
+            "Strand/Screens/ImuRecorderView.swift",
             "Packages/WhoopStore/Sources/WhoopStore/Database.swift",
             "Packages/WhoopStore/Sources/WhoopStore/StreamStore.swift",
             "Packages/WhoopStore/Sources/WhoopStore/RawOutbox.swift",

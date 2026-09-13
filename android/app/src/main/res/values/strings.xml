@@ -2768,4 +2768,46 @@
     <string name="units_kilometres">Kilometres</string>
     <string name="units_miles">Miles</string>
     <string name="units_follow_body">Follow body</string>
+
+    <!-- Developer Options → Record 100 Hz IMU locally (continuous recorder) -->
+    <string name="imu_recorder_title">IMU Recorder</string>
+    <string name="imu_recorder_subtitle">Continuous 100 Hz motion recording on this device.</string>
+    <string name="imu_recorder_developer_options">Developer Options</string>
+    <string name="imu_recorder_switch">Record 100 Hz IMU locally</string>
+    <string name="imu_recorder_blurb">Continuously record the strap\'s 100 Hz six-axis motion sensor until you turn this off. Separate from raw-frame retention and bounded sessions. Off by default.</string>
+    <string name="imu_recorder_open_details">Recording details, export &amp; storage</string>
+    <string name="imu_recorder_phase_off">Off</string>
+    <string name="imu_recorder_phase_off_stray">Off — but 100 Hz packets are still arriving</string>
+    <string name="imu_recorder_phase_off_pending">Off — hardware stop pending until reconnection</string>
+    <string name="imu_recorder_phase_waiting">On — waiting for a bonded WHOOP 5/MG</string>
+    <string name="imu_recorder_phase_no_packets">No 100 Hz packets observed — the strap may not be honoring the mode</string>
+    <string name="imu_recorder_phase_start_sent">Start sent — verifying 100 Hz packets…</string>
+    <string name="imu_recorder_phase_recording">Recording</string>
+    <string name="imu_recorder_phase_stop_sent">Stop command sent — waiting for packets to cease</string>
+    <string name="imu_recorder_last_packet">Last packet: %1$s</string>
+    <string name="imu_recorder_no_packets">No packets observed yet</string>
+    <string name="imu_recorder_recording_since">Recording since %1$s</string>
+    <string name="imu_recorder_stray_warning">100 Hz packets are arriving while off — another client may have armed the strap</string>
+    <string name="imu_recorder_low_disk">Writes paused — free disk space is low</string>
+    <string name="imu_recorder_coverage">Coverage</string>
+    <string name="imu_recorder_covered">Covered %1$d of %2$d seconds</string>
+    <string name="imu_recorder_gaps">Gaps: %1$d</string>
+    <string name="imu_recorder_first_gap">First gap: %1$s</string>
+    <string name="imu_recorder_gaps_real">Gaps are real: no samples are invented. Disconnects, background limits, and strap-side drops all show up here.</string>
+    <string name="imu_recorder_storage">Storage</string>
+    <string name="imu_recorder_disk_use">Disk use: %1$s</string>
+    <string name="imu_recorder_retention_limit">Retention limit</string>
+    <string name="imu_recorder_retention_policy">Oldest segments are evicted first when the limit is reached; the segment being written is never evicted. Evicted seconds stay evicted — late history cannot bring them back.</string>
+    <string name="imu_recorder_counters">Evicted segments: %1$d · Conflicts: %2$d · Duplicates skipped: %3$d</string>
+    <string name="imu_recorder_battery_warning">100 Hz recording drains the strap battery roughly 1.5–2.3× faster than normal wear (measured on a WHOOP 5.0).</string>
+    <string name="imu_recorder_export">Export recording</string>
+    <string name="imu_recorder_exporting">Building export…</string>
+    <string name="imu_recorder_delete_all">Delete all recorded data</string>
+    <string name="imu_recorder_delete_disabled">Turn recording off before deleting.</string>
+    <string name="imu_recorder_privacy_title">Privacy</string>
+    <string name="imu_recorder_privacy">This 100 Hz data stays on this device. It is never included in cloud push — exporting is the only way it leaves, and only when you choose it.</string>
+    <string name="imu_recorder_delete_title">Delete all IMU data?</string>
+    <string name="imu_recorder_delete_message">All continuously recorded 100 Hz data on this device will be deleted permanently.</string>
+    <string name="imu_recorder_delete_confirm">Delete</string>
+    <string name="imu_recorder_cancel">Cancel</string>
 </resources>

@@ -120,12 +120,59 @@ suggested archive name is `noop-5mg-raw-<session-id>.zip`.
 - The current evidence does **not** establish flash-retention, thermal, or BLE-airtime costs for
   continuous 24/7 100 Hz operation.
 - A one-hour workout/research capture succeeding does not establish that a 36-hour rolling recorder is
-  safe. Any future rolling buffer needs hardware measurements and an explicit retention policy.
+  safe. The continuous recorder below ships with an explicit retention policy, but the hardware
+  measurements for 24/7 100 Hz operation remain open — treat its battery/storage warnings as real.
 - The separately enabled protocol trace remains a general diagnostics tool. Starting a Raw Data
   Collector session does not enable it or duplicate its transport frames into the raw outbox.
 - Session capture has one source of truth for high-rate motion: its file-backed `.imus` segments.
 - Do not use arrival order as time, do not fill gaps silently, and do not claim 100 Hz coverage from
   packet count alone.
+
+## Continuous 100 Hz recording (Developer Options)
+
+**Status:** experimental, default off, local-only. Test Centre → Developer Options → "Record 100 Hz
+IMU locally" on both platforms. This is a separate producer from the bounded Raw Data Collector and
+from `enableRawCapture` (raw-frame retention): each has its own switch, its own state, and its own
+storage, and none of them can silently keep another running.
+
+### What the switch does
+
+- **On**: when a WHOOP 5/MG is bonded, the recorder sends the same verified hardware sequence as the
+  bounded collector (`START_RAW_DATA` + `TOGGLE_IMU_MODE [0x01, 0x01]`) and writes every verified
+  100 Hz second, keyed by strap timestamp, into its own time-segmented `.imus` store. An accepted
+  command is not recording: until the first valid packet arrives the state is "start sent, no packets
+  observed", and the start is re-sent on a bounded interval while the strap stays silent. The choice
+  persists across relaunch and reconnect and re-arms once per link after bonding.
+- **Off**: local writes cease immediately and the live segment is flushed/closed. When a link is up
+  the recorder sends `STOP_RAW_DATA` + `TOGGLE_IMU_MODE [0x01, 0x00]` even while `enableRawCapture`
+  remains on — without touching the HR/RR stream. When no link is up, Off persists as
+  "hardware stop pending" and the stop is sent before anything else on the next bond. Off never
+  re-arms. If packets continue after the stop, the stop is re-sent on a bounded cadence and the state
+  never claims "stopped" while packets flow; if the bounded collector owns the producer instead, the
+  recorder stands down without re-sending or alarming.
+
+### Storage, retention, and privacy
+
+- Samples live in a **separate store namespace** from bounded sessions
+  (`OpenWhoop/RawImuContinuous` / `raw-imu-continuous`, registry key `imu-continuous-windows[-v1]`).
+  The cloud push lane reads only the session store, so continuous-recorder data cannot leave the
+  device through it. Export is the only way data moves, and export is always user-initiated.
+- **Retention is explicit**: a user-selected cap (256 MiB–2 GiB, default 1 GiB). Eviction is
+  oldest-segment-first, never touches the live segment, and raises a per-device eviction floor so
+  late-arriving history for an evicted second is refused rather than silently regrowing the store.
+  The bounded collector's 50 MB `rawBatch` eviction never carries the only copy of this data.
+- **Dedup and conflicts**: a second is written once, keyed by strap timestamp; a replay of identical
+  bytes counts as a duplicate, and same-second different bytes surface as a conflict (first write
+  wins, conflict counted and logged).
+- **Coverage is honest**: the UI and the export report covered seconds and real gaps. A disconnect
+  shows as a gap unless verified offloaded history repairs it; nothing is invented or smoothed over.
+- **Delete all** is refused while the switch is On; turn the recorder off first.
+
+### Export
+
+The shareable ZIP contains `meta.json` (`sample_rate_hz: 100`, `local_only: true`, per-window covered
+seconds and gap counts), `imu-coverage.json` (per-window `missing_ranges`), and
+`imu/<window-id>/<segment>.imus`. Suggested name `noop-imu-continuous-<yyyyMMdd-HHmmss>.zip`.
 
 ## Implementation map
 
@@ -137,3 +184,7 @@ suggested archive name is `noop-5mg-raw-<session-id>.zip`.
 | Append/recovery window | `ImuSessionFileStore` | `ImuSessionFileStore` |
 | Canonical segmented storage/export | `ImuSessionFileStore` | `ImuSessionFileStore` |
 | Raw decoder | `Whoop5RawImu` in `WhoopProtocol` | `Whoop5RawImu` in `com.noop.protocol` |
+| Continuous recorder state machine | `Strand/Collect/ImuContinuousRecorder.swift` | `com.noop.testcentre.ImuContinuousRecorder` |
+| Continuous recorder UI | `Strand/Screens/ImuRecorderView.swift` | `com.noop.ui.ImuRecorderScreen` |
+| Continuous recorder BLE wiring | `BLEManager` (`imuRecorder`, `wireImuRecorder`) | `WhoopBleClient` (`continuousImuRecorder`) |
+| Continuous recorder store namespace | `ImuSessionFileStore.continuous` | `ImuSessionFileStore` `NAMESPACE_CONTINUOUS` |

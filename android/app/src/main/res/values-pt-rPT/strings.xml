@@ -2731,4 +2731,46 @@
     <string name="units_follow_body">Como medidas corporais</string>
     <string name="l10n_today_screen_pending_sync_cbe01f9e">Sincronização pendente</string>
     <string name="l10n_today_screen_strap_history_still_offloading_80140264">o histórico da bracelete ainda está a ser transferido</string>
+
+    <!-- Developer Options → Record 100 Hz IMU locally (continuous recorder) -->
+    <string name="imu_recorder_title">Gravador de IMU</string>
+    <string name="imu_recorder_subtitle">Gravação contínua de movimento a 100 Hz neste dispositivo.</string>
+    <string name="imu_recorder_developer_options">Opções de programador</string>
+    <string name="imu_recorder_switch">Gravar IMU a 100 Hz localmente</string>
+    <string name="imu_recorder_blurb">Grava continuamente o sensor de movimento de seis eixos a 100 Hz da pulseira até desativar. Separado da retenção de tramas brutas e das sessões limitadas. Desativado por predefinição.</string>
+    <string name="imu_recorder_open_details">Detalhes da gravação, exportação e armazenamento</string>
+    <string name="imu_recorder_phase_off">Desligado</string>
+    <string name="imu_recorder_phase_off_stray">Desligado — mas ainda estão a chegar pacotes de 100 Hz</string>
+    <string name="imu_recorder_phase_off_pending">Desligado — paragem de hardware pendente até à religação</string>
+    <string name="imu_recorder_phase_waiting">Ligado — à espera de um WHOOP 5/MG emparelhado</string>
+    <string name="imu_recorder_phase_no_packets">Nenhum pacote de 100 Hz observado — a pulseira pode não estar a honrar o modo</string>
+    <string name="imu_recorder_phase_start_sent">Início enviado — a verificar pacotes de 100 Hz…</string>
+    <string name="imu_recorder_phase_recording">A gravar</string>
+    <string name="imu_recorder_phase_stop_sent">Comando de paragem enviado — à espera que os pacotes cessem</string>
+    <string name="imu_recorder_last_packet">Último pacote: %1$s</string>
+    <string name="imu_recorder_no_packets">Ainda sem pacotes observados</string>
+    <string name="imu_recorder_recording_since">A gravar desde %1$s</string>
+    <string name="imu_recorder_stray_warning">Estão a chegar pacotes de 100 Hz com isto desligado — outro cliente pode ter ativado a pulseira</string>
+    <string name="imu_recorder_low_disk">Escrita em pausa — pouco espaço livre em disco</string>
+    <string name="imu_recorder_coverage">Cobertura</string>
+    <string name="imu_recorder_covered">%1$d de %2$d segundos cobertos</string>
+    <string name="imu_recorder_gaps">Lacunas: %1$d</string>
+    <string name="imu_recorder_first_gap">Primeira lacuna: %1$s</string>
+    <string name="imu_recorder_gaps_real">As lacunas são reais: nenhuma amostra é inventada. Desligamentos, limites em segundo plano e falhas do lado da pulseira aparecem aqui.</string>
+    <string name="imu_recorder_storage">Armazenamento</string>
+    <string name="imu_recorder_disk_use">Uso de disco: %1$s</string>
+    <string name="imu_recorder_retention_limit">Limite de retenção</string>
+    <string name="imu_recorder_retention_policy">Ao atingir o limite, os segmentos mais antigos são removidos primeiro; o segmento em escrita nunca é removido. Os segundos removidos permanecem removidos — o histórico tardio não os pode trazer de volta.</string>
+    <string name="imu_recorder_counters">Segmentos removidos: %1$d · Conflitos: %2$d · Duplicados ignorados: %3$d</string>
+    <string name="imu_recorder_battery_warning">A gravação a 100 Hz gasta a bateria da pulseira cerca de 1,5–2,3× mais depressa do que o uso normal (medido num WHOOP 5.0).</string>
+    <string name="imu_recorder_export">Exportar gravação</string>
+    <string name="imu_recorder_exporting">A criar exportação…</string>
+    <string name="imu_recorder_delete_all">Eliminar todos os dados gravados</string>
+    <string name="imu_recorder_delete_disabled">Desative a gravação antes de eliminar.</string>
+    <string name="imu_recorder_privacy_title">Privacidade</string>
+    <string name="imu_recorder_privacy">Estes dados de 100 Hz ficam neste dispositivo. Nunca são incluídos no envio para a nuvem — a exportação é a única forma de saírem, e apenas quando o escolher.</string>
+    <string name="imu_recorder_delete_title">Eliminar todos os dados de IMU?</string>
+    <string name="imu_recorder_delete_message">Todos os dados de 100 Hz gravados continuamente neste dispositivo serão eliminados permanentemente.</string>
+    <string name="imu_recorder_delete_confirm">Eliminar</string>
+    <string name="imu_recorder_cancel">Cancelar</string>
 </resources>

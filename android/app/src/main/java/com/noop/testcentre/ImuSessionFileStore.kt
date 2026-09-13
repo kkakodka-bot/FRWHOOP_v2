@@ -1,6 +1,7 @@
 package com.noop.testcentre
 
 import android.content.Context
+import android.content.SharedPreferences
 import com.noop.data.StreamPersistence
 import com.noop.protocol.Whoop5RawImu
 import com.noop.push.ImuPushRecord
@@ -16,13 +17,32 @@ import java.util.zip.Deflater
 import java.util.zip.Inflater
 
 /** Stores decoded 100 Hz IMU in fixed UTC half-hour segments owned by one capture session. */
-class ImuSessionFileStore(private val context: Context) : ImuSessionPushSource {
+class ImuSessionFileStore internal constructor(
+    private val prefs: SharedPreferences,
+    private val directory: File,
+    private val namespace: String = NAMESPACE_SESSIONS,
+) : ImuSessionPushSource {
+    constructor(context: Context, namespace: String = NAMESPACE_SESSIONS) : this(
+        context.getSharedPreferences(prefsName(namespace), Context.MODE_PRIVATE),
+        File(context.filesDir, dirName(namespace)),
+        namespace,
+    )
+
+    init { directory.mkdirs() }
+
     data class Stats(val bytes: Long, val coveredSeconds: Int, val firstTs: Long?)
     data class ExportSegment(val name: String, val data: ByteArray, val startTs: Long, val endTs: Long,
                              val sampleCount: Int)
+    /** Read-only projection of one registered capture window, for aggregating readers (the
+     * continuous recorder's coverage/export) that span more than one window. */
+    data class WindowInfo(val id: String, val deviceId: String, val from: Long, val to: Long?)
+    /** One on-disk segment's identity + size, for the continuous recorder's retention eviction. */
+    data class SegmentInfo(val id: String, val bucket: Long, val bytes: Long)
     private data class Record(val ts: Long, val receivedAtMs: Long, val columns: ShortArray)
-    private val prefs = context.getSharedPreferences("imu-session-windows", Context.MODE_PRIVATE)
-    private val directory = File(context.filesDir, "raw-imu-sessions").apply { mkdirs() }
+
+    /** Pending-map keys carry the namespace so two stores can never route into each other even if
+     * a window id collided; `seen` is keyed by absolute file path, which already differs. */
+    private fun pendingKey(id: String, bucket: Long) = "$namespace/$id/$bucket"
 
     fun start(id: String, deviceId: String, fromMs: Long) = synchronized(lock) {
         prefs.edit().putStringSet("ids", ids() + id).putString("$id.device", deviceId)
@@ -42,7 +62,7 @@ class ImuSessionFileStore(private val context: Context) : ImuSessionPushSource {
 
     /** Remove routing only. Files are removed separately so callers can keep deletion retryable. */
     fun remove(id: String) = synchronized(lock) {
-        pending.keys.filter { it.startsWith("$id/") }.forEach(pending::remove)
+        pending.keys.filter { it.startsWith("$namespace/$id/") }.forEach(pending::remove)
         seen.keys.filter { it.startsWith(sessionDir(id).absolutePath) }.forEach(seen::remove)
         prefs.edit().putStringSet("ids", ids() - id).remove("$id.device").remove("$id.from")
             .remove("$id.fromMs").remove("$id.to").remove("$id.toMs").apply()
@@ -60,7 +80,7 @@ class ImuSessionFileStore(private val context: Context) : ImuSessionPushSource {
             if (baseFrom > to) return@any false
             val present = buildSet {
                 segmentFiles(id).forEach { addAll(timestamps(it)) }
-                pending.filterKeys { it.startsWith("$id/") }.values.flatten().forEach { add(it.ts) }
+                pending.filterKeys { it.startsWith("$namespace/$id/") }.values.flatten().forEach { add(it.ts) }
             }
             // Match export's one-second producer-start allowance, without hiding any later gap.
             val first = present.minOrNull()?.takeIf { it <= baseFrom + 1 } ?: baseFrom
@@ -89,13 +109,83 @@ class ImuSessionFileStore(private val context: Context) : ImuSessionPushSource {
         // instead of inflating every .imus block on each one-second UI refresh.
         val covered = buildSet {
             segmentFiles(id).forEach { file -> addAll(timestamps(file).filter { it in from..to }) }
-            pending.filterKeys { it.startsWith("$id/") }.values.flatten()
+            pending.filterKeys { it.startsWith("$namespace/$id/") }.values.flatten()
                 .forEach { record -> if (record.ts in from..to) add(record.ts) }
         }
         val disk = segmentFiles(id).sumOf { it.length() }
-        val pendingBytes = pending.filterKeys { it.startsWith("$id/") }.values.flatten()
+        val pendingBytes = pending.filterKeys { it.startsWith("$namespace/$id/") }.values.flatten()
             .sumOf { it.columns.size.toLong() * 2 + RECORD_HEADER_BYTES }
         Stats(disk + pendingBytes, covered.size, covered.minOrNull())
+    }
+
+    /** Every registered window (routing metadata only), for readers that aggregate across windows. */
+    fun registeredWindows(): List<WindowInfo> = synchronized(lock) {
+        ids().map { id ->
+            WindowInfo(id, prefs.getString("$id.device", null).orEmpty(), prefs.getLong("$id.from", 0L),
+                if (prefs.contains("$id.to")) prefs.getLong("$id.to", 0L) else null)
+        }
+    }
+
+    /** Coalesced inclusive [start, end] second ranges inside [from, to] that have NO stored sample,
+     * computed one segment at a time WITHOUT retaining the seen-sets (a continuous recorder window
+     * can span weeks; pinning every timestamp set for a UI refresh would not be acceptable).
+     * Pending (not yet flushed) records count as covered. Empty result = fully covered. */
+    fun missingRanges(id: String, from: Long, to: Long): List<Pair<Long, Long>> = synchronized(lock) {
+        if (from > to) return@synchronized emptyList()
+        val missing = mutableListOf<Pair<Long, Long>>()
+        var bucket = bucketStart(from)
+        while (bucket <= to) {
+            val lo = maxOf(bucket, from); val hi = minOf(bucket + SEGMENT_SECONDS - 1, to)
+            val present = HashSet<Long>()
+            val file = segmentFile(id, bucket)
+            if (file.isFile) decodeFile(file.readBytes()).forEach { present.add(it.ts) }
+            pending[pendingKey(id, bucket)]?.forEach { present.add(it.ts) }
+            var ts = lo
+            while (ts <= hi) {
+                if (present.contains(ts)) { ts++; continue }
+                var end = ts
+                while (end + 1 <= hi && !present.contains(end + 1)) end++
+                val last = missing.lastOrNull()
+                if (last != null && last.second == ts - 1) {
+                    missing[missing.lastIndex] = last.first to end   // coalesce across the bucket seam
+                } else {
+                    missing += ts to end
+                }
+                ts = end + 1
+            }
+            bucket += SEGMENT_SECONDS
+        }
+        missing
+    }
+
+    /** Every on-disk segment across every window in this store, oldest bucket first, with file sizes.
+     * The continuous recorder's retention policy evicts from this list. */
+    fun segmentInventory(): List<SegmentInfo> = synchronized(lock) {
+        ids().flatMap { id ->
+            segmentFiles(id).mapNotNull { file ->
+                segmentBucket(file)?.let { SegmentInfo(id, it, file.length()) }
+            }
+        }.sortedBy { it.bucket }
+    }
+
+    /** Total on-disk + queued bytes across every window in this store. */
+    fun totalBytes(): Long = synchronized(lock) {
+        val disk = segmentInventory().sumOf { it.bytes }
+        val queued = pending.filterKeys { it.startsWith("$namespace/") }.values.flatten()
+            .sumOf { it.columns.size.toLong() * 2 + RECORD_HEADER_BYTES }
+        disk + queued
+    }
+
+    /** Evict ONE segment file (retention). Clears the timestamp-index cache for it so a later
+     * coverage read cannot report the evicted seconds. Callers must record their own eviction
+     * floor and refuse late frames at/below it, or an evicted second would silently regrow. */
+    fun deleteSegment(id: String, bucket: Long): Boolean = synchronized(lock) {
+        val file = segmentFile(id, bucket)
+        if (!file.exists()) return@synchronized true
+        if (!file.delete()) return@synchronized false
+        seen.remove(file.absolutePath)
+        pending.remove(pendingKey(id, bucket))
+        true
     }
 
     fun append(deviceId: String, frame: ByteArray, receivedAtMs: Long = System.currentTimeMillis()): Int = synchronized(lock) {
@@ -110,7 +200,7 @@ class ImuSessionFileStore(private val context: Context) : ImuSessionPushSource {
             if (ts !in from..to) continue
             val bucket = bucketStart(ts); val file = segmentFile(id, bucket)
             if (!timestamps(file).add(ts)) continue
-            val key = "$id/$bucket"
+            val key = pendingKey(id, bucket)
             pending.getOrPut(key) { mutableListOf() } += Record(ts, receivedAtMs, columns)
             if (pending[key]!!.size >= BLOCK_SECONDS) flushKey(key)
             writes++
@@ -171,7 +261,7 @@ class ImuSessionFileStore(private val context: Context) : ImuSessionPushSource {
 
     private fun readRecords(id: String, from: Long, to: Long, includePending: Boolean): List<Record> {
         val rows = segmentFiles(id).flatMap { decodeFile(it.readBytes()) }.filter { it.ts in from..to }.toMutableList()
-        if (includePending) rows += pending.filterKeys { it.startsWith("$id/") }.values.flatten().filter { it.ts in from..to }
+        if (includePending) rows += pending.filterKeys { it.startsWith("$namespace/$id/") }.values.flatten().filter { it.ts in from..to }
         return rows
     }
 
@@ -207,10 +297,11 @@ class ImuSessionFileStore(private val context: Context) : ImuSessionPushSource {
         return rows
     }
 
-    private fun flushSession(id: String) = pending.keys.filter { it.startsWith("$id/") }.toList().forEach(::flushKey)
+    private fun flushSession(id: String) = pending.keys.filter { it.startsWith("$namespace/$id/") }.toList().forEach(::flushKey)
     private fun flushKey(key: String) {
         val records = pending.remove(key).orEmpty(); if (records.isEmpty()) return
-        val id = key.substringBefore('/'); val bucket = key.substringAfter('/').toLong()
+        val rest = key.substringAfter('/')
+        val id = rest.substringBefore('/'); val bucket = rest.substringAfter('/').toLong()
         val file = segmentFile(id, bucket); file.parentFile?.mkdirs(); val newFile = !file.exists()
         DataOutputStream(FileOutputStream(file, true).buffered()).use { out ->
             if (newFile) writeHeader(out, bucket)
@@ -254,6 +345,17 @@ class ImuSessionFileStore(private val context: Context) : ImuSessionPushSource {
     }
 
     companion object {
+        /** Bounded Raw Data Collector sessions (default). The rawImuSession cloud-push lane reads
+         * ONLY this namespace. */
+        const val NAMESPACE_SESSIONS = "sessions"
+        /** The continuous recorder's namespace (Developer Options → Record 100 Hz IMU locally).
+         * A separate directory + window registry on purpose, so this mode's 100 Hz data stays
+         * local unless the user explicitly exports it. */
+        const val NAMESPACE_CONTINUOUS = "continuous"
+        private fun prefsName(namespace: String) =
+            if (namespace == NAMESPACE_SESSIONS) "imu-session-windows" else "imu-$namespace-windows"
+        private fun dirName(namespace: String) =
+            if (namespace == NAMESPACE_SESSIONS) "raw-imu-sessions" else "raw-imu-$namespace"
         private val lock = Any(); private val seen = mutableMapOf<String, MutableSet<Long>>()
         private val pending = mutableMapOf<String, MutableList<Record>>()
         private val MAGIC = "NOOPIMU2".toByteArray(Charsets.US_ASCII)

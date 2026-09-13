@@ -64,6 +64,46 @@
     "session_files_removed_with_session": {
       "swift": ["deleteFiles(sessionId", "removeItem(metadata)"],
       "kotlin": ["deleteFiles(sessionId)", "eventFile(sessionId).delete()"]
+    },
+    "continuous_recorder_switch": {
+      "swift": ["ImuContinuousRecorder", "imu-continuous-enabled-v1", "ImuRecorderView"],
+      "kotlin": ["ImuContinuousRecorder", "imu-continuous-enabled-v1", "imu_recorder_title"]
+    },
+    "continuous_recorder_verified_packets": {
+      "swift": ["noPacketsObserved", "ingestFrame"],
+      "kotlin": ["noPacketsObserved", "ingestFrame"]
+    },
+    "continuous_recorder_hardware_stop": {
+      "swift": ["offStopPending", "imu-continuous-stop-pending-v1"],
+      "kotlin": ["OFF_STOP_PENDING", "imu-continuous-stop-pending-v1"]
+    },
+    "continuous_recorder_dedup_conflicts": {
+      "swift": ["fnv1a", "duplicatesSkipped"],
+      "kotlin": ["fnv1a", "duplicatesSkipped"]
+    },
+    "continuous_recorder_retention_floor": {
+      "swift": ["evicted-through-v1", "droppedAfterEviction"],
+      "kotlin": ["evicted-through-v1", "droppedAfterEviction"]
+    },
+    "continuous_recorder_honest_coverage_export": {
+      "swift": ["local_only", "missing_ranges"],
+      "kotlin": ["local_only", "missing_ranges"]
+    },
+    "continuous_recorder_local_only_namespace": {
+      "swift": ["static let continuous", "imu-continuous-windows-v1"],
+      "kotlin": ["NAMESPACE_CONTINUOUS", "\"raw-imu-$namespace\""]
+    },
+    "continuous_recorder_delete_guard": {
+      "swift": ["func deleteAll() -> Bool", "guard !enabled else { return false }"],
+      "kotlin": ["fun deleteAll(): Boolean", "if (enabled) return false"]
+    },
+    "continuous_recorder_reconnect_rearm": {
+      "swift": ["handleBonded5MG", "handleDisconnect"],
+      "kotlin": ["handleBonded5MG", "handleDisconnect"]
+    },
+    "continuous_recorder_producer_ownership": {
+      "swift": ["otherProducerActive", "expectsImuPackets"],
+      "kotlin": ["otherProducerActive", "expectsImuPackets"]
     }
   }
 }

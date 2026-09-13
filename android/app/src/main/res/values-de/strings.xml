@@ -2752,4 +2752,46 @@
     <string name="units_follow_body">Wie Körpermaße</string>
     <string name="l10n_today_screen_pending_sync_cbe01f9e">Sync ausstehend</string>
     <string name="l10n_today_screen_strap_history_still_offloading_80140264">Strap-Verlauf wird noch übertragen</string>
+
+    <!-- Developer Options → Record 100 Hz IMU locally (continuous recorder) -->
+    <string name="imu_recorder_title">IMU-Recorder</string>
+    <string name="imu_recorder_subtitle">Kontinuierliche 100-Hz-Bewegungsaufzeichnung auf diesem Gerät.</string>
+    <string name="imu_recorder_developer_options">Entwickleroptionen</string>
+    <string name="imu_recorder_switch">100-Hz-IMU lokal aufzeichnen</string>
+    <string name="imu_recorder_blurb">Zeichnet den 100-Hz-Sechs-Achsen-Bewegungssensor des Armbands kontinuierlich auf, bis du dies ausschaltest. Getrennt von der Rohframe-Aufbewahrung und begrenzten Sitzungen. Standardmäßig aus.</string>
+    <string name="imu_recorder_open_details">Aufzeichnungsdetails, Export &amp; Speicher</string>
+    <string name="imu_recorder_phase_off">Aus</string>
+    <string name="imu_recorder_phase_off_stray">Aus — aber 100-Hz-Pakete kommen weiterhin an</string>
+    <string name="imu_recorder_phase_off_pending">Aus — Hardware-Stopp bis zur Wiederverbindung ausstehend</string>
+    <string name="imu_recorder_phase_waiting">An — warte auf ein gekoppeltes WHOOP 5/MG</string>
+    <string name="imu_recorder_phase_no_packets">Keine 100-Hz-Pakete empfangen — das Armband akzeptiert den Modus möglicherweise nicht</string>
+    <string name="imu_recorder_phase_start_sent">Start gesendet — 100-Hz-Pakete werden geprüft…</string>
+    <string name="imu_recorder_phase_recording">Aufzeichnung läuft</string>
+    <string name="imu_recorder_phase_stop_sent">Stoppbefehl gesendet — warte auf das Ende der Pakete</string>
+    <string name="imu_recorder_last_packet">Letztes Paket: %1$s</string>
+    <string name="imu_recorder_no_packets">Noch keine Pakete empfangen</string>
+    <string name="imu_recorder_recording_since">Aufzeichnung seit %1$s</string>
+    <string name="imu_recorder_stray_warning">100-Hz-Pakete kommen an, obwohl aus — ein anderer Client könnte das Armband aktiviert haben</string>
+    <string name="imu_recorder_low_disk">Schreiben pausiert — wenig freier Speicherplatz</string>
+    <string name="imu_recorder_coverage">Abdeckung</string>
+    <string name="imu_recorder_covered">%1$d von %2$d Sekunden abgedeckt</string>
+    <string name="imu_recorder_gaps">Lücken: %1$d</string>
+    <string name="imu_recorder_first_gap">Erste Lücke: %1$s</string>
+    <string name="imu_recorder_gaps_real">Lücken sind echt: Es werden keine Samples erfunden. Verbindungsabbrüche, Hintergrund-Limits und strap-seitige Aussetzer erscheinen hier.</string>
+    <string name="imu_recorder_storage">Speicher</string>
+    <string name="imu_recorder_disk_use">Speicherbelegung: %1$s</string>
+    <string name="imu_recorder_retention_limit">Aufbewahrungslimit</string>
+    <string name="imu_recorder_retention_policy">Bei Erreichen des Limits werden die ältesten Segmente zuerst entfernt; das gerade geschriebene Segment wird nie entfernt. Entfernte Sekunden bleiben entfernt — nachträgliche Historie kann sie nicht zurückbringen.</string>
+    <string name="imu_recorder_counters">Entfernte Segmente: %1$d · Konflikte: %2$d · Übersprungene Duplikate: %3$d</string>
+    <string name="imu_recorder_battery_warning">100-Hz-Aufzeichnung entlädt den Armband-Akku etwa 1,5–2,3× schneller als normales Tragen (gemessen an einem WHOOP 5.0).</string>
+    <string name="imu_recorder_export">Aufzeichnung exportieren</string>
+    <string name="imu_recorder_exporting">Export wird erstellt…</string>
+    <string name="imu_recorder_delete_all">Alle aufgezeichneten Daten löschen</string>
+    <string name="imu_recorder_delete_disabled">Schalte die Aufzeichnung vor dem Löschen aus.</string>
+    <string name="imu_recorder_privacy_title">Datenschutz</string>
+    <string name="imu_recorder_privacy">Diese 100-Hz-Daten bleiben auf diesem Gerät. Sie sind nie im Cloud-Push enthalten — Exportieren ist der einzige Weg hinaus, und nur wenn du es wählst.</string>
+    <string name="imu_recorder_delete_title">Alle IMU-Daten löschen?</string>
+    <string name="imu_recorder_delete_message">Alle kontinuierlich aufgezeichneten 100-Hz-Daten auf diesem Gerät werden endgültig gelöscht.</string>
+    <string name="imu_recorder_delete_confirm">Löschen</string>
+    <string name="imu_recorder_cancel">Abbrechen</string>
 </resources>

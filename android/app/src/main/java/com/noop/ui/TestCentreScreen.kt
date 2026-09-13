@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
 import androidx.compose.material.icons.filled.Science
+import androidx.compose.material.icons.filled.Sensors
 import androidx.compose.material.icons.filled.Upload
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
@@ -81,7 +82,11 @@ import kotlin.math.roundToInt
  * scheduled-export / experimental controls on the same bindings the Settings cards use. No em-dash.
  */
 @Composable
-fun TestCentreScreen(vm: AppViewModel, onOpenGroundTruthCollector: () -> Unit = {}) {
+fun TestCentreScreen(
+    vm: AppViewModel,
+    onOpenGroundTruthCollector: () -> Unit = {},
+    onOpenImuRecorder: () -> Unit = {},
+) {
     val context = LocalContext.current
     val testCentre = remember { TestCentre.from(context) }
     // CAPTURE-D: a UI scope to emit the data-volume line off the toggle-on path (a store read, so it can't
@@ -108,6 +113,7 @@ fun TestCentreScreen(vm: AppViewModel, onOpenGroundTruthCollector: () -> Unit = 
     var clearStaleBond by remember { mutableStateOf(puffinExperiment.clearStaleBond) }
     var ecgRawData by remember { mutableStateOf(puffinExperiment.ecgRawData) }
     val r22DisableReport by vm.ble.r22DisableReport.collectAsStateWithLifecycle()
+    val imuRecorderStatus by vm.ble.continuousImuRecorder.status.collectAsStateWithLifecycle()
     val ecgGateReport by vm.ble.ecgRawDataGate.collectAsStateWithLifecycle()
     val ecgVariant by vm.ble.whoop5VariantFlow.collectAsStateWithLifecycle()
     var rawCaptureBusy by remember { mutableStateOf(false) }
@@ -374,6 +380,30 @@ fun TestCentreScreen(vm: AppViewModel, onOpenGroundTruthCollector: () -> Unit = 
                                 }
                             }
                         },
+                    )
+                }
+            }
+
+            // --- Developer Options: the continuous 100 Hz IMU recorder ---
+            // Its own producer, its own persisted switch, its own local store — separate from the
+            // bounded Raw Data Collector above and from raw-frame retention. Off by default.
+            SettingsSectionTC(
+                icon = Icons.Filled.Sensors,
+                title = stringResource(R.string.imu_recorder_developer_options),
+                blurb = stringResource(R.string.imu_recorder_blurb),
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    DeveloperToggleRow(
+                        title = stringResource(R.string.imu_recorder_switch),
+                        detail = imuRecorderPhaseText(imuRecorderStatus),
+                        checked = imuRecorderStatus.enabled,
+                        onCheckedChange = { vm.ble.continuousImuRecorder.setEnabled(it) },
+                    )
+                    NoopButton(
+                        text = stringResource(R.string.imu_recorder_open_details),
+                        kind = NoopButtonKind.Secondary,
+                        fullWidth = true,
+                        onClick = onOpenImuRecorder,
                     )
                 }
             }

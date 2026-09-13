@@ -898,6 +898,17 @@ public final class BLEManager: NSObject, ObservableObject {
     private var rawCaptureInFlight = false
     private var rawCaptureStoppedAt = Date.distantPast
     private var unexpectedImuStopAt = Date.distantPast
+    /// Developer Options "Record 100 Hz IMU locally" producer owner. Owns its switch state, the
+    /// hardware start/stop lifecycle, and the continuous local store — deliberately separate from
+    /// `rawCaptureInFlight` (bounded sessions) and `noopRawCaptureEnabled` (frame retention), so
+    /// neither can silently keep this producer running after the user turns it off.
+    let imuRecorder = ImuContinuousRecorder()
+    /// Admits the raw-data command family to the 5/MG send() allowlist for the duration of the
+    /// recorder's OWN start/stop sends (and the unexpected-producer fail-safe's). Held only around
+    /// those sends; never left on — a default install can never form these bytes.
+    private var rawDataCommandGate = false
+    /// Once-per-link re-entry guard for the recorder's post-bond (re)arm; reset on disconnect.
+    private var imuRecorderArmedLink = false
     /// Ordered queue of frames awaiting drain through the serial Backfiller task.
     private var backfillFrameQueue: [[UInt8]] = []
     /// True while the drain task is running (prevents a second drain task from launching).
@@ -1344,6 +1355,7 @@ public final class BLEManager: NSObject, ObservableObject {
         router.onStrapSerial = { [weak self] serial in self?.noteHarvardSerial(serial) }   // #1193
         // #78 hole-4: a paused-for-bond-loop strap gets one bounded salvage attempt per app-foreground.
         installForegroundSalvageProbe()
+        wireImuRecorder()
     }
 
     /// Build the WhoopStore + Collector + Backfiller asynchronously. Safe to call multiple
@@ -1557,6 +1569,50 @@ public final class BLEManager: NSObject, ObservableObject {
         router.onStrapSerial = { [weak self] serial in self?.noteHarvardSerial(serial) }   // #1193
         // #78 hole-4: a paused-for-bond-loop strap gets one bounded salvage attempt per app-foreground.
         installForegroundSalvageProbe()
+        wireImuRecorder()
+    }
+
+    /// Point the continuous IMU recorder at this manager's transport. The recorder itself is
+    /// CoreBluetooth-free; every strap touch goes through these closures so the state machine is
+    /// testable and the 5/MG send() allowlist stays the single byte-forming gate.
+    private func wireImuRecorder() {
+        imuRecorder.transport = ImuContinuousRecorder.Transport(
+            sendStart: { [weak self] in self?.sendImuRecorderStart() },
+            sendStop: { [weak self] in self?.sendImuRecorderStop() },
+            linkReady: { [weak self] in
+                guard let self else { return false }
+                return self.state.connected && self.didBond && self.selectedModel.deviceFamily == .whoop5
+            },
+            activeDeviceId: { [weak self] in self?.deviceId ?? "" },
+            otherProducerActive: { [weak self] in self?.rawCaptureInFlight ?? false },
+            freeDiskBytes: { BLEManager.freeDiskBytes() },
+            log: { [weak self] line in self?.log(line) }
+        )
+    }
+
+    /// The continuous recorder's hardware start pair, sent under its own allowlist gate. The
+    /// recorder only asks while its switch is On and a bonded 5/MG link is up.
+    private func sendImuRecorderStart() {
+        rawDataCommandGate = true
+        send(.startRawData, payload: [0x01], writeType: .withResponse)
+        send(.toggleIMUMode, payload: [0x01, 0x01], writeType: .withResponse)
+        rawDataCommandGate = false
+    }
+
+    /// The continuous recorder's hardware stop. Deliberately NOT gated on `noopRawCaptureEnabled`:
+    /// this switch's Off must stop the producer even while raw-frame retention stays on.
+    private func sendImuRecorderStop() {
+        rawDataCommandGate = true
+        send(.stopRawData, payload: [0x01], writeType: .withResponse)
+        send(.toggleIMUMode, payload: [0x01, 0x00], writeType: .withResponse)
+        rawDataCommandGate = false
+    }
+
+    /// Free bytes on the data volume, for the recorder's low-disk write pause.
+    private static func freeDiskBytes() -> Int64? {
+        guard let values = try? URL(fileURLWithPath: NSHomeDirectory())
+            .resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]) else { return nil }
+        return values.volumeAvailableCapacityForImportantUsage
     }
 
     // MARK: Public API
@@ -2173,15 +2229,23 @@ public final class BLEManager: NSObject, ObservableObject {
     }
 
     /// Stop a realtime IMU producer left armed after a crash, lost stop write, or another client.
+    /// Stands down while the continuous recorder expects packets (`imuRecorder.expectsImuPackets`) —
+    /// otherwise turning raw-frame retention off would make this fail-safe kill the recorder's
+    /// explicitly requested stream.
     private func stopUnexpectedRealtimeImu(_ frame: [UInt8], isOffload: Bool, now: Date = Date()) {
         guard selectedModel.deviceFamily == .whoop5, !isOffload, frame.count > 8,
               frame[8] == 43 || frame[8] == 51,
-              !rawCaptureInFlight, !UserDefaults.standard.noopRawCaptureEnabled,
+              !rawCaptureInFlight, !imuRecorder.expectsImuPackets,
+              !UserDefaults.standard.noopRawCaptureEnabled,
               now.timeIntervalSince(rawCaptureStoppedAt) >= 3,
               now.timeIntervalSince(unexpectedImuStopAt) >= 30 else { return }
         unexpectedImuStopAt = now
+        // rawDataCommandGate is what lets these bytes reach the wire on 5/MG at all: the send()
+        // allowlist admits the raw-data family only while a capture is in flight or the gate is held.
+        rawDataCommandGate = true
         send(.stopRawData, payload: [0x01], writeType: .withResponse)
         send(.toggleIMUMode, payload: [0x01, 0x00], writeType: .withResponse)
+        rawDataCommandGate = false
         log("Raw IMU fail-safe: unexpected realtime packet type \(frame[8]) while capture was off; stop requested")
     }
 
@@ -2272,9 +2336,12 @@ public final class BLEManager: NSObject, ObservableObject {
                 || (DeviceConfigReadProbe.isReadOnlyOpcode(command.rawValue) && deviceConfigReport != nil)
                 || command == .sendHistoricalData || command == .historicalDataResult
                 || command == .setClock || command == .getClock
-                // Bounded Raw Data Collector only. These writes remain impossible unless the explicit
-                // user-started capture window is in flight; normal sync never enables this gate.
-                || (rawCaptureInFlight && (command == .startRawData
+                // Bounded Raw Data Collector + the Developer Options continuous IMU recorder (and
+                // the unexpected-producer fail-safe, which holds rawDataCommandGate around its own
+                // sends). These writes remain impossible unless the explicit user-started capture
+                // window is in flight or the recorder/fail-safe is mid-send; normal sync never
+                // enables either gate.
+                || ((rawCaptureInFlight || rawDataCommandGate) && (command == .startRawData
                     || command == .stopRawData || command == .toggleIMUMode))
                 // SET_CONFIG / SET_FF_VALUE (120), ENABLE direction — the R22 deep-stream unlock. Allowed
                 // only while the deep-data experiment is opted in, and only for a KEY and a VALUE the gate
@@ -5830,6 +5897,11 @@ extension BLEManager: @preconcurrency CBCentralManagerDelegate {
         // A user capture remains represented by RawDataSessionStore, but its transport must be re-armed
         // on the next connection. Keeping this true would make that reconnect attempt a silent no-op.
         rawCaptureInFlight = false
+        imuRecorderArmedLink = false
+        // The continuous IMU recorder keeps its window open across the drop (the gap is reported,
+        // not hidden) and re-arms from the post-bond hook on the next link. An unfinished stop
+        // becomes owed again — the write may not have landed.
+        imuRecorder.handleDisconnect()
         // The strap forgets the realtime-HR toggle across a disconnect; the post-bond branch re-arms it
         // from `wantsRealtime`. Clear only the "what we last sent" flag — `screenWantsRealtime` /
         // `keepRealtimeForData` (and thus `wantsRealtime`) are intent and must survive a reconnect so the
@@ -6420,6 +6492,14 @@ extension BLEManager: @preconcurrency CBPeripheralDelegate {
                 log("WHOOP 5/MG: arming realtime HR (puffin TOGGLE_REALTIME_HR)")
                 send(.toggleRealtimeHR, payload: [0x01])
             }
+            // Developer Options continuous 100 Hz IMU recorder: (re)arm once per bonded link — the
+            // strap forgets the mode across a drop, exactly like realtime HR. Gated on didBond so a
+            // declined handshake never arms it; the recorder itself no-ops while its switch is Off
+            // (except to send a hardware stop owed from before this link).
+            if didBond, !imuRecorderArmedLink {
+                imuRecorderArmedLink = true
+                imuRecorder.handleBonded5MG()
+            }
             startKeepAlive()                                    // re-subscribe + liveness watchdog
             // Kick the historical offload ONCE per connection — this is the 5/MG edition of the WHOOP4
             // connect-handshake (lines below). didWriteValueFor re-enters this `.whoop5` branch on EVERY
@@ -6913,6 +6993,17 @@ extension BLEManager: @preconcurrency CBPeripheralDelegate {
                     // BEFORE the offload branch so it catches the burst; no-op unless capture is on.
                     puffinDeepBufferLog.appendIfDeepBuffer(frame: frame, char: characteristic.uuid, isOffload: isOffload)
                     stopUnexpectedRealtimeImu(frame, isOffload: isOffload)
+                    // Canonical .imus stores see EVERY reassembled 5/MG frame, live or offload
+                    // replay; each decodes internally and ignores non-IMU frames, and both dedup by
+                    // strap timestamp so a frame reaching them twice (e.g. an offload replay of a
+                    // live second) is written once. The bounded-session store gets live frames here
+                    // too — the live path below deliberately never enters the Collector, which is
+                    // why bounded sessions previously only had offload history on this platform.
+                    // The continuous recorder applies its own switch/window/retention gates inside.
+                    let imuFrameReceivedAtMs = Int64(Date().timeIntervalSince1970 * 1_000)
+                    _ = ImuSessionFileStore.shared.append(deviceId: deviceId, frame: frame,
+                                                          receivedAtMs: imuFrameReceivedAtMs)
+                    imuRecorder.ingestFrame(frame, isOffload: isOffload, receivedAtMs: imuFrameReceivedAtMs)
                     // #423: the queryable twin of that diagnostics line — persist the decoded 100 Hz 6-axis
                     if isOffload {
                         // Same policy as WHOOP4: historical offload frames are bulk sync traffic.

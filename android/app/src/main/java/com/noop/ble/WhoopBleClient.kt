@@ -37,6 +37,7 @@ import com.noop.data.SyncDrainPolicy
 import com.noop.data.SyncJobKind
 import com.noop.data.SyncWakeReason
 import com.noop.protocol.Whoop5RawImu
+import com.noop.testcentre.ImuContinuousRecorder
 import com.noop.testcentre.ImuSessionFileStore
 import com.noop.data.WhoopRepository
 import com.noop.protocol.AlarmPayload
@@ -2427,7 +2428,7 @@ class WhoopBleClient(
      *  or disconnected -> no BLE op. Called on connect-established and whenever offload / live-HR toggles. */
     private fun refreshConnectionPriority() {
         val rawCaptureHigh = connectedFamily == DeviceFamily.WHOOP5 && rawCaptureHighPriority(
-            captureActive = groundTruthImuSessionId != null,
+            captureActive = groundTruthImuSessionId != null || continuousImuRecorder.expectsImuPackets,
             backfilling = backfilling,
             needsRepair = ImuSessionFileStore(context).needsHighThroughput(deviceId),
         )
@@ -2468,6 +2469,52 @@ class WhoopBleClient(
     private var groundTruthImuSessionId: String? = null
     private var groundTruthImuStoppedAtMs = 0L
     private var unexpectedImuStopAtMs = 0L
+
+    /** Developer Options → "Record 100 Hz IMU locally" producer owner. Separate from the bounded
+     *  ground-truth session above: its own persisted switch, its own store namespace, its own
+     *  command gate. Created eagerly so a persisted On re-arms on the next bonded link. */
+    val continuousImuRecorder = ImuContinuousRecorder.create(context).also { wireContinuousImuRecorder(it) }
+    /** Lets the recorder's start/stop pairs through the 5/MG send() allow-list — same shape as
+     *  groundTruthImuCommandAllowed, but a SEPARATE gate so the two producers never share state. */
+    @Volatile private var continuousImuCommandAllowed = false
+    /** Once-per-link guard for the recorder's post-bond hook (the write-completion callback re-fires
+     *  on every with-response write). Cleared in reset(). */
+    @Volatile private var imuRecorderArmedLink = false
+
+    private fun wireContinuousImuRecorder(recorder: ImuContinuousRecorder) {
+        recorder.transport.sendStart = {
+            continuousImuCommandAllowed = true
+            try {
+                // The hardware-validated pair — opcode 106 alone ACKs but does not start the producer.
+                send(CommandNumber.START_RAW_DATA, byteArrayOf(1), withResponse = true)
+                send(CommandNumber.TOGGLE_IMU_MODE, byteArrayOf(1, 1), withResponse = true)
+            } finally {
+                continuousImuCommandAllowed = false
+            }
+        }
+        recorder.transport.sendStop = {
+            continuousImuCommandAllowed = true
+            try {
+                send(CommandNumber.STOP_RAW_DATA, byteArrayOf(1), withResponse = true)
+                send(CommandNumber.TOGGLE_IMU_MODE, byteArrayOf(1, 0), withResponse = true)
+            } finally {
+                continuousImuCommandAllowed = false
+            }
+        }
+        recorder.transport.linkReady = {
+            gatt != null && cmdCharacteristic != null && didBond && connectedFamily == DeviceFamily.WHOOP5
+        }
+        recorder.transport.activeDeviceId = { deviceId }
+        // The bounded Raw Data Collector (and the puffin experiment) own their packets — they must
+        // never be read as this recorder's, nor stopped as strays.
+        recorder.transport.otherProducerActive = {
+            groundTruthImuSessionId != null || PuffinExperiment.from(context).isCaptureEnabled
+        }
+        recorder.transport.freeDiskBytes = {
+            runCatching { context.filesDir.usableSpace }.getOrNull()
+        }
+        recorder.transport.log = { message -> log(message) }
+    }
 
     /** Start the hardware-confirmed WHOOP 5 realtime IMU mode for an explicit ground-truth session. */
     @Synchronized
@@ -2560,7 +2607,10 @@ class WhoopBleClient(
         if (connectedFamily != DeviceFamily.WHOOP5 || replayedOffload || frame.size <= 8) return
         val type = frame[8].toInt() and 0xFF
         if (type != 43 && type != 51) return
-        if (groundTruthImuSessionId != null || PuffinExperiment.from(context).isCaptureEnabled) return
+        // The continuous recorder's packets are EXPECTED — the fail-safe must stand down while its
+        // switch is On, or it would stop the very producer the user asked for.
+        if (groundTruthImuSessionId != null || PuffinExperiment.from(context).isCaptureEnabled
+            || continuousImuRecorder.expectsImuPackets) return
         val now = System.currentTimeMillis()
         if (now - groundTruthImuStoppedAtMs < 3_000L || now - unexpectedImuStopAtMs < 30_000L) return
         if (gatt == null || cmdCharacteristic == null) return
@@ -4405,7 +4455,7 @@ class WhoopBleClient(
                     CommandNumber.START_RAW_DATA,
                     CommandNumber.STOP_RAW_DATA,
                     CommandNumber.TOGGLE_IMU_MODE,
-                ) && groundTruthImuCommandAllowed) &&
+                ) && (groundTruthImuCommandAllowed || continuousImuCommandAllowed)) &&
                 cmd != CommandNumber.RUN_HAPTICS_PATTERN &&
                 cmd != CommandNumber.SEND_HISTORICAL_DATA && cmd != CommandNumber.HISTORICAL_DATA_RESULT &&
                 // ABORT_HISTORICAL_TRANSMITS (20) over puffin: stop an offload already in flight. Allowed
@@ -7130,6 +7180,13 @@ class WhoopBleClient(
                     val realtimeWantNow = screenWantsRealtime || continuousCaptureWantsNow()
                     wantsRealtime = realtimeWantNow
                     if (realtimeWantNow) { realtimeArmed = true; realtimeArmedThisLink = true; send(CommandNumber.TOGGLE_REALTIME_HR, byteArrayOf(1)) }
+                    // Developer Options continuous IMU recorder: re-arm a persisted On (or send an
+                    // owed hardware stop) ONCE per bonded link — this callback re-fires on every
+                    // with-response completion, hence the guard. Never re-arms while Off.
+                    if (!imuRecorderArmedLink) {
+                        imuRecorderArmedLink = true
+                        continuousImuRecorder.handleBonded5MG()
+                    }
                 }
             } else if (!didBond && connectedFamily == DeviceFamily.WHOOP4) {
                 didBond = true
@@ -7394,6 +7451,9 @@ class WhoopBleClient(
                     noteUnbondedProbeFrame(parsed)
                     // A frame replayed as part of the historical offload (type 47/48/… during a backfill)
                     recordGroundTruthImuFrame(frame)
+                    // Developer Options continuous recorder: every reassembled frame, live or offload.
+                    // Verification (decode gate), dedup, and the Off-drop all live inside the recorder.
+                    continuousImuRecorder.ingestFrame(frame, offloadFrame, System.currentTimeMillis())
                     // must not drive LIVE-only state (the charging pill). (PR #568 reimpl)
                     //
                     // NOT the same shape as iOS, despite what this said before. THIS side calls the handler
@@ -11070,6 +11130,10 @@ class WhoopBleClient(
     /** Clear per-connection state. Port of the flag resets in didConnect / didDisconnectPeripheral. */
     private fun reset() {
         didBond = false
+        // Continuous IMU recorder: the link is gone — an On recorder keeps its window open (the gap
+        // is real) and re-arms on the next bond; an unfinished stop becomes owed again.
+        imuRecorderArmedLink = false
+        continuousImuRecorder.handleDisconnect()
         explicitBondRequestedThisLink = false   // #1635: one createBond attempt per link
         sawBondTransitionThisLink = false
         // explicitBondRequestedAtMs is deliberately NOT cleared here. An OS pairing routinely completes

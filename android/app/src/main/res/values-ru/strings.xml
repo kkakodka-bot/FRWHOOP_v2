@@ -2622,4 +2622,46 @@
     <string name="l10n_devices_screen_battery_pack_probe_explainer_40b3470d">Отправляет команду батарейного блока только для чтения (151) и декодирует ответ браслета — заряд блока, серийный номер и Bluetooth-адрес. На браслет ничего не записывается, и это не влияет на ваши данные. У WHOOP 4.0 нет команды блока, и ожидается молчание; само это молчание — полезный результат.</string>
     <string name="l10n_today_screen_pending_sync_cbe01f9e">Ожидает синхронизации</string>
     <string name="l10n_today_screen_strap_history_still_offloading_80140264">история браслета ещё передаётся</string>
+
+    <!-- Developer Options → Record 100 Hz IMU locally (continuous recorder) -->
+    <string name="imu_recorder_title">Регистратор IMU</string>
+    <string name="imu_recorder_subtitle">Непрерывная запись движения 100 Гц на этом устройстве.</string>
+    <string name="imu_recorder_developer_options">Для разработчика</string>
+    <string name="imu_recorder_switch">Локальная запись IMU 100 Гц</string>
+    <string name="imu_recorder_blurb">Непрерывно записывает шестиосевой датчик движения 100 Гц ремешка, пока вы это не выключите. Отдельно от хранения сырых кадров и ограниченных сессий. По умолчанию выключено.</string>
+    <string name="imu_recorder_open_details">Детали записи, экспорт и хранилище</string>
+    <string name="imu_recorder_phase_off">Выкл.</string>
+    <string name="imu_recorder_phase_off_stray">Выключено — но пакеты 100 Гц всё ещё поступают</string>
+    <string name="imu_recorder_phase_off_pending">Выключено — остановка устройства ожидает переподключения</string>
+    <string name="imu_recorder_phase_waiting">Включено — ожидание сопряжённого WHOOP 5/MG</string>
+    <string name="imu_recorder_phase_no_packets">Пакеты 100 Гц не наблюдаются — ремешок может не выполнять режим</string>
+    <string name="imu_recorder_phase_start_sent">Старт отправлен — проверка пакетов 100 Гц…</string>
+    <string name="imu_recorder_phase_recording">Идёт запись</string>
+    <string name="imu_recorder_phase_stop_sent">Команда остановки отправлена — ожидание прекращения пакетов</string>
+    <string name="imu_recorder_last_packet">Последний пакет: %1$s</string>
+    <string name="imu_recorder_no_packets">Пакеты пока не поступали</string>
+    <string name="imu_recorder_recording_since">Запись с %1$s</string>
+    <string name="imu_recorder_stray_warning">Пакеты 100 Гц поступают при выключенной записи — возможно, ремешок включил другой клиент</string>
+    <string name="imu_recorder_low_disk">Запись приостановлена — мало свободного места</string>
+    <string name="imu_recorder_coverage">Покрытие</string>
+    <string name="imu_recorder_covered">Покрыто %1$d из %2$d с</string>
+    <string name="imu_recorder_gaps">Пропуски: %1$d</string>
+    <string name="imu_recorder_first_gap">Первый пропуск: %1$s</string>
+    <string name="imu_recorder_gaps_real">Пропуски настоящие: отсчёты не выдумываются. Разрывы, фоновые ограничения и сбои ремешка видны здесь.</string>
+    <string name="imu_recorder_storage">Хранилище</string>
+    <string name="imu_recorder_disk_use">Занято на диске: %1$s</string>
+    <string name="imu_recorder_retention_limit">Лимит хранения</string>
+    <string name="imu_recorder_retention_policy">При достижении лимита первыми вытесняются самые старые сегменты; записываемый сегмент не вытесняется никогда. Вытесненные секунды остаются вытесненными — поздняя история не может их вернуть.</string>
+    <string name="imu_recorder_counters">Вытеснено сегментов: %1$d · Конфликты: %2$d · Пропущено дублей: %3$d</string>
+    <string name="imu_recorder_battery_warning">Запись 100 Гц разряжает батарею ремешка примерно в 1,5–2,3 раза быстрее обычного ношения (измерено на WHOOP 5.0).</string>
+    <string name="imu_recorder_export">Экспорт записи</string>
+    <string name="imu_recorder_exporting">Создание экспорта…</string>
+    <string name="imu_recorder_delete_all">Удалить все записанные данные</string>
+    <string name="imu_recorder_delete_disabled">Выключите запись перед удалением.</string>
+    <string name="imu_recorder_privacy_title">Конфиденциальность</string>
+    <string name="imu_recorder_privacy">Эти данные 100 Гц остаются на устройстве. Они никогда не включаются в облачную отправку — экспорт единственный способ их выгрузить, и только по вашему выбору.</string>
+    <string name="imu_recorder_delete_title">Удалить все данные IMU?</string>
+    <string name="imu_recorder_delete_message">Все непрерывно записанные данные 100 Гц на этом устройстве будут удалены безвозвратно.</string>
+    <string name="imu_recorder_delete_confirm">Удалить</string>
+    <string name="imu_recorder_cancel">Отмена</string>
 </resources>

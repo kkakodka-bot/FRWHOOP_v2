@@ -24,24 +24,42 @@ protocol ImuSessionPushSource: Sendable {
 final class ImuSessionFileStore {
     struct Stats { let bytes: Int64; let coveredSeconds: Int; let firstTs: Int64? }
     struct ExportSegment { let name: String; let data: Data; let startTs, endTs: Int; let sampleCount: Int }
+    /// Read-only projection of one registered capture window, for aggregating readers (the
+    /// continuous recorder's coverage/export) that span more than one window.
+    struct WindowInfo { let id, deviceId: String; let from: Int64; let to: Int64? }
+    /// One on-disk segment's identity + size, for the continuous recorder's retention eviction.
+    struct SegmentInfo { let id: String; let bucket: Int64; let bytes: Int64 }
     private struct Window: Codable { let id, deviceId: String; let from: Int64; var to: Int64? }
     private struct Record { let ts, receivedAtMs: Int64; let columns: [Int16] }
     static let shared = ImuSessionFileStore()
+    /// The continuous recorder's store (Developer Options → Record 100 Hz IMU locally). A SEPARATE
+    /// directory + window registry from `shared` on purpose: the rawImuSession cloud-push lane reads
+    /// `shared` only, so this mode's 100 Hz data stays local unless the user explicitly exports it.
+    static let continuous = ImuSessionFileStore(directoryComponent: "OpenWhoop/RawImuContinuous",
+                                                defaultsKey: "imu-continuous-windows-v1")
     static let sampleRate = 100, axes = 6, blockSeconds = 30
     static let segmentSeconds: Int64 = 30 * 60
     private static let payloadBytes = sampleRate * axes * 2
     private static let magic = Data("NOOPIMU2".utf8)
-    private let defaults = UserDefaults.standard
-    private let key = "imu-session-windows-v1"
+    private let defaults: UserDefaults
+    private let key: String
     private let directory: URL
     private var seen: [String: Set<Int64>] = [:]
     private var pending: [String: [Record]] = [:]
 
-    private init() {
+    /// `directory` overrides the whole directory (tests); `directoryComponent` + `defaultsKey` pick
+    /// the namespace (bounded sessions vs the continuous recorder). Not private so tests can build
+    /// isolated instances; production code uses `shared` / `continuous`.
+    init(directory override: URL? = nil,
+         directoryComponent: String = "OpenWhoop/RawImuSessions",
+         defaultsKey: String = "imu-session-windows-v1",
+         defaults: UserDefaults = .standard) {
         let fm = FileManager.default
         let base = (try? fm.url(for: .applicationSupportDirectory, in: .userDomainMask,
                                 appropriateFor: nil, create: true)) ?? fm.temporaryDirectory
-        directory = base.appendingPathComponent("OpenWhoop/RawImuSessions", isDirectory: true)
+        directory = override ?? base.appendingPathComponent(directoryComponent, isDirectory: true)
+        key = defaultsKey
+        self.defaults = defaults
         try? fm.createDirectory(at: directory, withIntermediateDirectories: true)
     }
 
@@ -97,14 +115,99 @@ final class ImuSessionFileStore {
     }
 
     func stats(_ id: String, from: Int, to: Int) -> Stats {
-        let records = readRecords(id, from: from, to: to, includePending: true)
+        // Coverage needs timestamps, not decoded 6-axis payloads: the per-file `seen` index (plus
+        // the still-pending records) answers without inflating every block on each UI refresh.
+        // Twin of the Kotlin store's `stats`, which the export-contract test pins to exactly this
+        // timestamp-index shape. The index is maintained on append and lazily scanned once per file.
+        var covered = Set<Int64>()
+        for file in segmentFiles(id) {
+            let timestamps = seen[file.path] ?? scan(file)
+            seen[file.path] = timestamps
+            covered.formUnion(timestamps.filter { $0 >= Int64(from) && $0 <= Int64(to) })
+        }
+        for (pendingKey, records) in pending where pendingKey.hasPrefix("\(id)/") {
+            for record in records where record.ts >= Int64(from) && record.ts <= Int64(to) {
+                covered.insert(record.ts)
+            }
+        }
         let disk = segmentFiles(id).reduce(Int64(0)) { value, url in
             value + Int64((try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
         }
         let queued = pending.filter { $0.key.hasPrefix("\(id)/") }.values.flatMap { $0 }
             .reduce(Int64(0)) { $0 + Int64($1.columns.count * 2 + 20) }
-        return Stats(bytes: disk + queued, coveredSeconds: Set(records.map(\.ts)).count,
-                     firstTs: records.map(\.ts).min())
+        return Stats(bytes: disk + queued, coveredSeconds: covered.count, firstTs: covered.min())
+    }
+
+    /// Every registered window (routing metadata only), for readers that aggregate across windows.
+    func registeredWindows() -> [WindowInfo] {
+        windows().map { WindowInfo(id: $0.id, deviceId: $0.deviceId, from: $0.from, to: $0.to) }
+    }
+
+    /// Coalesced inclusive [start, end] second ranges inside [from, to] that have NO stored sample,
+    /// computed one segment at a time WITHOUT retaining the seen-sets (a continuous recorder window
+    /// can span weeks; pinning every timestamp set for a UI refresh would not be acceptable).
+    /// Pending (not yet flushed) records count as covered. Empty result = fully covered.
+    func missingRanges(_ id: String, from: Int64, to: Int64) -> [(Int64, Int64)] {
+        guard from <= to else { return [] }
+        var missing: [(Int64, Int64)] = []
+        var bucket = Self.bucketStart(from)
+        while bucket <= to {
+            let lo = max(bucket, from), hi = min(bucket + Self.segmentSeconds - 1, to)
+            var present = Set<Int64>()
+            let url = segmentFile(id, bucket)
+            if FileManager.default.fileExists(atPath: url.path) { present = scan(url) }
+            for record in pending["\(id)/\(bucket)"] ?? [] { present.insert(record.ts) }
+            var ts = lo
+            while ts <= hi {
+                if present.contains(ts) { ts += 1; continue }
+                var end = ts
+                while end + 1 <= hi && !present.contains(end + 1) { end += 1 }
+                if let last = missing.last, last.1 == ts - 1 {
+                    missing[missing.count - 1] = (last.0, end)   // coalesce across the bucket seam
+                } else {
+                    missing.append((ts, end))
+                }
+                ts = end + 1
+            }
+            bucket += Self.segmentSeconds
+        }
+        return missing
+    }
+
+    /// Every on-disk segment across every window in this store, oldest bucket first, with file sizes.
+    /// The continuous recorder's retention policy evicts from this list.
+    func segmentInventory() -> [SegmentInfo] {
+        windows().flatMap { window in
+            segmentFiles(window.id).compactMap { url in
+                guard let bucket = segmentBucket(url) else { return nil }
+                let bytes = Int64((try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+                return SegmentInfo(id: window.id, bucket: bucket, bytes: bytes)
+            }
+        }.sorted { $0.bucket < $1.bucket }
+    }
+
+    /// Total on-disk + queued bytes across every window in this store.
+    func totalBytes() -> Int64 {
+        let disk = segmentInventory().reduce(Int64(0)) { $0 + $1.bytes }
+        let queued = pending.values.flatMap { $0 }
+            .reduce(Int64(0)) { $0 + Int64($1.columns.count * 2 + 20) }
+        return disk + queued
+    }
+
+    /// Evict ONE segment file (retention). Clears the timestamp-index cache for it so a later
+    /// coverage read cannot report the evicted seconds. Callers must record their own eviction
+    /// floor and refuse late frames at/below it, or an evicted second would silently regrow.
+    @discardableResult
+    func deleteSegment(id: String, bucket: Int64,
+                       removeItem: (URL) throws -> Void = { try FileManager.default.removeItem(at: $0) }) -> Bool {
+        let url = segmentFile(id, bucket)
+        guard FileManager.default.fileExists(atPath: url.path) else { return true }
+        do {
+            try removeItem(url)
+            seen[url.path] = nil
+            pending["\(id)/\(bucket)"] = nil
+            return true
+        } catch { return false }
     }
 
     func exportSegments(_ id: String, from: Int, to: Int) -> [ExportSegment] {

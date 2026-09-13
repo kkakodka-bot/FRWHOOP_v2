@@ -2743,4 +2743,46 @@
     <string name="units_follow_body">Jak pomiary ciała</string>
     <string name="l10n_today_screen_pending_sync_cbe01f9e">Oczekuje na synchronizację</string>
     <string name="l10n_today_screen_strap_history_still_offloading_80140264">historia paska wciąż jest przesyłana</string>
+
+    <!-- Developer Options → Record 100 Hz IMU locally (continuous recorder) -->
+    <string name="imu_recorder_title">Rejestrator IMU</string>
+    <string name="imu_recorder_subtitle">Ciągły zapis ruchu 100 Hz na tym urządzeniu.</string>
+    <string name="imu_recorder_developer_options">Opcje deweloperskie</string>
+    <string name="imu_recorder_switch">Zapisuj IMU 100 Hz lokalnie</string>
+    <string name="imu_recorder_blurb">Ciągle zapisuje sześcioosiowy czujnik ruchu 100 Hz paska, dopóki tego nie wyłączysz. Niezależne od przechowywania surowych ramek i sesji ograniczonych czasowo. Domyślnie wyłączone.</string>
+    <string name="imu_recorder_open_details">Szczegóły zapisu, eksport i pamięć</string>
+    <string name="imu_recorder_phase_off">Wyłączony</string>
+    <string name="imu_recorder_phase_off_stray">Wyłączone — ale pakiety 100 Hz wciąż napływają</string>
+    <string name="imu_recorder_phase_off_pending">Wyłączone — zatrzymanie sprzętowe oczekuje do ponownego połączenia</string>
+    <string name="imu_recorder_phase_waiting">Włączone — oczekiwanie na sparowany WHOOP 5/MG</string>
+    <string name="imu_recorder_phase_no_packets">Nie zaobserwowano pakietów 100 Hz — pasek może nie realizować trybu</string>
+    <string name="imu_recorder_phase_start_sent">Wysłano start — sprawdzanie pakietów 100 Hz…</string>
+    <string name="imu_recorder_phase_recording">Trwa zapis</string>
+    <string name="imu_recorder_phase_stop_sent">Wysłano polecenie stop — oczekiwanie na zakończenie pakietów</string>
+    <string name="imu_recorder_last_packet">Ostatni pakiet: %1$s</string>
+    <string name="imu_recorder_no_packets">Nie zaobserwowano jeszcze pakietów</string>
+    <string name="imu_recorder_recording_since">Zapis od %1$s</string>
+    <string name="imu_recorder_stray_warning">Pakiety 100 Hz napływają mimo wyłączenia — inny klient mógł włączyć pasek</string>
+    <string name="imu_recorder_low_disk">Zapis wstrzymany — mało wolnego miejsca</string>
+    <string name="imu_recorder_coverage">Pokrycie</string>
+    <string name="imu_recorder_covered">Zapisano %1$d z %2$d s</string>
+    <string name="imu_recorder_gaps">Luki: %1$d</string>
+    <string name="imu_recorder_first_gap">Pierwsza luka: %1$s</string>
+    <string name="imu_recorder_gaps_real">Luki są prawdziwe: żadne próbki nie są zmyślane. Rozłączenia, ograniczenia tła i przerwy po stronie paska są tu widoczne.</string>
+    <string name="imu_recorder_storage">Pamięć</string>
+    <string name="imu_recorder_disk_use">Zajęte miejsce: %1$s</string>
+    <string name="imu_recorder_retention_limit">Limit przechowywania</string>
+    <string name="imu_recorder_retention_policy">Po osiągnięciu limitu najstarsze segmenty są usuwane jako pierwsze; zapisywany segment nigdy nie jest usuwany. Usunięte sekundy pozostają usunięte — późna historia nie może ich przywrócić.</string>
+    <string name="imu_recorder_counters">Usunięte segmenty: %1$d · Konflikty: %2$d · Pominięte duplikaty: %3$d</string>
+    <string name="imu_recorder_battery_warning">Zapis 100 Hz rozładowuje baterię paska około 1,5–2,3× szybciej niż normalne noszenie (zmierzono na WHOOP 5.0).</string>
+    <string name="imu_recorder_export">Eksportuj zapis</string>
+    <string name="imu_recorder_exporting">Tworzenie eksportu…</string>
+    <string name="imu_recorder_delete_all">Usuń wszystkie zapisane dane</string>
+    <string name="imu_recorder_delete_disabled">Wyłącz zapis przed usunięciem.</string>
+    <string name="imu_recorder_privacy_title">Prywatność</string>
+    <string name="imu_recorder_privacy">Te dane 100 Hz zostają na tym urządzeniu. Nigdy nie trafiają do wysyłki w chmurę — eksport to jedyny sposób ich wydobycia i tylko gdy go wybierzesz.</string>
+    <string name="imu_recorder_delete_title">Usunąć wszystkie dane IMU?</string>
+    <string name="imu_recorder_delete_message">Wszystkie ciągle zapisane dane 100 Hz na tym urządzeniu zostaną trwale usunięte.</string>
+    <string name="imu_recorder_delete_confirm">Usuń</string>
+    <string name="imu_recorder_cancel">Anuluj</string>
 </resources>

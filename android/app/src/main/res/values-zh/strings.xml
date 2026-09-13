@@ -2652,4 +2652,46 @@
     <string name="l10n_devices_screen_pack_charge_0e9589da">电池盒 %1$.1f%%</string>
     <string name="l10n_today_screen_pending_sync_cbe01f9e">等待同步</string>
     <string name="l10n_today_screen_strap_history_still_offloading_80140264">手环历史记录仍在传输</string>
+
+    <!-- Developer Options → Record 100 Hz IMU locally (continuous recorder) -->
+    <string name="imu_recorder_title">IMU 记录器</string>
+    <string name="imu_recorder_subtitle">在此设备上连续记录 100 Hz 运动数据。</string>
+    <string name="imu_recorder_developer_options">开发者选项</string>
+    <string name="imu_recorder_switch">在本地记录 100 Hz IMU</string>
+    <string name="imu_recorder_blurb">持续记录腕带的 100 Hz 六轴运动传感器,直到你关闭为止。独立于原始帧保留和限时会话。默认关闭。</string>
+    <string name="imu_recorder_open_details">记录详情、导出与存储</string>
+    <string name="imu_recorder_phase_off">已关闭</string>
+    <string name="imu_recorder_phase_off_stray">已关闭——但 100 Hz 数据包仍在到达</string>
+    <string name="imu_recorder_phase_off_pending">已关闭——硬件停止待重新连接后发送</string>
+    <string name="imu_recorder_phase_waiting">已开启——等待已绑定的 WHOOP 5/MG</string>
+    <string name="imu_recorder_phase_no_packets">未观察到 100 Hz 数据包——腕带可能未执行该模式</string>
+    <string name="imu_recorder_phase_start_sent">已发送启动——正在验证 100 Hz 数据包…</string>
+    <string name="imu_recorder_phase_recording">正在记录</string>
+    <string name="imu_recorder_phase_stop_sent">已发送停止命令——等待数据包停止</string>
+    <string name="imu_recorder_last_packet">最后一个数据包:%1$s</string>
+    <string name="imu_recorder_no_packets">尚未观察到数据包</string>
+    <string name="imu_recorder_recording_since">记录开始于 %1$s</string>
+    <string name="imu_recorder_stray_warning">关闭状态下仍有 100 Hz 数据包到达——可能有其他客户端启用了腕带</string>
+    <string name="imu_recorder_low_disk">写入已暂停——可用磁盘空间不足</string>
+    <string name="imu_recorder_coverage">覆盖范围</string>
+    <string name="imu_recorder_covered">已覆盖 %1$d/%2$d 秒</string>
+    <string name="imu_recorder_gaps">缺口:%1$d</string>
+    <string name="imu_recorder_first_gap">第一个缺口:%1$s</string>
+    <string name="imu_recorder_gaps_real">缺口是真实的:不会虚构任何样本。断连、后台限制和腕带侧的中断都会显示在这里。</string>
+    <string name="imu_recorder_storage">存储</string>
+    <string name="imu_recorder_disk_use">磁盘占用:%1$s</string>
+    <string name="imu_recorder_retention_limit">保留上限</string>
+    <string name="imu_recorder_retention_policy">达到上限时最旧的分段最先被清除;正在写入的分段永远不会被清除。已清除的秒数保持已清除——迟到的历史数据无法将其恢复。</string>
+    <string name="imu_recorder_counters">已清除分段:%1$d · 冲突:%2$d · 已跳过重复:%3$d</string>
+    <string name="imu_recorder_battery_warning">100 Hz 记录会使腕带电池消耗比正常佩戴快约 1.5–2.3 倍(在 WHOOP 5.0 上测得)。</string>
+    <string name="imu_recorder_export">导出记录</string>
+    <string name="imu_recorder_exporting">正在构建导出…</string>
+    <string name="imu_recorder_delete_all">删除所有已记录数据</string>
+    <string name="imu_recorder_delete_disabled">删除前请先关闭记录。</string>
+    <string name="imu_recorder_privacy_title">隐私</string>
+    <string name="imu_recorder_privacy">这些 100 Hz 数据保留在本设备上,绝不会包含在云端推送中——导出是数据离开的唯一方式,且只在你主动选择时。</string>
+    <string name="imu_recorder_delete_title">删除所有 IMU 数据?</string>
+    <string name="imu_recorder_delete_message">此设备上所有连续记录的 100 Hz 数据将被永久删除。</string>
+    <string name="imu_recorder_delete_confirm">删除</string>
+    <string name="imu_recorder_cancel">取消</string>
 </resources>

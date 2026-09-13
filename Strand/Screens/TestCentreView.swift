@@ -93,6 +93,7 @@ struct TestCentreView: View {
                 syncStatusCard.staggeredAppear(index: 1)
                 diagnosticToolsCard.staggeredAppear(index: 2)
                 if is5MG { rawDataCollectorCard.staggeredAppear(index: 3) }
+                if is5MG { ImuRecorderCard(recorder: model.ble.imuRecorder).staggeredAppear(index: 3) }
                 if is5MG { fiveMGProtocolDiagnosticsCard.staggeredAppear(index: 4) }
                 exportCard.staggeredAppear(index: 3)
                 experimentalAlgorithmsCard.staggeredAppear(index: 4)
