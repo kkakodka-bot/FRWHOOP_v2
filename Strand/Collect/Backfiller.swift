@@ -219,6 +219,12 @@ final class Backfiller {
     /// genuine write failure, in which case `finishChunk` holds the cursor/ack so the strap re-sends.
     /// nil in non-production inits (tests/preview) → archiving is skipped and acks proceed as before.
     private let rejectedSink: ((_ frames: [[UInt8]], _ trim: UInt32, _ family: DeviceFamily) -> Bool)?
+    /// Session-IMU durability seam (FRWHOOP issue #1): receives the chunk's CRC-valid 100 Hz IMU
+    /// frames at commit time and returns true iff every frame that matched a registered Raw Data
+    /// Collector window is durably on disk. nil (tests / non-prod inits) skips the seam entirely.
+    /// A false return stalls the ack exactly like a decoded-insert failure (#57): the strap keeps
+    /// and re-sends the chunk rather than trimming past session data we never persisted.
+    private let imuSessionSink: ((_ deviceId: String, _ frames: [[UInt8]]) -> Bool)?
     /// Per-chunk outcome hook (#77 family): (didDecodeSensorRows, wasConsoleOnly). Lets BLEManager
     /// tally a session so a COMPLETED-but-empty offload (all console, no sensor records) can tell the
     /// user their strap isn't banking, without false-positiving a normal caught-up sync.
@@ -249,6 +255,7 @@ final class Backfiller {
          enableRawCapture: Bool = false,
          log: ((String) -> Void)? = nil,
          rejectedSink: ((_ frames: [[UInt8]], _ trim: UInt32, _ family: DeviceFamily) -> Bool)? = nil,
+         imuSessionSink: ((_ deviceId: String, _ frames: [[UInt8]]) -> Bool)? = nil,
          onChunk: ((_ decoded: Bool, _ console: Bool) -> Void)? = nil,
          connectionActive: @escaping () -> Bool = { false },
          connectionLog: ((String) -> Void)? = nil,
@@ -267,6 +274,7 @@ final class Backfiller {
         self.enableRawCapture = enableRawCapture
         self.log = log
         self.rejectedSink = rejectedSink
+        self.imuSessionSink = imuSessionSink
         self.onChunk = onChunk
         self.connectionActive = connectionActive
         self.connectionLog = connectionLog
@@ -820,6 +828,23 @@ final class Backfiller {
                     // (return) so the strap re-sends — the research toggle's contract is that raw is durable
                     // before the trim advances. Surface it so a stalled offload with raw-capture on is visible.
                     log?("Backfill: failed to enqueue raw batch (trim=\(trim)): \(error) — holding ack so the strap re-sends this chunk; raw capture must be durable before the trim advances.")
+                    persistStalled = true   // #57
+                    return
+                }
+            }
+
+            // FRWHOOP issue #1: historical 100 Hz IMU buffers in this chunk belong to any registered
+            // Raw Data Collector session window covering their strap timestamp. Persist + FLUSH them
+            // here — before the cursor advances and the ack frees the strap's copy — under the same
+            // safe-trim invariant as the decoded rows above. Only CRC-valid IMU-shaped frames are
+            // offered; a flush failure holds the ack so the strap re-sends the chunk next session
+            // rather than trimming past session data we never durably stored.
+            if let imuSessionSink {
+                let imuFrames = zip(frames, parsed).compactMap { frame, p in
+                    p.ok && p.crcOK == true && Whoop5RawImu.rawColumns(frame) != nil ? frame : nil
+                }
+                if !imuFrames.isEmpty && !imuSessionSink(deviceId, imuFrames) {
+                    log?("Backfill: failed to durably persist session IMU data (trim=\(trim)) — holding ack so the strap re-sends this chunk; session .imus must be on disk before the trim advances.")
                     persistStalled = true   // #57
                     return
                 }

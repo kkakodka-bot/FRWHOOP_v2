@@ -39,9 +39,22 @@ for the byte layout and validation evidence.
 ## Live capture and history repair
 
 A live BLE connection is not assumed to be lossless. Each session is a time window tied to one strap,
-and incoming IMU buffers are routed by **strap timestamp**, not by arrival time. If Bluetooth is off or
-the phone is disconnected during part of a recording, matching delayed buffers from a later historical
-offload can still be appended to the session. Duplicate timestamps are discarded.
+and incoming IMU buffers are routed by **strap timestamp**, not by arrival time. On both platforms,
+CRC-valid 100 Hz buffers are appended from the live stream and from the historical offload; matching
+delayed buffers from a later historical offload can still be appended to a completed session. On
+Apple, historical buffers are flushed to the session's `.imus` segments *before* the history chunk's
+trim cursor is acknowledged, so the strap keeps and re-sends any chunk whose session data could not
+be persisted rather than trimming past it.
+
+Duplicate handling is deterministic. An exact re-delivery of an already-stored strap second is
+discarded. A *differing* payload at an already-stored strap second never overwrites the first durable
+record; the timestamp is recorded as conflict evidence in the session's `imu-conflicts.json` and
+surfaced in the export's coverage report, so a silent merge is impossible.
+
+Delayed delivery has been observed on hardware: buffers captured during a recording gap arrived with
+the next history sync and were routed into the open session window. That observation is distinct from
+deliberately tested disconnect recovery — a controlled interrupted-capture interval with verified
+post-repair coverage remains the acceptance bar for claiming repair of a specific gap.
 
 On Android, an active 100 Hz capture temporarily requests the high-throughput GATT connection
 priority. A later historical offload does the same while it repairs an incomplete capture, then returns
@@ -54,14 +67,25 @@ Consequences for consumers:
 
 - file order is not chronological: repaired older history may be appended after newer live data;
 - strap timestamp is authoritative and readers must sort by it;
-- export metadata reports actual chunk coverage and `imu_100hz_complete`; it must not infer complete
-  capture merely because the user started and stopped a session;
+- export metadata reports actual chunk coverage and a conservative completeness flag
+  (`imu_100hz_complete` on Android, `complete` in Apple's `imu-coverage.json`); it must not infer
+  complete capture merely because the user started and stopped a session. Completeness is false
+  while any second in the required window is missing **or** any duplicate conflict is unresolved,
+  and the report itemizes both (`imu_100hz_missing_ranges` / `imu_100hz_conflict_count` /
+  `imu_100hz_conflict_ts` on Android; `missing_ranges` / `conflict_count` / `conflict_ts` on Apple);
 - history can repair only data the strap actually retained. The design does not promise that every
   firmware retains every high-rate buffer for later offload.
 
 The historical-range action is therefore useful even when the collector was not running at the time:
 it creates a session window over raw IMU buffers already available locally or delivered by the next
 history sync. A range is currently bounded to seven days to keep an accidental export finite.
+
+On Apple there is an additional best-effort local repair lane: history frames are also kept for a
+bounded time in the size-capped raw archive (`rawBatch`), and creating a session, editing its range,
+or exporting it re-scans that archive and routes any matching CRC-valid IMU frames into the session.
+This recovers sessions affected before the routing fix shipped, but only while the frames still exist
+in the archive — it is transient working data, not canonical storage, so an absent frame is simply
+unrecoverable, never an error.
 
 ## Storage design
 
@@ -101,7 +125,9 @@ signals, raw sensor CSV, and `imu/*.imus`. Apple exports equivalent session meta
 - `captured_started_at_ms` / `captured_ended_at_ms`, when present, preserve the physical recording
   interval even after the selected interval is edited;
 - Android's `imu_100hz_coverage` identifies the segments actually present and `imu_100hz_complete` is
-  the conservative coverage result; Apple carries the same facts in `imu-coverage.json`;
+  the conservative coverage result; Apple carries the same facts in `imu-coverage.json`. On both
+  platforms the report also lists the missing second ranges and any conflicted strap timestamps
+  (see above), and the completeness flag is false while either is non-empty;
 
 Exports stay local until the user invokes the operating system's share sheet. Raw captures are not
 part of routine cloud sync or telemetry, consistent with NOOP's offline-first privacy model. The
@@ -120,59 +146,12 @@ suggested archive name is `noop-5mg-raw-<session-id>.zip`.
 - The current evidence does **not** establish flash-retention, thermal, or BLE-airtime costs for
   continuous 24/7 100 Hz operation.
 - A one-hour workout/research capture succeeding does not establish that a 36-hour rolling recorder is
-  safe. The continuous recorder below ships with an explicit retention policy, but the hardware
-  measurements for 24/7 100 Hz operation remain open — treat its battery/storage warnings as real.
+  safe. Any future rolling buffer needs hardware measurements and an explicit retention policy.
 - The separately enabled protocol trace remains a general diagnostics tool. Starting a Raw Data
   Collector session does not enable it or duplicate its transport frames into the raw outbox.
 - Session capture has one source of truth for high-rate motion: its file-backed `.imus` segments.
 - Do not use arrival order as time, do not fill gaps silently, and do not claim 100 Hz coverage from
   packet count alone.
-
-## Continuous 100 Hz recording (Developer Options)
-
-**Status:** experimental, default off, local-only. Test Centre → Developer Options → "Record 100 Hz
-IMU locally" on both platforms. This is a separate producer from the bounded Raw Data Collector and
-from `enableRawCapture` (raw-frame retention): each has its own switch, its own state, and its own
-storage, and none of them can silently keep another running.
-
-### What the switch does
-
-- **On**: when a WHOOP 5/MG is bonded, the recorder sends the same verified hardware sequence as the
-  bounded collector (`START_RAW_DATA` + `TOGGLE_IMU_MODE [0x01, 0x01]`) and writes every verified
-  100 Hz second, keyed by strap timestamp, into its own time-segmented `.imus` store. An accepted
-  command is not recording: until the first valid packet arrives the state is "start sent, no packets
-  observed", and the start is re-sent on a bounded interval while the strap stays silent. The choice
-  persists across relaunch and reconnect and re-arms once per link after bonding.
-- **Off**: local writes cease immediately and the live segment is flushed/closed. When a link is up
-  the recorder sends `STOP_RAW_DATA` + `TOGGLE_IMU_MODE [0x01, 0x00]` even while `enableRawCapture`
-  remains on — without touching the HR/RR stream. When no link is up, Off persists as
-  "hardware stop pending" and the stop is sent before anything else on the next bond. Off never
-  re-arms. If packets continue after the stop, the stop is re-sent on a bounded cadence and the state
-  never claims "stopped" while packets flow; if the bounded collector owns the producer instead, the
-  recorder stands down without re-sending or alarming.
-
-### Storage, retention, and privacy
-
-- Samples live in a **separate store namespace** from bounded sessions
-  (`OpenWhoop/RawImuContinuous` / `raw-imu-continuous`, registry key `imu-continuous-windows[-v1]`).
-  The cloud push lane reads only the session store, so continuous-recorder data cannot leave the
-  device through it. Export is the only way data moves, and export is always user-initiated.
-- **Retention is explicit**: a user-selected cap (256 MiB–2 GiB, default 1 GiB). Eviction is
-  oldest-segment-first, never touches the live segment, and raises a per-device eviction floor so
-  late-arriving history for an evicted second is refused rather than silently regrowing the store.
-  The bounded collector's 50 MB `rawBatch` eviction never carries the only copy of this data.
-- **Dedup and conflicts**: a second is written once, keyed by strap timestamp; a replay of identical
-  bytes counts as a duplicate, and same-second different bytes surface as a conflict (first write
-  wins, conflict counted and logged).
-- **Coverage is honest**: the UI and the export report covered seconds and real gaps. A disconnect
-  shows as a gap unless verified offloaded history repairs it; nothing is invented or smoothed over.
-- **Delete all** is refused while the switch is On; turn the recorder off first.
-
-### Export
-
-The shareable ZIP contains `meta.json` (`sample_rate_hz: 100`, `local_only: true`, per-window covered
-seconds and gap counts), `imu-coverage.json` (per-window `missing_ranges`), and
-`imu/<window-id>/<segment>.imus`. Suggested name `noop-imu-continuous-<yyyyMMdd-HHmmss>.zip`.
 
 ## Implementation map
 
@@ -184,7 +163,3 @@ seconds and gap counts), `imu-coverage.json` (per-window `missing_ranges`), and
 | Append/recovery window | `ImuSessionFileStore` | `ImuSessionFileStore` |
 | Canonical segmented storage/export | `ImuSessionFileStore` | `ImuSessionFileStore` |
 | Raw decoder | `Whoop5RawImu` in `WhoopProtocol` | `Whoop5RawImu` in `com.noop.protocol` |
-| Continuous recorder state machine | `Strand/Collect/ImuContinuousRecorder.swift` | `com.noop.testcentre.ImuContinuousRecorder` |
-| Continuous recorder UI | `Strand/Screens/ImuRecorderView.swift` | `com.noop.ui.ImuRecorderScreen` |
-| Continuous recorder BLE wiring | `BLEManager` (`imuRecorder`, `wireImuRecorder`) | `WhoopBleClient` (`continuousImuRecorder`) |
-| Continuous recorder store namespace | `ImuSessionFileStore.continuous` | `ImuSessionFileStore` `NAMESPACE_CONTINUOUS` |

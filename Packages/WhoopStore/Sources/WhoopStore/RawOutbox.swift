@@ -145,6 +145,37 @@ extension WhoopStore {
             frameCount: row["frameCount"], byteSize: row["byteSize"])
     }
 
+    /// Bounded, keyset-paged enumeration of ALL batches for one device — including synced rows —
+    /// oldest first (FRWHOOP issue #1: the session-IMU repair scan must see every retained batch,
+    /// not just un-synced ones, and must not load the whole table at once). Page by passing the
+    /// last returned meta back as `after`; `(capturedAt, batchId)` is the stable tie-break key.
+    /// Callers must NOT rely on `startTs`/`endTs` to pre-filter: historical batches record the
+    /// capture-time wall clock there, not the contained frames' strap timestamps.
+    public func rawBatchMetas(deviceId: String, after: RawBatchMeta? = nil, limit: Int = 20) async throws -> [RawBatchMeta] {
+        try syncRead { db in
+            if let after {
+                return try Row.fetchAll(db, sql: """
+                    SELECT batchId, deviceId, capturedAt, deviceClockRef, wallClockRef,
+                           startTs, endTs, frameCount, byteSize
+                    FROM rawBatch
+                    WHERE deviceId = ?
+                      AND (capturedAt > ? OR (capturedAt = ? AND batchId > ?))
+                    ORDER BY capturedAt ASC, batchId ASC
+                    LIMIT ?
+                    """, arguments: [deviceId, after.capturedAt, after.capturedAt, after.batchId, limit])
+                    .map(WhoopStore.metaFromRow)
+            }
+            return try Row.fetchAll(db, sql: """
+                SELECT batchId, deviceId, capturedAt, deviceClockRef, wallClockRef,
+                       startTs, endTs, frameCount, byteSize
+                FROM rawBatch
+                WHERE deviceId = ?
+                ORDER BY capturedAt ASC, batchId ASC
+                LIMIT ?
+                """, arguments: [deviceId, limit]).map(WhoopStore.metaFromRow)
+        }
+    }
+
     /// Un-synced batches (syncedAt IS NULL), oldest first, capped at `limit`.
     public func pendingRawBatches(limit: Int) async throws -> [RawBatchMeta] {
         try syncRead { db in

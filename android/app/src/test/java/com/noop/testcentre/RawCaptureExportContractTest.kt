@@ -38,8 +38,37 @@ class RawCaptureExportContractTest {
     @Test fun liveCoverageUsesTimestampIndexInsteadOfDecodingPayloads() {
         val store = source("ImuSessionFileStore.kt")
         val stats = store.substringAfter("fun stats(").substringBefore("fun append(")
-        assertTrue(stats.contains("timestamps(file)"))
+        assertTrue(stats.contains("digests(file).keys"))
         assertFalse(stats.contains("readRecords("))
+    }
+
+    // FRWHOOP issue #1: duplicate deliveries at one strap timestamp are deterministic — an exact
+    // re-delivery is discarded, a differing payload keeps the first durable record and persists
+    // conflict evidence the export's coverage report surfaces.
+    @Test fun duplicateConflictsAreDetectedAndPersisted() {
+        val store = source("ImuSessionFileStore.kt")
+        assertTrue(store.contains("fun columnsDigest(columns: ShortArray): Long"))
+        assertTrue(store.contains("if (existing != digest) markConflict(id, ts)"))
+        assertTrue(store.contains("CONFLICTS_FILE_NAME = \"imu-conflicts.json\""))
+        assertTrue(store.contains("fun conflictTimestamps(id: String): List<Long>"))
+    }
+
+    @Test fun exportCoverageReportsGapsAndConflicts() {
+        val collector = source("GroundTruthCollector.kt")
+        assertTrue(collector.contains("private fun missingRanges("))
+        assertTrue(collector.contains("imu_100hz_missing_ranges"))
+        assertTrue(collector.contains("imu_100hz_conflict_count"))
+        assertTrue(collector.contains("imu_100hz_conflict_ts"))
+        assertTrue(collector.contains("val imuComplete = imuMissing.isEmpty() && imuConflicts.isEmpty()"))
+    }
+
+    // Cross-platform digest oracle: the expected literal was produced by the Swift twin
+    // (`ImuSessionFileStore.columnsDigest`) compiled standalone — the two implementations must
+    // agree bit-for-bit on the FNV-1a digest of the little-endian column payload.
+    @Test fun columnsDigestMatchesSwiftTwin() {
+        val columns = ShortArray(600) { (it * 7 - 300).toShort() }
+        assertEquals(3_602_392_056_726_433_541L, ImuSessionFileStore.columnsDigest(columns))
+        assertEquals(0xcbf29ce484222325L, ImuSessionFileStore.columnsDigest(ShortArray(0)))
     }
 
     @Test fun editedWindowOwnsPublicEventsAndImuBounds() {
