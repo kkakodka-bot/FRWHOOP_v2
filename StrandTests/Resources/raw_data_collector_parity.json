@@ -46,8 +46,16 @@
       "kotlin": ["exportSegments", "imu/${segment.name}"]
     },
     "explicit_imu_coverage": {
-      "swift": ["imu-coverage.json", "private static func covers"],
+      "swift": ["imu-coverage.json", "static func covers"],
       "kotlin": ["imu_100hz_complete", "private fun covers"]
+    },
+    "duplicate_conflict_evidence": {
+      "swift": ["columnsDigest", "imu-conflicts.json", "conflictTimestamps"],
+      "kotlin": ["columnsDigest", "imu-conflicts.json", "conflictTimestamps"]
+    },
+    "coverage_reports_gaps_and_conflicts": {
+      "swift": ["missing_ranges", "conflict_count", "conflict_ts"],
+      "kotlin": ["imu_100hz_missing_ranges", "imu_100hz_conflict_count", "imu_100hz_conflict_ts"]
     },
     "delete_one_and_all_with_confirmation": {
       "swift": ["Delete this session?", "Delete all sessions?", "removeMetadata(session.id)"],

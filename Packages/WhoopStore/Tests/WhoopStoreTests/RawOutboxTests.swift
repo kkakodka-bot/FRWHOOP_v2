@@ -85,5 +85,70 @@ final class RawOutboxTests: XCTestCase {
         let gotZeros = try await store.rawFrames(batchId: "z")
         XCTAssertEqual(gotZeros, zeros)
     }
+
+    // MARK: - rawBatchMetas paged device enumeration (FRWHOOP issue #1 repair scan)
+
+    private func deviceMeta(_ id: String, device: String, capturedAt: Int) -> RawBatchMeta {
+        RawBatchMeta(batchId: id, deviceId: device,
+                     clockRef: ClockRef(device: capturedAt, wall: capturedAt),
+                     capturedAt: capturedAt, startTs: capturedAt, endTs: capturedAt,
+                     frameCount: frames.count, byteSize: frames.reduce(0) { $0 + $1.count })
+    }
+
+    func testRawBatchMetasFiltersDeviceAndOrdersOldestFirst() async throws {
+        let store = try await WhoopStore.inMemory()
+        try await store.upsertDevice(id: "dev1", mac: nil, name: nil)
+        try await store.upsertDevice(id: "dev2", mac: nil, name: nil)
+        try await store.enqueueRawBatch(deviceMeta("c", device: "dev1", capturedAt: 300), frames: frames)
+        try await store.enqueueRawBatch(deviceMeta("a", device: "dev1", capturedAt: 100), frames: frames)
+        try await store.enqueueRawBatch(deviceMeta("b", device: "dev1", capturedAt: 200), frames: frames)
+        try await store.enqueueRawBatch(deviceMeta("z", device: "dev2", capturedAt: 50), frames: frames)
+
+        let page = try await store.rawBatchMetas(deviceId: "dev1")
+        XCTAssertEqual(page.map { $0.batchId }, ["a", "b", "c"])
+    }
+
+    func testRawBatchMetasIncludesSyncedRows() async throws {
+        let store = try await WhoopStore.inMemory()
+        try await store.upsertDevice(id: "dev1", mac: nil, name: nil)
+        try await store.enqueueRawBatch(deviceMeta("a", device: "dev1", capturedAt: 100), frames: frames)
+        try await store.enqueueRawBatch(deviceMeta("b", device: "dev1", capturedAt: 200), frames: frames)
+        try await store.markRawBatchSynced(batchId: "a", at: 999)
+
+        let page = try await store.rawBatchMetas(deviceId: "dev1")
+        XCTAssertEqual(page.map { $0.batchId }, ["a", "b"],
+                       "the repair scan must see every retained batch, not only un-synced ones")
+    }
+
+    func testRawBatchMetasPagesByKeysetWithoutRepeats() async throws {
+        let store = try await WhoopStore.inMemory()
+        try await store.upsertDevice(id: "dev1", mac: nil, name: nil)
+        // 5 batches, page size 2 → 3 pages; two batches SHARE a capturedAt so the batchId
+        // tie-break is exercised (a capturedAt-only cursor would skip or repeat one).
+        for (id, ts) in [("b1", 100), ("b2", 200), ("b3", 200), ("b4", 300), ("b5", 400)] {
+            try await store.enqueueRawBatch(deviceMeta(id, device: "dev1", capturedAt: ts), frames: frames)
+        }
+        var seen: [String] = []
+        var cursor: RawBatchMeta?
+        while true {
+            let page = try await store.rawBatchMetas(deviceId: "dev1", after: cursor, limit: 2)
+            if page.isEmpty { break }
+            seen += page.map { $0.batchId }
+            cursor = page.last
+            if seen.count > 8 { XCTFail("pagination did not terminate"); break }
+        }
+        XCTAssertEqual(seen, ["b1", "b2", "b3", "b4", "b5"])
+    }
+
+    func testRawBatchMetasRespectsLimit() async throws {
+        let store = try await WhoopStore.inMemory()
+        try await store.upsertDevice(id: "dev1", mac: nil, name: nil)
+        for i in 0..<5 {
+            try await store.enqueueRawBatch(deviceMeta("b\(i)", device: "dev1", capturedAt: 100 + i),
+                                            frames: frames)
+        }
+        let page = try await store.rawBatchMetas(deviceId: "dev1", limit: 3)
+        XCTAssertEqual(page.map { $0.batchId }, ["b0", "b1", "b2"])
+    }
 }
 #endif

@@ -17,6 +17,7 @@ struct RawDataCollectorView: View {
     @State private var historicalFrom = Date().addingTimeInterval(-3_600)
     @State private var historicalTo = Date()
     @State private var markerDraft: MarkerDraft?
+    @State private var repairTask: Task<Void, Never>?
 
     private struct MarkerDraft: Identifiable {
         let id = UUID()
@@ -123,8 +124,12 @@ struct RawDataCollectorView: View {
                 DatePicker("To", selection: $historicalTo, in: historicalFrom...)
                 NoopButton("Add historical session", systemImage: "clock.arrow.circlepath",
                            kind: .secondary, fullWidth: true) {
-                    _ = store.createHistorical(deviceId: model.ble.deviceId,
-                                               from: historicalFrom, to: historicalTo)
+                    // FRWHOOP issue #1: a new window can cover strap timestamps whose 100 Hz frames
+                    // still exist in the retained raw archive — repair into it immediately.
+                    if store.createHistorical(deviceId: model.ble.deviceId,
+                                              from: historicalFrom, to: historicalTo) != nil {
+                        scheduleArchiveRepair()
+                    }
                 }
                 .disabled(historicalTo <= historicalFrom || historicalTo.timeIntervalSince(historicalFrom) > 7 * 86_400)
             }
@@ -155,12 +160,14 @@ struct RawDataCollectorView: View {
                     DatePicker("From", selection: Binding(
                         get: { Date(timeIntervalSince1970: Double(session.startedAtMs) / 1_000) },
                         set: { store.setRange(sessionId: session.id, from: $0,
-                                              to: Date(timeIntervalSince1970: Double(endMs) / 1_000)) }
+                                              to: Date(timeIntervalSince1970: Double(endMs) / 1_000))
+                               scheduleArchiveRepair() }
                     ))
                     DatePicker("To", selection: Binding(
                         get: { Date(timeIntervalSince1970: Double(endMs) / 1_000) },
                         set: { store.setRange(sessionId: session.id,
-                                              from: Date(timeIntervalSince1970: Double(session.startedAtMs) / 1_000), to: $0) }
+                                              from: Date(timeIntervalSince1970: Double(session.startedAtMs) / 1_000), to: $0)
+                               scheduleArchiveRepair() }
                     ))
                 }
                 Text(session.active ? String(localized: "Export status: recording")
@@ -291,9 +298,26 @@ struct RawDataCollectorView: View {
         await refreshImuCoverage()
     }
 
+    /// Debounced best-effort repair from the retained raw archive (FRWHOOP issue #1): creating or
+    /// editing a session window can newly cover strap timestamps whose 100 Hz frames still exist in
+    /// rawBatch. Debounced because the range pickers fire on every spinner tick.
+    private func scheduleArchiveRepair() {
+        repairTask?.cancel()
+        repairTask = Task {
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            guard !Task.isCancelled else { return }
+            _ = await model.ble.repairGroundTruthImuSessions()
+            await refreshImuCoverage()
+        }
+    }
+
     private func export(_ session: RawDataSessionStore.Session) async {
         guard let end = session.endedAtMs else { return }
         exportingId = session.id
+        // FRWHOOP issue #1: last-chance best-effort repair from the retained raw archive before the
+        // bundle is built, so the export includes any delayed history that arrived after the session
+        // window was created (bounded by rawBatch's size cap — it is not canonical storage).
+        _ = await model.ble.repairGroundTruthImuSessions()
         let bounds = Self.fullSecondBounds(fromMs: session.startedAtMs, toMs: end)
         let from = bounds?.from ?? 1, to = bounds?.to ?? 0
         let segments = bounds.map {
@@ -308,15 +332,12 @@ struct RawDataCollectorView: View {
         // Historical windows must still cover the exact requested start.
         let firstImuTs = segments.map(\.startTs).min().flatMap { $0 <= from + 1 ? $0 : nil }
         let coverageFrom = session.capturedStartedAtMs == nil ? from : max(from, firstImuTs ?? from)
-        let imuComplete = Self.covers(segments, from: coverageFrom, to: to)
-        let coverage: [String: Any] = [
-            "requested_start_ts": from, "requested_end_ts": to,
-            "required_start_ts": coverageFrom,
-            "startup_seconds": max(0, coverageFrom - from),
-            "complete": imuComplete,
-            "segments": segments.map { ["file": $0.name, "start_ts": $0.startTs, "end_ts": $0.endTs,
-                                         "sample_count": $0.sampleCount] }
-        ]
+        // FRWHOOP issue #1: conflicts inside the reported window make the export conservative —
+        // `complete` is false while any gap or unresolved duplicate conflict exists.
+        let conflicts = ImuSessionFileStore.shared.conflictTimestamps(session.id)
+            .filter { $0 >= Int64(coverageFrom) && $0 <= Int64(to) }
+        let coverage = ImuCoverage.report(segments: segments, requestedFrom: from, requestedTo: to,
+                                          requiredFrom: coverageFrom, conflicts: conflicts)
         if let data = try? JSONSerialization.data(withJSONObject: coverage, options: [.prettyPrinted, .sortedKeys]) {
             entries.append(.init(name: "imu-coverage.json", data: data))
         }
@@ -328,6 +349,7 @@ struct RawDataCollectorView: View {
             store.markExported(session.id)
         }
         exportingId = nil
+        await refreshImuCoverage()
     }
 
     private func delete(_ session: RawDataSessionStore.Session) async {
@@ -352,8 +374,15 @@ struct RawDataCollectorView: View {
             let from = session.capturedStartedAtMs == nil ? bounds.from : max(bounds.from, first ?? bounds.from)
             let expected = max(0, bounds.to - from + 1)
             let bytes = ByteCountFormatter.string(fromByteCount: stats.bytes, countStyle: .file)
-            let readiness = expected > 0 && stats.coveredSeconds == expected ? "ready" : "incomplete"
-            imuCoverage[session.id] = "\(stats.coveredSeconds)/\(expected) s · \(bytes) · \(readiness)"
+            // FRWHOOP issue #1: unresolved duplicate conflicts count against readiness, and are
+            // surfaced explicitly so the card never claims "ready" over silently merged data.
+            let conflictCount = ImuSessionFileStore.shared.conflictTimestamps(session.id)
+                .filter { $0 >= Int64(from) && $0 <= Int64(bounds.to) }.count
+            let readiness = expected > 0 && stats.coveredSeconds == expected
+                && conflictCount == 0 ? "ready" : "incomplete"
+            var text = "\(stats.coveredSeconds)/\(expected) s · \(bytes) · \(readiness)"
+            if conflictCount > 0 { text += " · \(conflictCount) conflict(s)" }
+            imuCoverage[session.id] = text
         }
     }
 
@@ -386,17 +415,5 @@ struct RawDataCollectorView: View {
         case "issue": "Issue"
         default: "Moment"
         }
-    }
-
-    private static func covers(_ chunks: [ImuSessionFileStore.ExportSegment], from: Int, to: Int) -> Bool {
-        var cursor = from
-        for chunk in chunks.sorted(by: { $0.startTs < $1.startTs }) {
-            let start = chunk.startTs, end = chunk.endTs
-            if chunk.sampleCount < (end - start + 1) * ImuSessionFileStore.sampleRate { continue }
-            if start > cursor { return false }
-            if end >= cursor { cursor = end + 1 }
-            if cursor > to { return true }
-        }
-        return cursor > to
     }
 }

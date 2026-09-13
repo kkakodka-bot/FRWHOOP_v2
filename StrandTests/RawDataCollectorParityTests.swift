@@ -27,9 +27,9 @@ final class RawDataCollectorParityTests: XCTestCase {
         let paths = [
             "Strand/Collect/RawDataSessionStore.swift", "Strand/Collect/Collector.swift",
             "Strand/BLE/BLEManager.swift", "Strand/Screens/RawDataCollectorView.swift",
-            "Strand/Collect/ImuSessionFileStore.swift",
-            "Strand/Collect/ImuContinuousRecorder.swift",
             "Strand/Screens/ImuRecorderView.swift",
+            "Strand/Collect/ImuSessionFileStore.swift", "Strand/Collect/ImuCoverage.swift",
+            "Strand/Collect/ImuContinuousRecorder.swift", "Strand/Collect/Backfiller.swift",
             "Packages/WhoopStore/Sources/WhoopStore/Database.swift",
             "Packages/WhoopStore/Sources/WhoopStore/StreamStore.swift",
             "Packages/WhoopStore/Sources/WhoopStore/RawOutbox.swift",
@@ -55,5 +55,21 @@ final class RawDataCollectorParityTests: XCTestCase {
         XCTAssertTrue(source.contains("frame[8] == 43 || frame[8] == 51"))
         XCTAssertTrue(source.contains("send(.stopRawData, payload: [0x01]"))
         XCTAssertTrue(source.contains("send(.toggleIMUMode, payload: [0x01, 0x00]"))
+    }
+
+    /// FRWHOOP issue #1: the Apple-side routing/repair seams are platform-specific (Android routes
+    /// every inbound frame in WhoopBleClient and has no rawBatch archive to replay), so they are
+    /// guarded by a Swift-only source test rather than the shared oracle.
+    func testAppleRoutesLiveAndHistoricalImuIntoSessions() throws {
+        let ble = try String(contentsOf: repoRoot.appendingPathComponent("Strand/BLE/BLEManager.swift"))
+        XCTAssertTrue(ble.contains("recordGroundTruthImuFrame(frame)"))
+        XCTAssertTrue(ble.contains("imuSessionSink: { deviceId, frames in"))
+        XCTAssertTrue(ble.contains("func repairGroundTruthImuSessions()"))
+        let backfiller = try String(contentsOf: repoRoot.appendingPathComponent("Strand/Collect/Backfiller.swift"))
+        XCTAssertTrue(backfiller.contains("imuSessionSink(deviceId, imuFrames)"))
+        let store = try String(contentsOf: repoRoot.appendingPathComponent("Strand/Collect/ImuSessionFileStore.swift"))
+        XCTAssertTrue(store.contains("func persistHistoricalImu("))
+        let collector = try String(contentsOf: repoRoot.appendingPathComponent("Strand/Collect/Collector.swift"))
+        XCTAssertTrue(collector.contains("func repairImuSessionsFromRawArchive("))
     }
 }

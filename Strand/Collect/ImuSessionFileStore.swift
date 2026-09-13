@@ -39,13 +39,21 @@ final class ImuSessionFileStore {
                                                 defaultsKey: "imu-continuous-windows-v1")
     static let sampleRate = 100, axes = 6, blockSeconds = 30
     static let segmentSeconds: Int64 = 30 * 60
+    /// Per-session conflict-evidence file (FRWHOOP issue #1): a sorted JSON array of strap timestamps
+    /// whose re-delivered payload DISAGREED with the first durable record. Same name + format on
+    /// Android. Lives inside the session directory, so it is deleted with the session.
+    static let conflictsFileName = "imu-conflicts.json"
     private static let payloadBytes = sampleRate * axes * 2
     private static let magic = Data("NOOPIMU2".utf8)
     private let defaults: UserDefaults
     private let key: String
     private let directory: URL
-    private var seen: [String: Set<Int64>] = [:]
+    /// Segment path → (strap ts → digest of its stored columns). The digest distinguishes an exact
+    /// re-delivery (discard silently) from a conflicting payload (keep first, record evidence).
+    private var seen: [String: [Int64: UInt64]] = [:]
     private var pending: [String: [Record]] = [:]
+    /// Session id → conflicted strap timestamps (mirror of `imu-conflicts.json`; loaded lazily).
+    private var conflicts: [String: Set<Int64>] = [:]
 
     /// `directory` overrides the whole directory (tests); `directoryComponent` + `defaultsKey` pick
     /// the namespace (bounded sessions vs the continuous recorder). Not private so tests can build
@@ -61,6 +69,19 @@ final class ImuSessionFileStore {
         key = defaultsKey
         self.defaults = defaults
         try? fm.createDirectory(at: directory, withIntermediateDirectories: true)
+    }
+
+    /// Platform-neutral FNV-1a over the little-endian column payload. Never persisted across the
+    /// .noopbak boundary, but it IS compared against digests computed on the other platform's twin
+    /// in parity tests, so it must be a stable algorithm — Swift `hashValue` is randomized per run
+    /// and banned here. Twin of Kotlin `ImuSessionFileStore.columnsDigest`.
+    static func columnsDigest(_ columns: [Int16]) -> UInt64 {
+        var hash: UInt64 = 0xcbf29ce484222325
+        for value in columns {
+            hash = (hash ^ UInt64(UInt8(truncatingIfNeeded: value))) &* 0x100000001b3
+            hash = (hash ^ UInt64(UInt8(truncatingIfNeeded: value >> 8))) &* 0x100000001b3
+        }
+        return hash
     }
 
     func start(id: String, deviceId: String, fromMs: Int64) {
@@ -80,6 +101,7 @@ final class ImuSessionFileStore {
     func remove(id: String) {
         pending.keys.filter { $0.hasPrefix("\(id)/") }.forEach { pending[$0] = nil }
         seen.keys.filter { $0.hasPrefix(sessionDirectory(id).path) }.forEach { seen[$0] = nil }
+        conflicts[id] = nil
         save(windows().filter { $0.id != id })
     }
     func prepareForRead(_ id: String) { flushSession(id) }
@@ -96,34 +118,104 @@ final class ImuSessionFileStore {
         owned.forEach { remove(id: $0) }; return true
     }
 
+    /// True when any routing window exists for the device — lets the raw-archive repair scan
+    /// short-circuit before touching the database (FRWHOOP issue #1).
+    func hasWindows(deviceId: String) -> Bool { windows().contains { $0.deviceId == deviceId } }
+
     @discardableResult
     func append(deviceId: String, frame: [UInt8], receivedAtMs: Int64) -> Int {
-        guard let ts = Whoop5RawImu.baseTs(frame), let columns = Whoop5RawImu.rawColumns(frame) else { return 0 }
-        var count = 0
+        appendRouting(deviceId: deviceId, frame: frame, receivedAtMs: receivedAtMs).count
+    }
+
+    /// Backfiller commit seam (FRWHOOP issue #1): append historical IMU buffers to every matching
+    /// session window and flush the touched sessions. True iff every record that matched a window is
+    /// durably on disk — NO matching window is a success (nothing was owed), so an ordinary history
+    /// sync never stalls on IMU. A false return makes the caller hold the trim ack (#57 pattern), so
+    /// the strap re-sends the chunk next session instead of trimming past un-persisted session data.
+    func persistHistoricalImu(deviceId: String, frames: [[UInt8]],
+                              receivedAtMs: Int64 = Int64(Date().timeIntervalSince1970 * 1_000)) -> Bool {
+        var touched: Set<String> = []
+        for frame in frames {
+            touched.formUnion(appendRouting(deviceId: deviceId, frame: frame, receivedAtMs: receivedAtMs))
+        }
+        // A re-delivered chunk (an earlier held ack) arrives as exact duplicates that queue nothing,
+        // but a failed first flush left those records PENDING — so flush every session for this
+        // device that still holds pending records, not only the sessions this call touched.
+        let toFlush = touched.union(pendingSessionIds(deviceId: deviceId))
+        guard !toFlush.isEmpty else { return true }
+        var ok = true
+        for id in toFlush where !flushSession(id) { ok = false }
+        return ok
+    }
+
+    /// Route one raw 5/MG IMU buffer into every matching session window; returns the ids of sessions
+    /// that QUEUED a new record. Duplicate policy (FRWHOOP issue #1): an identical payload at an
+    /// already-stored strap second is discarded; a DIFFERENT payload keeps the first durable value
+    /// and the second is recorded as conflict evidence — never silently merged or overwritten.
+    private func appendRouting(deviceId: String, frame: [UInt8], receivedAtMs: Int64) -> Set<String> {
+        guard let ts = Whoop5RawImu.baseTs(frame), let columns = Whoop5RawImu.rawColumns(frame) else { return [] }
+        var queued: Set<String> = []
         for window in windows() where window.deviceId == deviceId && Int64(ts) >= window.from
             && (window.to == nil || Int64(ts) <= window.to!) {
             let bucket = Self.bucketStart(Int64(ts)), url = segmentFile(window.id, bucket)
             var timestamps = seen[url.path] ?? scan(url)
-            guard timestamps.insert(Int64(ts)).inserted else { continue }
+            let digest = Self.columnsDigest(columns)
+            if let existing = timestamps[Int64(ts)] {
+                seen[url.path] = timestamps
+                if existing != digest { markConflict(window.id, Int64(ts)) }
+                continue
+            }
+            timestamps[Int64(ts)] = digest
             seen[url.path] = timestamps
             let pendingKey = "\(window.id)/\(bucket)"
             pending[pendingKey, default: []].append(Record(ts: Int64(ts), receivedAtMs: receivedAtMs, columns: columns))
             if pending[pendingKey]!.count >= Self.blockSeconds { flushKey(pendingKey) }
-            count += 1
+            queued.insert(window.id)
         }
-        return count
+        return queued
+    }
+
+    private func pendingSessionIds(deviceId: String) -> Set<String> {
+        let deviceSessions = Set(windows().filter { $0.deviceId == deviceId }.map(\.id))
+        return Set(pending.keys.map { String($0.split(separator: "/")[0]) }).intersection(deviceSessions)
+    }
+
+    // MARK: - Conflict evidence (FRWHOOP issue #1)
+
+    /// Sorted strap timestamps inside the session whose re-delivered payload disagreed with the
+    /// first durable record. Read by the export's coverage report.
+    func conflictTimestamps(_ id: String) -> [Int64] {
+        (conflicts[id] ?? loadConflicts(id)).sorted()
+    }
+
+    private func markConflict(_ id: String, _ ts: Int64) {
+        var set = conflicts[id] ?? loadConflicts(id)
+        guard set.insert(ts).inserted else { conflicts[id] = set; return }
+        conflicts[id] = set
+        try? FileManager.default.createDirectory(at: sessionDirectory(id), withIntermediateDirectories: true)
+        try? JSONEncoder().encode(set.sorted()).write(to: conflictsFile(id), options: .atomic)
+    }
+
+    private func loadConflicts(_ id: String) -> Set<Int64> {
+        guard let data = try? Data(contentsOf: conflictsFile(id)),
+              let list = try? JSONDecoder().decode([Int64].self, from: data) else { return [] }
+        let set = Set(list)
+        conflicts[id] = set
+        return set
+    }
+
+    private func conflictsFile(_ id: String) -> URL {
+        sessionDirectory(id).appendingPathComponent(Self.conflictsFileName)
     }
 
     func stats(_ id: String, from: Int, to: Int) -> Stats {
         // Coverage needs timestamps, not decoded 6-axis payloads: the per-file `seen` index (plus
         // the still-pending records) answers without inflating every block on each UI refresh.
-        // Twin of the Kotlin store's `stats`, which the export-contract test pins to exactly this
-        // timestamp-index shape. The index is maintained on append and lazily scanned once per file.
         var covered = Set<Int64>()
         for file in segmentFiles(id) {
             let timestamps = seen[file.path] ?? scan(file)
             seen[file.path] = timestamps
-            covered.formUnion(timestamps.filter { $0 >= Int64(from) && $0 <= Int64(to) })
+            covered.formUnion(timestamps.keys.filter { $0 >= Int64(from) && $0 <= Int64(to) })
         }
         for (pendingKey, records) in pending where pendingKey.hasPrefix("\(id)/") {
             for record in records where record.ts >= Int64(from) && record.ts <= Int64(to) {
@@ -155,7 +247,9 @@ final class ImuSessionFileStore {
             let lo = max(bucket, from), hi = min(bucket + Self.segmentSeconds - 1, to)
             var present = Set<Int64>()
             let url = segmentFile(id, bucket)
-            if FileManager.default.fileExists(atPath: url.path) { present = scan(url) }
+            if FileManager.default.fileExists(atPath: url.path) {
+                present = Set((seen[url.path] ?? scan(url)).keys)
+            }
             for record in pending["\(id)/\(bucket)"] ?? [] { present.insert(record.ts) }
             var ts = lo
             while ts <= hi {
@@ -163,7 +257,7 @@ final class ImuSessionFileStore {
                 var end = ts
                 while end + 1 <= hi && !present.contains(end + 1) { end += 1 }
                 if let last = missing.last, last.1 == ts - 1 {
-                    missing[missing.count - 1] = (last.0, end)   // coalesce across the bucket seam
+                    missing[missing.count - 1] = (last.0, end)
                 } else {
                     missing.append((ts, end))
                 }
@@ -266,17 +360,27 @@ final class ImuSessionFileStore {
         return result
     }
 
-    private func flushSession(_ id: String) { pending.keys.filter { $0.hasPrefix("\(id)/") }.forEach(flushKey) }
-    private func flushKey(_ key: String) {
+    /// Flush every pending block for the session. True iff nothing remains pending afterwards —
+    /// callers on a durability-critical path (the Backfiller's flush-before-ack seam) must check it.
+    @discardableResult
+    private func flushSession(_ id: String) -> Bool {
+        pending.keys.filter { $0.hasPrefix("\(id)/") }.forEach { flushKey($0) }
+        return !pending.keys.contains { $0.hasPrefix("\(id)/") }
+    }
+    /// Append one pending block to its segment file. On ANY failure the records are restored to
+    /// `pending` (so a later flush retries them) and the failure is reported to the caller.
+    @discardableResult
+    private func flushKey(_ key: String) -> Bool {
         guard let records = pending.removeValue(forKey: key), !records.isEmpty,
               let tail = key.split(separator: "/").last,
-              let bucket = Int64(String(tail)) else { return }
+              let bucket = Int64(String(tail)) else { return true }
         let id = String(key.split(separator: "/")[0]), url = segmentFile(id, bucket)
         try? FileManager.default.createDirectory(at: sessionDirectory(id), withIntermediateDirectories: true)
         if !FileManager.default.fileExists(atPath: url.path) { FileManager.default.createFile(atPath: url.path, contents: header(bucket)) }
-        guard let handle = try? FileHandle(forWritingTo: url) else { pending[key] = records; return }
-        do { try handle.seekToEnd(); try handle.write(contentsOf: block(records)); try handle.close() }
-        catch { try? handle.close(); pending[key] = records }
+        let payload = block(records)
+        guard !payload.isEmpty, let handle = try? FileHandle(forWritingTo: url) else { pending[key] = records; return false }
+        do { try handle.seekToEnd(); try handle.write(contentsOf: payload); try handle.close(); return true }
+        catch { try? handle.close(); pending[key] = records; return false }
     }
     private func header(_ bucket: Int64) -> Data {
         var data = Self.magic; data.appendBigEndian(bucket); data.appendBigEndian(Int32(Self.sampleRate)); data.appendBigEndian(Int32(Self.axes)); return data
@@ -297,7 +401,13 @@ final class ImuSessionFileStore {
     private func sessionDirectory(_ id: String) -> URL { directory.appendingPathComponent(id, isDirectory: true) }
     private func segmentFile(_ id: String, _ bucket: Int64) -> URL { sessionDirectory(id).appendingPathComponent("imu-\(Self.utcName(bucket)).imus") }
     private func segmentFiles(_ id: String) -> [URL] { ((try? FileManager.default.contentsOfDirectory(at: sessionDirectory(id), includingPropertiesForKeys: nil)) ?? []).filter { $0.pathExtension == "imus" }.sorted { $0.lastPathComponent < $1.lastPathComponent } }
-    private func scan(_ url: URL) -> Set<Int64> { Set(decode((try? Data(contentsOf: url)) ?? Data()).map(\.ts)) }
+    private func scan(_ url: URL) -> [Int64: UInt64] {
+        var map: [Int64: UInt64] = [:]
+        for record in decode((try? Data(contentsOf: url)) ?? Data()) {
+            map[record.ts] = Self.columnsDigest(record.columns)
+        }
+        return map
+    }
     private static func bucketStart(_ ts: Int64) -> Int64 { ts >= 0 ? ts / segmentSeconds * segmentSeconds : ((ts - segmentSeconds + 1) / segmentSeconds) * segmentSeconds }
     private static func utcName(_ ts: Int64) -> String { let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.timeZone = TimeZone(secondsFromGMT: 0); f.dateFormat = "yyyyMMdd'T'HHmmss'Z'"; return f.string(from: Date(timeIntervalSince1970: TimeInterval(ts))) }
     private func int32(_ bytes: [UInt8], _ offset: Int) -> Int { Int(bytes[offset]) << 24 | Int(bytes[offset + 1]) << 16 | Int(bytes[offset + 2]) << 8 | Int(bytes[offset + 3]) }

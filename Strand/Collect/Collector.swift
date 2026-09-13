@@ -379,6 +379,33 @@ final class Collector {
             receivedAtMs: Int64(Date().timeIntervalSince1970 * 1_000))
     }
 
+    /// Best-effort repair of already-archived history (FRWHOOP issue #1): scan this device's retained
+    /// rawBatch rows, and route every CRC-valid 100 Hz IMU frame into any session window covering its
+    /// strap timestamp. Returns the number of NEWLY queued one-second records (exact duplicates and
+    /// conflicts count as 0 — the store's duplicate policy applies here too). Best-effort by design:
+    /// rawBatch is size-capped transient working data, not canonical storage, so frames evicted before
+    /// the repair runs are simply absent. The scan ignores each batch's meta startTs/endTs — those are
+    /// capture-time wall-clock values, not the contained frames' strap timestamps.
+    @discardableResult
+    func repairImuSessionsFromRawArchive(imuStore: ImuSessionFileStore = .shared) async -> Int {
+        guard let store = concreteStore, imuStore.hasWindows(deviceId: deviceId) else { return 0 }
+        var repaired = 0
+        var cursor: RawBatchMeta?
+        while let page = try? await store.rawBatchMetas(deviceId: deviceId, after: cursor, limit: 20),
+              !page.isEmpty {
+            for meta in page {
+                let frames = (try? await store.rawFrames(batchId: meta.batchId)) ?? []
+                let receivedAtMs = Int64(meta.capturedAt) * 1_000
+                for frame in frames where Whoop5RawImu.rawColumns(frame) != nil
+                    && verifyFrame(frame, family: .whoop5).crc32OK == true {
+                    repaired += imuStore.append(deviceId: deviceId, frame: frame, receivedAtMs: receivedAtMs)
+                }
+            }
+            cursor = page.last
+        }
+        return repaired
+    }
+
     /// Flush WHILE the window is still active so the just-captured frames get persisted as raw,
     /// THEN close the window.
     func endRawCapture() async {

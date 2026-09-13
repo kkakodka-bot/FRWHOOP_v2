@@ -292,7 +292,12 @@ class GroundTruthCollector private constructor(private val context: Context) {
         val firstImuTs = imuSegments.minOfOrNull { it.startTs }?.takeIf { it <= fullFrom + 1 }
         val coverageFrom = if (summary.capturedStartedAtMs != null) maxOf(fullFrom, firstImuTs ?: fullFrom)
             else fullFrom
-        val imuComplete = covers(imuSegments, coverageFrom, fullTo)
+        // FRWHOOP issue #1: conservative completeness — any missing range OR any unresolved
+        // duplicate conflict inside the reported window marks the export incomplete.
+        val imuMissing = missingRanges(imuSegments, coverageFrom, fullTo)
+        val imuConflicts = if (deviceId == null) emptyList() else
+            ImuSessionFileStore(context).conflictTimestamps(id).filter { it in coverageFrom..fullTo }
+        val imuComplete = imuMissing.isEmpty() && imuConflicts.isEmpty() && coverageFrom <= fullTo
         val outDir = File(context.cacheDir, "logs").apply { mkdirs() }
         val zip = File(outDir, "noop-5mg-raw-$id.zip")
         ZipOutputStream(zip.outputStream().buffered()).use { out ->
@@ -325,6 +330,13 @@ class GroundTruthCollector private constructor(private val context: Context) {
                 put("imu_100hz_required_start_ts", coverageFrom)
                 put("imu_100hz_required_end_ts", fullTo)
                 put("imu_100hz_startup_seconds", (coverageFrom - fullFrom).coerceAtLeast(0))
+                put("imu_100hz_missing_ranges", org.json.JSONArray().apply {
+                    imuMissing.forEach { range -> put(JSONObject().apply {
+                        put("start_ts", range.first); put("end_ts", range.second)
+                    }) }
+                })
+                put("imu_100hz_conflict_count", imuConflicts.size)
+                put("imu_100hz_conflict_ts", org.json.JSONArray().apply { imuConflicts.forEach(::put) })
                 put("imu_100hz_coverage", org.json.JSONArray().apply {
                     imuSegments.forEach { segment -> put(JSONObject().apply {
                         put("file", segment.name); put("start_ts", segment.startTs); put("end_ts", segment.endTs)
@@ -372,17 +384,25 @@ class GroundTruthCollector private constructor(private val context: Context) {
         }, "Export raw-data session").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }
 
-    private fun covers(chunks: List<ImuSessionFileStore.ExportSegment>, from: Long, to: Long): Boolean {
-        if (from > to) return false
+    private fun covers(chunks: List<ImuSessionFileStore.ExportSegment>, from: Long, to: Long): Boolean =
+        from <= to && missingRanges(chunks, from, to).isEmpty()
+
+    /** The seconds of [from, to] NOT covered by any full-rate segment, ascending. A segment whose
+     *  sampleCount shows it is not full-rate is skipped entirely (the pre-existing coverage rule):
+     *  partial-rate data must not claim coverage. Twin of Swift `ImuCoverage.missingRanges`. */
+    private fun missingRanges(chunks: List<ImuSessionFileStore.ExportSegment>, from: Long, to: Long): List<Pair<Long, Long>> {
+        if (from > to) return emptyList()
+        val gaps = mutableListOf<Pair<Long, Long>>()
         var cursor = from
         for (chunk in chunks.sortedBy { it.startTs }) {
             val start = chunk.startTs; val end = chunk.endTs
             if (chunk.sampleCount < (end - start + 1) * ImuSessionFileStore.SAMPLE_RATE) continue
-            if (start > cursor) return false
+            if (start > cursor) gaps += cursor to minOf(start - 1, to)
             if (end >= cursor) cursor = end + 1
-            if (cursor > to) return true
+            if (cursor > to) break
         }
-        return cursor > to
+        if (cursor <= to) gaps += cursor to to
+        return gaps
     }
 
     private fun ceilSecond(epochMs: Long): Long = (epochMs + 999L) / 1_000L

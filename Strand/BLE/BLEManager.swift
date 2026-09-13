@@ -1490,6 +1490,9 @@ public final class BLEManager: NSObject, ObservableObject {
                                 rejectedSink: { [weak self] frames, trim, family in
                                     self?.archiveRejectedFrames(frames, trim: trim, family: family) ?? true
                                 },
+                                imuSessionSink: { deviceId, frames in
+                                    ImuSessionFileStore.shared.persistHistoricalImu(deviceId: deviceId, frames: frames)
+                                },
                                 onChunk: { [weak self] decoded, console in
                                     if decoded { self?.state.decodedChunksThisSession += 1 }
                                     if console { self?.state.consoleChunksThisSession += 1 }
@@ -2240,8 +2243,6 @@ public final class BLEManager: NSObject, ObservableObject {
               now.timeIntervalSince(rawCaptureStoppedAt) >= 3,
               now.timeIntervalSince(unexpectedImuStopAt) >= 30 else { return }
         unexpectedImuStopAt = now
-        // rawDataCommandGate is what lets these bytes reach the wire on 5/MG at all: the send()
-        // allowlist admits the raw-data family only while a capture is in flight or the gate is held.
         rawDataCommandGate = true
         send(.stopRawData, payload: [0x01], writeType: .withResponse)
         send(.toggleIMUMode, payload: [0x01, 0x00], writeType: .withResponse)
@@ -2249,9 +2250,26 @@ public final class BLEManager: NSObject, ObservableObject {
         log("Raw IMU fail-safe: unexpected realtime packet type \(frame[8]) while capture was off; stop requested")
     }
 
+    /// FRWHOOP issue #1: route one live-path 5/MG frame into the Raw Data Collector's canonical
+    /// .imus session store. CRC-gated and shape-gated so only integrity-checked 100 Hz IMU buffers
+    /// are appended; non-IMU frames return immediately. WHOOP 4.0 live IMU still flows through
+    /// `Collector.recordGroundTruthImu` on the `collector?.ingest` path.
+    private func recordGroundTruthImuFrame(_ frame: [UInt8]) {
+        guard Whoop5RawImu.rawColumns(frame) != nil,
+              verifyFrame(frame, family: .whoop5).crc32OK == true else { return }
+        _ = ImuSessionFileStore.shared.append(deviceId: deviceId, frame: frame,
+            receivedAtMs: Int64(Date().timeIntervalSince1970 * 1_000))
+    }
+
     public func groundTruthHistoryCSV(from: Int, to: Int) async -> Data {
         await collector?.historySensorsCSV(from: from, to: to)
             ?? Data("stream,unix_s,v1,v2,v3,v4\n".utf8)
+    }
+
+    /// FRWHOOP issue #1: best-effort repair of session .imus data from the retained raw archive.
+    /// Returns the number of newly routed one-second IMU records (0 when no store/windows exist).
+    public func repairGroundTruthImuSessions() async -> Int {
+        await collector?.repairImuSessionsFromRawArchive() ?? 0
     }
 
     /// Send a command to the WHOOP strap.
@@ -6993,16 +7011,9 @@ extension BLEManager: @preconcurrency CBPeripheralDelegate {
                     // BEFORE the offload branch so it catches the burst; no-op unless capture is on.
                     puffinDeepBufferLog.appendIfDeepBuffer(frame: frame, char: characteristic.uuid, isOffload: isOffload)
                     stopUnexpectedRealtimeImu(frame, isOffload: isOffload)
-                    // Canonical .imus stores see EVERY reassembled 5/MG frame, live or offload
-                    // replay; each decodes internally and ignores non-IMU frames, and both dedup by
-                    // strap timestamp so a frame reaching them twice (e.g. an offload replay of a
-                    // live second) is written once. The bounded-session store gets live frames here
-                    // too — the live path below deliberately never enters the Collector, which is
-                    // why bounded sessions previously only had offload history on this platform.
-                    // The continuous recorder applies its own switch/window/retention gates inside.
+                    // The continuous recorder sees every reassembled 5/MG frame (live or offload replay)
+                    // and applies its own switch/window/retention gates inside.
                     let imuFrameReceivedAtMs = Int64(Date().timeIntervalSince1970 * 1_000)
-                    _ = ImuSessionFileStore.shared.append(deviceId: deviceId, frame: frame,
-                                                          receivedAtMs: imuFrameReceivedAtMs)
                     imuRecorder.ingestFrame(frame, isOffload: isOffload, receivedAtMs: imuFrameReceivedAtMs)
                     // #423: the queryable twin of that diagnostics line — persist the decoded 100 Hz 6-axis
                     if isOffload {
@@ -7018,6 +7029,12 @@ extension BLEManager: @preconcurrency CBPeripheralDelegate {
                         router.mirrorStrapConsoleIfPresent(frame: frame)
                         continue
                     }
+                    // FRWHOOP issue #1: live-path 100 Hz IMU frames feed the Raw Data Collector's
+                    // canonical .imus session store (Android parity: WhoopBleClient does this for
+                    // every inbound frame). Offload frames are excluded — the Backfiller persists
+                    // those under its flush-before-ack durability invariant, and a buffered live
+                    // duplicate here would defeat it.
+                    recordGroundTruthImuFrame(frame)
                     router.handle(frame: frame)
                     // #592: a 5/MG extended-battery probe COMMAND_RESPONSE (puffin envelope: type @8, cmd
                     // @10). Format + publish it for the Devices dialog, exactly like the 4.0 path above.
