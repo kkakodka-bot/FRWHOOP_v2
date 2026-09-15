@@ -5994,6 +5994,7 @@ public final class BLEManager: NSObject, ObservableObject {
         if m.hr >= 30 && m.hr <= 220, state.heartRate != m.hr { state.heartRate = m.hr }
         // Record it continuously — independent of the realtime stream or the open screen.
         collector?.ingestStandardHR(hr: m.hr, rr: m.rr, contact: m.contact,
+                                    family: router.family,
                                     at: Int(Date().timeIntervalSince1970))
     }
 }

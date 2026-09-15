@@ -8359,7 +8359,7 @@ class WhoopBleClient(
 
         // Record it continuously — independent of the realtime stream or which screen is open.
         // Port of BLEManager.parseStandardHR -> collector.ingestStandardHR(hr:rr:at:).
-        ingestStandardHr(hr, rr, contact, (System.currentTimeMillis() / 1000L))
+        ingestStandardHr(hr, rr, contact, (System.currentTimeMillis() / 1000L), connectedFamily)
     }
 
     /** The Test Centre gate, bound once to the app's single "noop_testcentre" prefs file. Lazily built so
@@ -9856,10 +9856,13 @@ class WhoopBleClient(
      * Buffer one standard 0x2A37 reading (carries a wall-clock ts directly, no clock ref needed).
      * Auto-flushes ~every 30 readings. Port of `Collector.ingestStandardHR`.
      */
-    private fun ingestStandardHr(hr: Int, rr: List<Int>, contact: StandardHrContact, ts: Long) {
+    private fun ingestStandardHr(hr: Int, rr: List<Int>, contact: StandardHrContact, ts: Long,
+                                 family: DeviceFamily) {
         val shouldFlush = synchronized(collectorLock) {
             if (hr in 30..220) stdHr.add(HrRow(ts, hr))
-            for (r in rr) if (r in 250..3000) stdRr.add(RrRow(ts, r))
+            val source = if (family == DeviceFamily.WHOOP5)
+                com.noop.protocol.RrSourceChannel.WHOOP5_STANDARD else null
+            for (r in rr) if (r in 250..3000) stdRr.add(RrRow(ts, r, source))
             stdContact.add(StandardHrMapping.contactEvent(ts, contact))
             standardHrBufferReachedFlushThreshold(stdHr.size, stdRr.size, stdContact.size)
         }

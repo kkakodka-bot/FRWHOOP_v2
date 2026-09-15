@@ -56,7 +56,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         SyncJobEntity::class,
         SyncJournalEntryEntity::class,
     ],
-    version = 38,
+    version = 39,
     // #775: ON so Room's KSP processor writes the generated schema (every table's exact `CREATE TABLE`,
     // columns in declaration order with affinity/NOT NULL/default, PK and indices) as JSON. That export
     // is what lets a plain JVM test — no device, no Robolectric — read Android's REAL schema and compare
@@ -77,7 +77,7 @@ abstract class WhoopDatabase : RoomDatabase() {
         const val DB_NAME = "noop_whoop.db"
         /** Room schema version — MUST equal the `@Database(version = …)` above. Surfaced in the backup
          *  manifest (#1410) so an export states its schema. Bump both together on a migration. */
-        const val SCHEMA_VERSION = 38
+        const val SCHEMA_VERSION = 39
 
         @Volatile
         private var instance: WhoopDatabase? = null
@@ -1003,6 +1003,14 @@ abstract class WhoopDatabase : RoomDatabase() {
             )""",
         )
 
+        /** Covers the source-promotion cache witnesses. Twin of GRDB v46-rr-source-index. */
+        internal const val RR_SOURCE_INDEX_SQL =
+            "CREATE INDEX IF NOT EXISTS rrInterval_source_suspect ON rrInterval(srcChannel, tsSuspect)"
+
+        internal val MIGRATION_38_39 = object : Migration(38, 39) {
+            override fun migrate(db: SupportSQLiteDatabase) { db.execSQL(RR_SOURCE_INDEX_SQL) }
+        }
+
         /**
          * Every migration the builder registers, as a VALUE rather than an argument list.
          *
@@ -1031,6 +1039,7 @@ abstract class WhoopDatabase : RoomDatabase() {
             MIGRATION_30_31, MIGRATION_31_32, MIGRATION_32_33, MIGRATION_33_34, MIGRATION_34_35, MIGRATION_35_36,
             MIGRATION_36_37,
             MIGRATION_37_38,
+            MIGRATION_38_39,
         )
 
         private fun build(appContext: Context): WhoopDatabase =
