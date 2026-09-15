@@ -34,15 +34,33 @@ struct BackfillMainHooks: Sendable {
     let connectionLog: @Sendable (String) async -> Void
     let firmwareLayout: @Sendable (Int) async -> Void
     let onPersistCircuitBreak: @Sendable () async -> Void
+    let onChunkCommitBegin: @Sendable () async -> Void
+    let onChunkCommitAborted: @Sendable () async -> Void
     let onOffloadComplete: @Sendable () async -> Void
 }
 
-/// Serial offload pipeline: FIFO frame queue, chunk commits, and IMU session persistence off the main actor.
+/// Thread-safe handoff for BLE notify-path frame yields into the actor pipeline.
+private final class BackfillPipelineSink: @unchecked Sendable {
+    var continuation: AsyncStream<BackfillPipelineItem>.Continuation?
+}
+
+private enum BackfillPipelineItem {
+    case frame([UInt8])
+    case begin(family: DeviceFamily, continuedAfterRows: Bool, done: CheckedContinuation<Void, Never>)
+    case timeout(done: CheckedContinuation<Void, Never>)
+}
+
+/// Serial offload pipeline: FIFO frame/control queue, chunk commits, and IMU session persistence off the main actor.
 actor BackfillActor {
     private var backfiller: Backfiller?
-    private var queue: [[UInt8]] = []
-    private var draining = false
+    private let pipelineSink = BackfillPipelineSink()
+    private var processingTask: Task<Void, Never>?
     private var onOffloadComplete: (() async -> Void)?
+    /// False after `timeout` until the next `begin`; stray frames from a torn-down session are dropped.
+    private var acceptingFrames = false
+    /// True while `runLoop` is inside `ingest` (or between dequeue and loop exit for one frame).
+    private var ingestInFlight = false
+    private var queuedFrameCount = 0
 
     func configure(store: BackfillStoreWriting,
                    deviceId: String,
@@ -70,7 +88,18 @@ actor BackfillActor {
             firmwareLayout: { version in await hooks.firmwareLayout(version) },
             postOffloadJobKinds: postOffloadJobKinds,
             onPersistCircuitBreak: { await hooks.onPersistCircuitBreak() },
+            onChunkCommitBegin: { await hooks.onChunkCommitBegin() },
+            onChunkCommitAborted: { await hooks.onChunkCommitAborted() },
             extract: extract)
+        let (stream, continuation) = AsyncStream<BackfillPipelineItem>.makeStream()
+        pipelineSink.continuation = continuation
+        processingTask?.cancel()
+        processingTask = Task { await self.runLoop(stream) }
+    }
+
+    /// Thread-safe frame handoff from the BLE notify path — no per-frame `Task`.
+    nonisolated func yieldFrame(_ frame: [UInt8]) {
+        pipelineSink.continuation?.yield(.frame(frame))
     }
 
     func setDeviceId(_ id: String) {
@@ -89,23 +118,18 @@ actor BackfillActor {
         backfiller?.sessionNewestUnix = value
     }
 
-    func begin(family: DeviceFamily, continuedAfterRows: Bool) {
-        queue.removeAll(keepingCapacity: true)
-        draining = false
-        backfiller?.begin(family: family, continuedAfterRows: continuedAfterRows)
+    /// Reset session state. Does not return until any in-flight ingest and prior queued items finish.
+    func begin(family: DeviceFamily, continuedAfterRows: Bool) async {
+        await withCheckedContinuation { done in
+            pipelineSink.continuation?.yield(.begin(family: family, continuedAfterRows: continuedAfterRows, done: done))
+        }
     }
 
-    func enqueue(_ frame: [UInt8]) {
-        queue.append(frame)
-        guard !draining else { return }
-        draining = true
-        Task { await self.drain() }
-    }
-
-    func timeoutFired() {
-        backfiller?.timeoutFired()
-        queue.removeAll(keepingCapacity: true)
-        draining = false
+    /// Tear down backfiller state after the idle watchdog fires. Serialized behind any in-flight ingest.
+    func timeoutFired() async {
+        await withCheckedContinuation { done in
+            pipelineSink.continuation?.yield(.timeout(done: done))
+        }
     }
 
     func isBackfilling() async -> Bool {
@@ -113,7 +137,7 @@ actor BackfillActor {
     }
 
     func historyInFlight() -> Bool {
-        draining || !queue.isEmpty || (backfiller?.isBackfilling ?? false)
+        ingestInFlight || queuedFrameCount > 0 || (backfiller?.isBackfilling ?? false)
     }
 
     func sessionSnapshot() -> BackfillSessionSnapshot? {
@@ -136,18 +160,32 @@ actor BackfillActor {
             rrEmissionLine: bf.sessionRrEmissionLine())
     }
 
-    private func drain() async {
-        guard let backfiller else { draining = false; return }
-        while !queue.isEmpty {
-            let frame = queue.removeFirst()
-            await backfiller.ingest(frame)
-            if !backfiller.isBackfilling {
-                queue.removeAll(keepingCapacity: true)
-                await onOffloadComplete?()
-                draining = false
-                return
+    private func runLoop(_ stream: AsyncStream<BackfillPipelineItem>) async {
+        for await item in stream {
+            switch item {
+            case .begin(let family, let continuedAfterRows, let done):
+                acceptingFrames = true
+                backfiller?.begin(family: family, continuedAfterRows: continuedAfterRows)
+                done.resume()
+            case .timeout(let done):
+                acceptingFrames = false
+                backfiller?.timeoutFired()
+                done.resume()
+            case .frame(let frame):
+                guard acceptingFrames else { continue }
+                queuedFrameCount += 1
+                ingestInFlight = true
+                defer {
+                    ingestInFlight = false
+                    queuedFrameCount -= 1
+                }
+                guard let backfiller else { continue }
+                await backfiller.ingest(frame)
+                if !backfiller.isBackfilling {
+                    acceptingFrames = false
+                    await onOffloadComplete?()
+                }
             }
         }
-        draining = false
     }
 }
