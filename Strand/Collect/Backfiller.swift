@@ -391,6 +391,12 @@ final class Backfiller {
 
     /// Feed one raw BLE frame into the state machine. May trigger async store operations.
     func ingest(_ frame: [UInt8]) async {
+        // Records are decoded at chunk commit. Only metadata can change the offload state;
+        // keep its full checksum-validated parse before acting on START, END, or COMPLETE.
+        guard frameTypeName(frame, family: family) == "METADATA" else {
+            if chunkOpen { chunk.append(frame) }
+            return
+        }
         switch classifyHistoricalMeta(parseFrame(frame, family: family)) {
         case .start:
             isBackfilling = true
@@ -668,6 +674,11 @@ final class Backfiller {
         var decodeMs = 0, insertMs = 0, rawMs = 0, imuMs = 0, ackMs = 0
         var diagnosticsMs = 0, archiveMs = 0
 
+        // The strap waits for this chunk's ACK throughout decode, diagnostics, and persistence,
+        // including an empty END's cursor write. None of that work is radio inactivity.
+        await onChunkCommitBegin?()
+        commitWatchdogPaused = true
+
         // #773: corrupt future-RTC detection. A HISTORY_END carries the strap's own clock; a genuine offload
         // is always PAST-dated (it's banked history), so an end dated days into the future can only be a
         // corrupt strap RTC. Surface it ONCE per session with a recovery hint so the cause (the strap clock,
@@ -894,8 +905,6 @@ final class Backfiller {
             // emission can be measured, since every existing R-R number is taken after the ON CONFLICT key
             // has already absorbed part of it.
             let rrCensus = RrEmissionStats.compute(decoded.rr.map { (ts: $0.ts, rrMs: $0.rrMs) })
-            await onChunkCommitBegin?()
-            commitWatchdogPaused = true
             let insertStart = CFAbsoluteTimeGetCurrent()
             do {
                 // The durable debt is part of the SAME transaction as the decoded rows (safe trim): if the
