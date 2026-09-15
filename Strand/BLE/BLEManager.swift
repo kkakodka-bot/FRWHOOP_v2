@@ -617,6 +617,10 @@ public final class BLEManager: NSObject, ObservableObject {
     private var strapNewestTs: Int?
     /// Fires if the strap goes silent mid-offload; re-armed on every frame during backfill.
     private var backfillTimeout: DispatchWorkItem?
+    /// Fires when a chunk commit (decode + persist + IMU flush) exceeds the idle window without ack.
+    private var backfillCommitTimeout: DispatchWorkItem?
+    /// True from chunk-commit start until ack or an aborted commit (persist held).
+    private(set) var chunkCommitInFlight = false
     /// T2-2: coalesce idle-watchdog re-arms to at most once per second (±1 s accuracy is fine).
     private var lastBackfillTimeoutArm: ContinuousClock.Instant?
     /// T2-2: exact ack count this session; UI publishes every 10th chunk (Android twin).
@@ -1564,6 +1568,12 @@ public final class BLEManager: NSObject, ObservableObject {
                         self.central.cancelPeripheralConnection(peripheral)
                     }
                 }
+            },
+            onChunkCommitBegin: { [weak self] in
+                await MainActor.run { self?.pauseBackfillIdleWatchdogForCommit() }
+            },
+            onChunkCommitAborted: { [weak self] in
+                await MainActor.run { self?.resumeBackfillIdleWatchdogAfterAbortedCommit() }
             },
             onOffloadComplete: { [weak self] in
                 await MainActor.run { self?.afterBackfillIngest() }
@@ -3100,6 +3110,10 @@ public final class BLEManager: NSObject, ObservableObject {
     /// the Backfiller; it is passed here only for logging.
     func ackHistoricalChunk(trim: UInt32, endData: [UInt8]) {
         send(.historicalDataResult, payload: [0x01] + endData, writeType: .withResponse)
+        chunkCommitInFlight = false
+        backfillCommitTimeout?.cancel()
+        backfillCommitTimeout = nil
+        armBackfillTimeout()
         // Progress signal for the "Syncing strap history…" UI (#77). Republish every 10th chunk only —
         // @Published syncChunksThisSession drives SwiftUI across many screens. The internal counter stays
         // exact; exitBackfilling flushes the final value. Twin of Android WhoopBleClient.ackHistoricalChunk.
@@ -3114,7 +3128,7 @@ public final class BLEManager: NSObject, ObservableObject {
     /// Start a historical-offload session: tell the store machine to begin, flip the routing
     /// flag, kick the strap with sendHistoricalData, and arm the idle timeout.
     @discardableResult
-    private func beginBackfill() -> Bool {
+    private func beginBackfill() async -> Bool {
         guard sensorAcquisition.permitsHistoryStart else {
             log("Backfill: deferred while verified sensor capture or cleanup owns the command lane")
             return false
@@ -3163,7 +3177,7 @@ public final class BLEManager: NSObject, ObservableObject {
         // #42/#364: consecutiveAutoContinues > 0 means this offload is re-kicked after an EARLIER session in
         // the same burst banked rows — tell the backfiller so its no-cursor END reads as "caught up", not
         // "no banked history / charge to 100%". A fresh offload (count 0) keeps the honest guidance.
-        Task { await self.backfillActor?.begin(family: self.selectedModel.deviceFamily, continuedAfterRows: self.consecutiveAutoContinues > 0) }
+        await backfillActor?.begin(family: selectedModel.deviceFamily, continuedAfterRows: consecutiveAutoContinues > 0)
         backfilling = true
         state.backfilling = true
         state.postOffloadBurstInProgress = true
@@ -3187,10 +3201,10 @@ public final class BLEManager: NSObject, ObservableObject {
         return true
     }
 
-    /// Feed a frame to the Backfiller preserving exact arrival order. Frames append synchronously
-    /// in delegate order; `BackfillActor` drains them sequentially off the main actor.
+    /// Feed a frame to the Backfiller preserving exact arrival order. `yieldFrame` is synchronous
+    /// from the BLE notify path; `BackfillActor` drains FIFO on one task.
     private func routeBackfillFrame(_ frame: [UInt8]) {
-        Task { await self.backfillActor?.enqueue(frame) }
+        backfillActor?.yieldFrame(frame)
     }
 
     /// Called when a backfill session completes (HISTORY_COMPLETE). Exits the backfill session cleanly.
@@ -3223,18 +3237,59 @@ public final class BLEManager: NSObject, ObservableObject {
     /// airtime, so genuine offload frames can arrive in bursts with multi-second lulls between chunks
     /// — a short watchdog cut sessions short mid-drain. Longer = more records drained per session.
     static let backfillIdleTimeoutSeconds = 60
-    private func armBackfillTimeout() {
+    /// StrandTests override for idle/commit deadline (nil = production default).
+    static var backfillIdleTimeoutSecondsForTesting: Int?
+    private var backfillIdleDeadlineSeconds: Int {
+        BLEManager.backfillIdleTimeoutSecondsForTesting ?? BLEManager.backfillIdleTimeoutSeconds
+    }
+    /// StrandTests: arm the idle watchdog on an active session without a full offload bootstrap.
+    func test_simulateActiveBackfillSessionForWatchdog() {
+        backfilling = true
+        state.backfilling = true
+    }
+
+    func armBackfillTimeout() {
+        guard backfilling else { return }
         let now = ContinuousClock.Instant.now
         if let last = lastBackfillTimeoutArm, now - last < .seconds(1) { return }
         lastBackfillTimeoutArm = now
         backfillTimeout?.cancel()
         let item = DispatchWorkItem { [weak self] in
             guard let self else { return }
-            Task { await self.backfillActor?.timeoutFired() }
-            self.exitBackfilling(reason: "timeout")
+            guard !self.chunkCommitInFlight else { return }
+            Task {
+                await self.backfillActor?.timeoutFired()
+                await MainActor.run { self.exitBackfilling(reason: "timeout") }
+            }
         }
         backfillTimeout = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(BLEManager.backfillIdleTimeoutSeconds), execute: item)
+        DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(backfillIdleDeadlineSeconds), execute: item)
+    }
+
+    /// Pause the idle watchdog while a chunk commit is in flight; arm a one-shot commit deadline.
+    func pauseBackfillIdleWatchdogForCommit() {
+        guard backfilling else { return }
+        chunkCommitInFlight = true
+        backfillTimeout?.cancel()
+        backfillCommitTimeout?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            Task {
+                await self.backfillActor?.timeoutFired()
+                await MainActor.run { self.exitBackfilling(reason: "commit timeout") }
+            }
+        }
+        backfillCommitTimeout = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(backfillIdleDeadlineSeconds), execute: item)
+    }
+
+    /// A chunk commit ended without ack (persist held). Resume the idle window.
+    func resumeBackfillIdleWatchdogAfterAbortedCommit() {
+        guard chunkCommitInFlight else { return }
+        chunkCommitInFlight = false
+        backfillCommitTimeout?.cancel()
+        backfillCommitTimeout = nil
+        armBackfillTimeout()
     }
 
     /// Tear down the backfill session. Does NOT auto-start live HR: the periodic type-47 backfill
@@ -3300,6 +3355,9 @@ public final class BLEManager: NSObject, ObservableObject {
         lastOffloadFrameAt = Date()
         backfillTimeout?.cancel()
         backfillTimeout = nil
+        backfillCommitTimeout?.cancel()
+        backfillCommitTimeout = nil
+        chunkCommitInFlight = false
         lastBackfillTimeoutArm = nil
         if ackedChunksThisSession > 0 {
             state.syncChunksThisSession = ackedChunksThisSession
@@ -5299,17 +5357,17 @@ public final class BLEManager: NSObject, ObservableObject {
             }
             return
         }
-        if beginBackfill() {
-            UserDefaults.standard.set(now, forKey: BLEManager.backfillLastAtKey)
-        } else if backfillActor == nil {
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                await bootstrapStore()
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            if await self.beginBackfill() {
+                UserDefaults.standard.set(now, forKey: BLEManager.backfillLastAtKey)
+            } else if self.backfillActor == nil {
+                await self.bootstrapStore()
                 // On failure leave recovery to the normal next wake, without a retry
                 // loop. On success retain the original trigger (manual stays manual).
-                guard backfillActor != nil else { return }
-                log("Backfill: store ready — resuming deferred \(trigger) request")
-                requestSync(trigger)
+                guard self.backfillActor != nil else { return }
+                self.log("Backfill: store ready — resuming deferred \(trigger) request")
+                self.requestSync(trigger)
             }
         }
     }
@@ -6608,6 +6666,9 @@ extension BLEManager: @preconcurrency CBCentralManagerDelegate {
         state.sustainedEmptyOffload = false
         backfillTimeout?.cancel()
         backfillTimeout = nil
+        backfillCommitTimeout?.cancel()
+        backfillCommitTimeout = nil
+        chunkCommitInFlight = false
         uploadTimer?.cancel()
         uploadTimer = nil
         backfillTimer?.cancel()

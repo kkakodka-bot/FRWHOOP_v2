@@ -3092,6 +3092,8 @@ class WhoopBleClient(
         ackTrim = { trim, endData -> ackHistoricalChunk(trim, endData) },
         onBankedOffload = { counts -> addBankedOffload(counts) },
         onChunkCommitted = { batch -> onBackfillChunkCommitted(batch) },
+        onChunkCommitBegin = { pauseBackfillIdleWatchdogForCommit() },
+        onChunkCommitAborted = { resumeBackfillIdleWatchdogAfterAbortedCommit() },
         onConsoleChunk = { consoleChunksThisSession += 1 },
         // #77/#91: archive undecodable frames before the ack. append() returns ok=true (written, or
         // archive-full → still safe to ack) and THROWS only on a genuine write failure → return false
@@ -3659,7 +3661,14 @@ class WhoopBleClient(
     // --- Offload frame drain (preserves START/data/END arrival order; port of routeBackfillFrame) ---
 
     /** Ordered queue + generation-safe owner for the serial Backfiller drain. */
-    private val backfillDrain = BackfillDrainGate<ByteArray>()
+    private val backfillDrain = BackfillDrainGate<BackfillPipelineItem>()
+    /** False after timeout until the next pipeline begin; stray frames are dropped. */
+    @Volatile private var acceptingPipelineFrames = false
+    /** True from chunk-commit start until ack or an aborted commit (persist held). */
+    @Volatile private var chunkCommitInFlight = false
+    /** T2-2: coalesce idle-watchdog re-arms to at most once per second. */
+    private var lastBackfillTimeoutArmMs = 0L
+    private val backfillCommitTimeoutRunnable = Runnable { onBackfillCommitTimeout() }
 
     /** Periodic re-offload + idle-watchdog tokens (handler-posted; cancelled on disconnect). */
     private val periodicBackfillRunnable = Runnable { triggerPeriodicBackfill() }
@@ -9979,7 +9988,6 @@ class WhoopBleClient(
         // #42/#364: consecutiveAutoContinues > 0 means this offload is re-kicked after an EARLIER session
         // in the same burst banked rows — tell the backfiller so its no-cursor END reads as "caught up",
         // not "no banked history / charge to 100%". A fresh offload (count 0) keeps the honest guidance.
-        backfiller.begin(connectedFamily, continuedAfterRows = consecutiveAutoContinues > 0)   // family drives the +4 puffin offset for 5/MG (#78)
         backfilling = true
         lastBackfillAtMs = System.currentTimeMillis()   // the BackfillPolicy floor is measured from the last KICK
         ackedChunksThisSession = 0
@@ -9990,41 +9998,38 @@ class WhoopBleClient(
         // reusing lastBackfillAtMs, which is the BackfillPolicy floor and measures from the last KICK.
         backfillStartedAtMs = System.currentTimeMillis()
         historicalKickSent = false
+        lastBackfillTimeoutArmMs = 0L
+        chunkCommitInFlight = false
         _state.update { it.copy(backfilling = true, syncChunksThisSession = 0) }
         refreshConnectionPriority()   // #477: escalate to HIGH for the offload burst (faster sync). No-op unless enabled.
         applyPreferredPhy()           // #533: prefer LE 2M for the burst (halves air-time). No-op unless enabled.
-        // Opt-in raw capture (research aid): pref read fresh per session, like the probes gate.
-        // Normally already open from the connect hook; this covers a capture switched on mid-session.
-        if (connectedFamily == DeviceFamily.WHOOP5 && PuffinExperiment.from(context).isCaptureEnabled) {
-            startWhoop5BackfillCapture()
-            // Give the offload a FULL line budget. Since the capture was hoisted out of the `backfilling`
-            // gate it also records the live flood, and on a link that stays up overnight that flood can
-            // exhaust the 40k cap before the morning sync — pausing capture at exactly the moment the
-            // offload arrives, and losing the material this feature exists to collect. The line cap is a
-            // runaway guard, not a quota the live stream is entitled to spend, so the offload gets it
-            // back. The BYTE cap still bounds the file and is untouched.
-            captureLines = 0
-        }
-        if (connectedFamily == DeviceFamily.WHOOP5) {
-            // Re-apply the Broadcast-HR device-config flag if the user opted in (#181).
-            if (PuffinExperiment.from(context).broadcastHr) setBroadcastHr(true)
-            // Goose parity, hardware-validated (#78 fork): query the strap's stored range first and
-            // fire the transfer on its SUCCESS response (PENDING precedes it). FAIL-OPEN: real
-            // hardware sometimes swallows the first GET_DATA_RANGE entirely, so a 2s fallback fires
-            // the transfer anyway — the gate can delay the kick but never block it. WHOOP4 keeps its
-            // proven blind-fire path untouched.
-            send(CommandNumber.GET_DATA_RANGE, byteArrayOf(), withResponse = true)
-            handler.postDelayed({
-                if (backfilling && !historicalKickSent) {
-                    log("Backfill: GET_DATA_RANGE unanswered — requesting history anyway (fail-open)")
+        val family = connectedFamily
+        val continued = consecutiveAutoContinues > 0
+        ioScope.launch {
+            awaitPipelineBegin(family, continued)
+            handler.post {
+                if (!backfilling) return@post
+                // Opt-in raw capture (research aid): pref read fresh per session, like the probes gate.
+                if (family == DeviceFamily.WHOOP5 && PuffinExperiment.from(context).isCaptureEnabled) {
+                    startWhoop5BackfillCapture()
+                    captureLines = 0
+                }
+                if (family == DeviceFamily.WHOOP5) {
+                    if (PuffinExperiment.from(context).broadcastHr) setBroadcastHr(true)
+                    send(CommandNumber.GET_DATA_RANGE, byteArrayOf(), withResponse = true)
+                    handler.postDelayed({
+                        if (backfilling && !historicalKickSent) {
+                            log("Backfill: GET_DATA_RANGE unanswered — requesting history anyway (fail-open)")
+                            sendHistoricalKick()
+                        }
+                    }, DATA_RANGE_GATE_MS)
+                } else {
                     sendHistoricalKick()
                 }
-            }, DATA_RANGE_GATE_MS)
-        } else {
-            sendHistoricalKick()
+                armBackfillTimeout()
+                log("Backfill: session started — historical offload requested")
+            }
         }
-        armBackfillTimeout()
-        log("Backfill: session started — historical offload requested")
     }
 
     /** Fire SEND_HISTORICAL_DATA exactly once per backfill session (gate + fallback can both call). */
@@ -10139,27 +10144,57 @@ class WhoopBleClient(
      * END chunk assembly is never reordered. Port of `routeBackfillFrame` + the serial drain task.
      */
     private fun routeBackfillFrame(frame: ByteArray) {
-        val lease = backfillDrain.enqueue(frame) ?: return
+        val lease = backfillDrain.enqueue(BackfillPipelineItem.Frame(frame)) ?: return
+        startBackfillDrain(lease)
+    }
+
+    private suspend fun awaitPipelineBegin(family: DeviceFamily, continuedAfterRows: Boolean) {
+        val ack = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val lease = backfillDrain.enqueue(
+            BackfillPipelineItem.Begin(family, continuedAfterRows, ack),
+        )
+        if (lease != null) startBackfillDrain(lease)
+        ack.await()
+    }
+
+    private suspend fun awaitPipelineTimeout() {
+        val ack = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val lease = backfillDrain.enqueue(BackfillPipelineItem.Timeout(ack))
+        if (lease != null) startBackfillDrain(lease)
+        ack.await()
+    }
+
+    private fun startBackfillDrain(lease: BackfillDrainGate<BackfillPipelineItem>.Lease) {
         ioScope.launch {
             var ownsDrain = true
-            // A throw from ingest() must NEVER leave the drain stuck owned (that would wedge the
-            // offload — every later frame returns early and the queue never drains). finally guarantees
-            // the lease is released even if a chunk handler throws. (#77/#91 hardening.)
             try {
                 while (true) {
-                    val f = backfillDrain.pollOrRelease(lease)
-                    if (f == null) {
-                        ownsDrain = false
-                        break
-                    }
-                    try {
-                        backfiller.ingest(f)
-                    } catch (t: Throwable) {
-                        log("Backfill: drain error (${t.message}) — skipping frame, offload continues")
-                    }
-                    // If the Backfiller consumed all historical data, exit the session cleanly.
-                    if (backfilling && !backfiller.isBackfilling) {
-                        handler.post { exitBackfilling("HISTORY_COMPLETE") }
+                    when (val item = backfillDrain.pollOrRelease(lease)) {
+                        null -> {
+                            ownsDrain = false
+                            break
+                        }
+                        is BackfillPipelineItem.Frame -> {
+                            if (!acceptingPipelineFrames) continue
+                            try {
+                                backfiller.ingest(item.data)
+                            } catch (t: Throwable) {
+                                log("Backfill: drain error (${t.message}) — skipping frame, offload continues")
+                            }
+                            if (backfilling && !backfiller.isBackfilling) {
+                                handler.post { exitBackfilling("HISTORY_COMPLETE") }
+                            }
+                        }
+                        is BackfillPipelineItem.Begin -> {
+                            acceptingPipelineFrames = true
+                            backfiller.begin(item.family, continuedAfterRows = item.continuedAfterRows)
+                            item.ack.complete(Unit)
+                        }
+                        is BackfillPipelineItem.Timeout -> {
+                            acceptingPipelineFrames = false
+                            backfiller.timeoutFired()
+                            item.ack.complete(Unit)
+                        }
                     }
                 }
             } finally {
@@ -10173,11 +10208,37 @@ class WhoopBleClient(
      * silent the timer fires and we exit the session. Port of `armBackfillTimeout`.
      */
     private fun armBackfillTimeout() {
+        val now = System.currentTimeMillis()
+        if (now - lastBackfillTimeoutArmMs < 1000L) return
+        lastBackfillTimeoutArmMs = now
         handler.removeCallbacks(backfillTimeoutRunnable)
         handler.postDelayed(backfillTimeoutRunnable, BACKFILL_IDLE_TIMEOUT_MS)
     }
 
+    private fun pauseBackfillIdleWatchdogForCommit() {
+        if (!backfilling) return
+        chunkCommitInFlight = true
+        handler.removeCallbacks(backfillTimeoutRunnable)
+        handler.removeCallbacks(backfillCommitTimeoutRunnable)
+        handler.postDelayed(backfillCommitTimeoutRunnable, BACKFILL_IDLE_TIMEOUT_MS)
+    }
+
+    private fun resumeBackfillIdleWatchdogAfterAbortedCommit() {
+        if (!chunkCommitInFlight) return
+        chunkCommitInFlight = false
+        handler.removeCallbacks(backfillCommitTimeoutRunnable)
+        armBackfillTimeout()
+    }
+
+    private fun onBackfillCommitTimeout() {
+        ioScope.launch {
+            awaitPipelineTimeout()
+            handler.post { exitBackfilling("commit timeout") }
+        }
+    }
+
     private fun onBackfillTimeout() {
+        if (chunkCommitInFlight) return
         // 5/MG: a session that timed out with ZERO offload frames means the strap never answered the
         // history request (seen on real hardware — the first request after connect can be swallowed).
         // Retry once with a clean teardown; after 2 attempts the 900s periodic timer owns it. (#78 fork)
@@ -10185,19 +10246,23 @@ class WhoopBleClient(
             whoop5HistoryAttempts < 2 && _state.value.connected && _state.value.bonded
         ) {
             whoop5HistoryAttempts++
-            backfiller.timeoutFired()
-            backfilling = false
-            _state.update { it.copy(backfilling = false, syncChunksThisSession = 0) }
-            handler.removeCallbacks(backfillTimeoutRunnable)
-            backfillDrain.clear()
-            log("Backfill: no history frames arrived — retrying request (attempt ${whoop5HistoryAttempts + 1})")
-            // Bounded mid-attempt retry (whoop5HistoryAttempts < 2): AUTO_CONTINUE so the 90s event floor
-            // can't suppress it — it's continuing THIS connect's offload, not a fresh periodic kick.
-            handler.postDelayed({ requestSync(BackfillTrigger.AUTO_CONTINUE) }, WHOOP5_HISTORY_RETRY_DELAY_MS)
+            ioScope.launch {
+                awaitPipelineTimeout()
+                handler.post {
+                    backfilling = false
+                    _state.update { it.copy(backfilling = false, syncChunksThisSession = 0) }
+                    handler.removeCallbacks(backfillTimeoutRunnable)
+                    acceptingPipelineFrames = false
+                    log("Backfill: no history frames arrived — retrying request (attempt ${whoop5HistoryAttempts + 1})")
+                    handler.postDelayed({ requestSync(BackfillTrigger.AUTO_CONTINUE) }, WHOOP5_HISTORY_RETRY_DELAY_MS)
+                }
+            }
             return
         }
-        backfiller.timeoutFired()
-        exitBackfilling("timeout")
+        ioScope.launch {
+            awaitPipelineTimeout()
+            handler.post { exitBackfilling("timeout") }
+        }
     }
 
     /**
@@ -10447,6 +10512,9 @@ class WhoopBleClient(
             )
         } }
         handler.removeCallbacks(backfillTimeoutRunnable)
+        handler.removeCallbacks(backfillCommitTimeoutRunnable)
+        chunkCommitInFlight = false
+        acceptingPipelineFrames = false
         backfillDrain.clear()
         closeWhoop5BackfillCapture(flushSummary = true)
         log("Backfill: session ended — reason=$reason")
@@ -10680,6 +10748,9 @@ class WhoopBleClient(
         payload[0] = 0x01
         System.arraycopy(endData, 0, payload, 1, endData.size)
         send(CommandNumber.HISTORICAL_DATA_RESULT, payload, withResponse = true)
+        chunkCommitInFlight = false
+        handler.removeCallbacks(backfillCommitTimeoutRunnable)
+        armBackfillTimeout()
         // Progress signal for the "Syncing strap history…" UI (#77). Republish every 10th chunk only —
         // the FGS notification re-posts on every LiveState emission. Runs on the single serial drain
         // coroutine, so the counter is race-free.
