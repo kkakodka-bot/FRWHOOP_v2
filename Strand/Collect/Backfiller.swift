@@ -272,6 +272,10 @@ final class Backfiller {
     private let postOffloadJobKinds: [String]
     /// T2-4: invoked after three consecutive chunk persist failures; must abort the offload session.
     private let onPersistCircuitBreak: (() async -> Void)?
+    /// Idle-watchdog pause while decode + persist + IMU flush run (strap waits on our ack).
+    private let onChunkCommitBegin: (() async -> Void)?
+    /// Resume idle watchdog when a commit ends without ack (persist held).
+    private let onChunkCommitAborted: (() async -> Void)?
     /// T2-4: consecutive chunk commits that failed before ack (insert / archive / raw / imu / cursor).
     private var consecutivePersistFailures = 0
 
@@ -291,6 +295,8 @@ final class Backfiller {
          firmwareLayout: ((Int) async -> Void)? = nil,
          postOffloadJobKinds: [String] = [SyncJobKind.rescore.rawValue],
          onPersistCircuitBreak: (() async -> Void)? = nil,
+         onChunkCommitBegin: (() async -> Void)? = nil,
+         onChunkCommitAborted: (() async -> Void)? = nil,
          // The default (prod) Extractor reads the opt-in HR-from-PPG sub-lag interpolation flag (Test Centre →
          // Experimental algorithms) at decode time and threads it into the pure decoder, so the pure package
          // never reaches for UserDefaults. Default OFF = byte-identical to today. Tests inject their own seam.
@@ -311,6 +317,8 @@ final class Backfiller {
         self.firmwareLayout = firmwareLayout
         self.postOffloadJobKinds = postOffloadJobKinds
         self.onPersistCircuitBreak = onPersistCircuitBreak
+        self.onChunkCommitBegin = onChunkCommitBegin
+        self.onChunkCommitAborted = onChunkCommitAborted
         self.extract = extract
     }
 
@@ -647,6 +655,13 @@ final class Backfiller {
     private func finishChunk(unix: UInt32, trim: UInt32, endFrame: [UInt8]) async {
         guard let endData = Backfiller.endData(from: endFrame, family: family) else { return }
 
+        var commitWatchdogPaused = false
+        func resumeCommitWatchdogIfNeeded() async {
+            guard commitWatchdogPaused else { return }
+            commitWatchdogPaused = false
+            await onChunkCommitAborted?()
+        }
+
         let chunkArrival = CFAbsoluteTimeGetCurrent()
         let gapMs = lastChunkArrival.map { Int((chunkArrival - $0) * 1000) }
         lastChunkArrival = chunkArrival
@@ -879,6 +894,8 @@ final class Backfiller {
             // emission can be measured, since every existing R-R number is taken after the ON CONFLICT key
             // has already absorbed part of it.
             let rrCensus = RrEmissionStats.compute(decoded.rr.map { (ts: $0.ts, rrMs: $0.rrMs) })
+            await onChunkCommitBegin?()
+            commitWatchdogPaused = true
             let insertStart = CFAbsoluteTimeGetCurrent()
             do {
                 // The durable debt is part of the SAME transaction as the decoded rows (safe trim): if the
@@ -898,6 +915,7 @@ final class Backfiller {
                 persistStalled = true   // #57: stall ALL further acks so an empty END can't advance past this
                 await notePersistFailure(trim: trim, reason: "decoded insert/debt failed")
                 await recordPhaseSample()
+                await resumeCommitWatchdogIfNeeded()
                 return
             }
             insertMs = Int((CFAbsoluteTimeGetCurrent() - insertStart) * 1000)
@@ -942,6 +960,7 @@ final class Backfiller {
                     persistStalled = true   // #57
                     await notePersistFailure(trim: trim, reason: "rejected archive failed")
                     await recordPhaseSample()
+                    await resumeCommitWatchdogIfNeeded()
                     return
                 }
             }
@@ -968,6 +987,7 @@ final class Backfiller {
                     persistStalled = true   // #57
                     await notePersistFailure(trim: trim, reason: "raw enqueue failed")
                     await recordPhaseSample()
+                    await resumeCommitWatchdogIfNeeded()
                     return
                 }
                 rawMs = Int((CFAbsoluteTimeGetCurrent() - rawStart) * 1000)
@@ -993,6 +1013,7 @@ final class Backfiller {
                         persistStalled = true   // #57
                         await notePersistFailure(trim: trim, reason: "session IMU flush failed")
                         await recordPhaseSample()
+                        await resumeCommitWatchdogIfNeeded()
                         return
                     }
                 }
@@ -1026,6 +1047,7 @@ final class Backfiller {
         if persistStalled {
             await log?("Backfill: persist stalled earlier this session — NOT acking trim=\(trim) so the strap can't trim past un-stored history. Reconnect once the store is healthy (#57).")
             await recordPhaseSample()
+            await resumeCommitWatchdogIfNeeded()
             return
         }
 
@@ -1036,9 +1058,11 @@ final class Backfiller {
             persistStalled = true   // #57
             await notePersistFailure(trim: trim, reason: "strap_trim cursor failed")
             await recordPhaseSample()
+            await resumeCommitWatchdogIfNeeded()
             return
         }
 
+        commitWatchdogPaused = false
         await ackTrim(trim, endData)
         ackMs = Int((CFAbsoluteTimeGetCurrent() - ackStart) * 1000)
         lastAckedTrim = trim   // #364: record the advanced cursor for the auto-continue spin-detector
