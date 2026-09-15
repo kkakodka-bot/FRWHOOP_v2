@@ -20,10 +20,10 @@ public struct BackfillInsertOutcome: Sendable {
 }
 
 extension WhoopStore {
-    /// Backfill duplicate-replay skip (v45). Default ON; `enableBackfillRangeSkip = false` disables.
+    /// Backfill duplicate-replay skip (v45). Default OFF; `enableBackfillRangeSkip = true` enables.
     /// Live `insert()` passes empty `postOffloadJobKinds` and never consults the frontier.
     private static var backfillRangeSkipEnabled: Bool {
-        if UserDefaults.standard.object(forKey: "enableBackfillRangeSkip") == nil { return true }
+        if UserDefaults.standard.object(forKey: "enableBackfillRangeSkip") == nil { return false }
         return UserDefaults.standard.bool(forKey: "enableBackfillRangeSkip")
     }
 
@@ -269,8 +269,8 @@ extension WhoopStore {
     /// frontier. Safety invariant: persist-before-ack means everything at/below the frontier was
     /// durably written before the trim advanced; the strap only re-sends at/below the frontier when
     /// an ack was held or lost — exactly already-persisted chunks. Live rows never consult the
-    /// frontier. Accepted edge: a backfill chunk of genuinely-new rows with ts ≤ frontier (cross-chunk
-    /// ts disorder or a cross-session clock-ref shift) would be skipped.
+    /// frontier. Default OFF because a disordered chunk of genuinely-new rows with ts ≤ frontier
+    /// would be skipped; replay dedup relies on `ON CONFLICT DO NOTHING` instead.
     @discardableResult
     private func insertAndMarkIfNeeded(_ streams: Streams, deviceId: String,
                                        postOffloadJobKinds: [String],
