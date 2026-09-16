@@ -109,7 +109,8 @@ final class BackfillActorPipelineTests: XCTestCase {
 
     private func makeActor(store: BackfillStoreWriting,
                            ack: @escaping @Sendable () async -> Void = {},
-                           banked: @escaping @Sendable () async -> Void = {}) async -> BackfillActor {
+                           banked: @escaping @Sendable () async -> Void = {},
+                           chunkInfo: (@MainActor @Sendable ([BackfillChunkInfo]) -> Void)? = nil) async -> BackfillActor {
         let actor = BackfillActor()
         let hooks = BackfillMainHooks(
             ackTrim: { _, _ in await ack() },
@@ -123,7 +124,8 @@ final class BackfillActorPipelineTests: XCTestCase {
             onPersistCircuitBreak: {},
             onChunkCommitBegin: {},
             onChunkCommitAborted: {},
-            onOffloadComplete: {})
+            onOffloadComplete: {},
+            chunkInfo: chunkInfo)
         let extract: Backfiller.Extractor = { parsed, _, _, _, _ in
             Streams(hr: [HRSample(ts: 1_700_000_100, bpm: parsed.first?.seq ?? -1)])
         }
@@ -256,5 +258,151 @@ final class BackfillActorPipelineTests: XCTestCase {
         let after = await actor.sessionSnapshot()
         XCTAssertEqual(after?.sessionRowsPersisted, 2)
         XCTAssertEqual(after?.phaseSamples.count, 2)
+    }
+
+    @MainActor
+    private final class InfoTrace {
+        var observations: [String] = []
+        var stages: [String] = []
+        var batches = 0
+        var archived: [[UInt8]] = []
+        func stage(_ name: String) { stages.append(name) }
+
+        func log(_ line: String) {
+            // Elapsed timing differs between runs; the trace itself remains independently tested.
+            guard !line.hasPrefix("offload chunk trim=") else { return }
+            observations.append(line)
+        }
+
+        func consume(_ events: [BackfillChunkInfo]) {
+            batches += 1
+            stages.append("batch")
+            for event in events {
+                switch event {
+                case .log(let line): log(line)
+                case .connectionLog(let line): log("connection: " + line)
+                case .firmwareLayout(let version): log("layout: \(version)")
+                case .chunk(let decoded, let console): log("chunk: \(decoded),\(console)")
+                case .banked(let hr, let rr, let ev, let bat, let spo2, let skin, let resp, let grav):
+                    log("banked: \(hr),\(rr),\(ev),\(bat),\(spo2),\(skin),\(resp),\(grav)")
+                }
+            }
+        }
+    }
+
+    private actor InfoStore: BackfillStoreWriting {
+        enum Failure: CaseIterable { case insert, raw, cursor, archive }
+        let trace: InfoTrace
+        let failure: Failure?
+        init(trace: InfoTrace, failure: Failure? = nil) { self.trace = trace; self.failure = failure }
+
+        func insert(_ streams: Streams, deviceId: String) async throws
+            -> (hr: Int, rr: Int, events: Int, battery: Int, spo2: Int, skinTemp: Int, resp: Int, gravity: Int) {
+            await trace.stage("insert")
+            if failure == .insert { throw NSError(domain: "info-test", code: 1) }
+            return (1, 2, 3, 4, 5, 6, 7, 8)
+        }
+        func enqueueRawBatch(_ meta: RawBatchMeta, frames: [[UInt8]]) async throws {
+            await trace.stage("raw")
+            if failure == .raw { throw NSError(domain: "info-test", code: 2) }
+        }
+        func setCursor(_ name: String, _ value: Int) async throws {
+            await trace.stage("cursor")
+            if failure == .cursor { throw NSError(domain: "info-test", code: 3) }
+        }
+        func cursor(_ name: String) async throws -> Int? { nil }
+    }
+
+    private let mappedV18 = "aa01740001003fb12f1280733d8401b69f266a66460066025a0265020000000000007b0a8d656463ff0012163cf6a439bf2924fd3ed763fe3e3200aa000000000000000000f7000901f10b0007010c020c00000000000000000000000000000000000000000000000100656f1e1e0000009d61a7c00000003e862817"
+
+    @MainActor
+    private func replayInfoChunk(batched: Bool, frame: [UInt8], failure: InfoStore.Failure? = nil) async -> InfoTrace {
+        let trace = InfoTrace()
+        let store = InfoStore(trace: trace, failure: failure)
+        let actor = BackfillActor()
+        let finished = expectation(description: "chunk acknowledged or explicitly held")
+        let batch: (@MainActor @Sendable ([BackfillChunkInfo]) -> Void)?
+        if batched { batch = { trace.consume($0) } } else { batch = nil }
+        let hooks = BackfillMainHooks(
+            ackTrim: { _, _ in await MainActor.run { trace.stages.append("ack"); finished.fulfill() } },
+            onBankedOffload: { c in await MainActor.run {
+                trace.log("banked: \(c.hr),\(c.rr),\(c.events),\(c.battery),\(c.spo2),\(c.skinTemp),\(c.resp),\(c.gravity)")
+            } },
+            log: { line in await MainActor.run { trace.log(line) } },
+            rejectedSink: { frames, _, _ in await MainActor.run {
+                trace.stages.append("archive")
+                trace.archived += frames
+                return failure != .archive
+            } },
+            onChunk: { decoded, console in await MainActor.run { trace.log("chunk: \(decoded),\(console)") } },
+            connectionActive: { true },
+            connectionLog: { line in await MainActor.run {
+                if !line.hasPrefix("offload chunk trim=") { trace.log("connection: " + line) }
+            } },
+            firmwareLayout: { v in await MainActor.run { trace.log("layout: \(v)") } },
+            onPersistCircuitBreak: {},
+            onChunkCommitBegin: { await MainActor.run { trace.stages.append("begin") } },
+            onChunkCommitAborted: { await MainActor.run { trace.stages.append("abort"); finished.fulfill() } },
+            onOffloadComplete: {}, chunkInfo: batch)
+        await actor.configure(store: store, deviceId: "test", hooks: hooks,
+                              enableRawCapture: true, postOffloadJobKinds: [],
+                              extract: { _, _, _, _, _ in
+            Streams(hr: [HRSample(ts: 1_700_000_100, bpm: 70)], rr: [RRInterval(ts: 1_700_000_100, rrMs: 900)])
+        })
+        await actor.begin(family: .whoop5, continuedAfterRows: false)
+        actor.yieldFrame(frame)
+        actor.yieldFrame(hexBytes(whoop5HistoryEndHex))
+        await fulfillment(of: [finished], timeout: 5)
+        await actor.timeoutFired()
+        return trace
+    }
+
+    @MainActor
+    func testProductionInfoBatchPreservesEveryLegacyObservationAndSafeTrimOrder() async {
+        let frame = hexBytes(mappedV18)
+        let legacy = await replayInfoChunk(batched: false, frame: frame)
+        let batched = await replayInfoChunk(batched: true, frame: frame)
+        XCTAssertEqual(batched.observations, legacy.observations)
+        XCTAssertEqual(batched.batches, 1)
+        XCTAssertEqual(batched.stages, ["begin", "insert", "raw", "batch", "cursor", "ack"])
+        XCTAssertTrue(batched.observations.contains("layout: 18"))
+        XCTAssertTrue(batched.observations.contains("chunk: true,false"))
+        XCTAssertTrue(batched.observations.contains("banked: 1,2,3,4,5,6,7,8"))
+    }
+
+    @MainActor
+    func testProductionInfoBatchPreservesRejectedBytesAndFailureContextWithoutAck() async {
+        var rejected = hexBytes(mappedV18)
+        rejected[rejected.count - 1] ^= 1
+        for failure in InfoStore.Failure.allCases {
+            let legacy = await replayInfoChunk(batched: false, frame: rejected, failure: failure)
+            let batched = await replayInfoChunk(batched: true, frame: rejected, failure: failure)
+            XCTAssertEqual(batched.observations, legacy.observations, "\(failure)")
+            XCTAssertEqual(batched.archived, legacy.archived, "\(failure)")
+            XCTAssertFalse(batched.stages.contains("ack"), "\(failure)")
+            XCTAssertEqual(batched.stages.last, "abort", "\(failure)")
+            XCTAssertTrue(batched.observations.contains { $0.contains("holding ack") }, "\(failure)")
+            if failure != .insert {
+                XCTAssertEqual(batched.archived, [rejected], "raw bytes must survive the batching change")
+                XCTAssertLessThan(batched.stages.firstIndex(of: "batch")!, batched.stages.firstIndex(of: "archive")!)
+            }
+        }
+    }
+
+    @MainActor
+    func testInvalidationDuringInsertDiscardsPendingProductionBatch() async {
+        let store = OrderedInsertStore(pauseFirstInsert: true)
+        let trace = InfoTrace()
+        let actor = await makeActor(store: store, chunkInfo: { trace.consume($0) })
+        await actor.begin(family: .whoop5, continuedAfterRows: false)
+        actor.yieldFrame(hexBytes(mappedV18))
+        actor.yieldFrame(hexBytes(whoop5HistoryEndHex))
+        await store.waitForFirstInsert()
+        XCTAssertEqual(trace.batches, 0)
+        actor.invalidateSession()
+        await store.releaseFirstInsert()
+        await actor.timeoutFired()
+        XCTAssertEqual(trace.batches, 0, "queued informational effects cannot outlive their session")
+        XCTAssertTrue(trace.observations.isEmpty)
     }
 }

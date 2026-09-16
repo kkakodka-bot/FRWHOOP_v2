@@ -64,6 +64,28 @@ final class BackfillManagerLifecycleTests: XCTestCase {
         XCTAssertNil(manager.test_pendingBackfillStart)
     }
 
+    func testActorInstalledAfterRequestReservationReceivesHistoryRequest() async {
+        let actor = await configuredActor()
+        let manager = BLEManager(state: LiveState(), startCentral: false)
+        let sent = expectation(description: "history request after bootstrap")
+        sent.assertForOverFulfill = true
+        var commands: [WhoopCommand] = []
+        let writer: (WhoopCommand, [UInt8]) -> Bool = { command, _ in
+            commands.append(command)
+            sent.fulfill()
+            return true
+        }
+        manager.test_configureHistoryTransport(writer: writer)
+        manager.requestSync(.manual)
+        XCTAssertNotNil(manager.test_pendingBackfillStart)
+        // Complete bootstrap synchronously before the reserved start task can run.
+        manager.test_configureHistoryTransport(actor: actor, writer: writer)
+        await fulfillment(of: [sent], timeout: 2)
+        XCTAssertEqual(commands, [.sendHistoricalData])
+        XCTAssertNil(manager.test_pendingBackfillStart)
+        manager.test_invalidateHistoryLink()
+    }
+
     func testSubmittedAckDoesNotCountUntilSuccessfulWriteCompletion() {
         let manager = BLEManager(state: LiveState(), startCentral: false)
         manager.test_configureHistoryTransport { _, _ in true }
