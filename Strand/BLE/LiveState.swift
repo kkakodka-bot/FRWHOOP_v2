@@ -457,6 +457,8 @@ public final class LiveState: ObservableObject {
     /// covers a productive idle timeout and fires only after auto-continuation has decided the backlog is
     /// finished. Intermediate HISTORY_COMPLETE slices never bump it.
     @Published public var postOffloadBurstCompleted: UInt64 = 0
+    /// Refresh diagnostics after the downstream drain updates its durable jobs and journal.
+    @Published public var syncStatusRevision: UInt64 = 0
     /// True across the short false→true gaps between auto-continued sessions. Durable debts may accrue,
     /// but foreground/background wakes defer them until the terminal decision clears this flag.
     @Published public var postOffloadBurstInProgress = false

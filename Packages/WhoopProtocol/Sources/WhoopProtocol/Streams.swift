@@ -375,10 +375,13 @@ public struct PpgWaveformSample: Equatable, Codable, Sendable {
     public let ts: Int          // wall-clock unix seconds (one record per second)
     public let samples: [Int]   // raw i16 ADC counts @24 Hz, verbatim from `ppg_waveform` (usually 24)
     public let burstIndex: Int?  // raw per-burst counter @21; nil for legacy archives
-    public init(ts: Int, samples: [Int], burstIndex: Int? = nil) {
+    /// Wire record counter; preserves distinct records emitted within the same second.
+    public let recordIndex: Int?
+    public init(ts: Int, samples: [Int], burstIndex: Int? = nil, recordIndex: Int? = nil) {
         self.ts = ts
         self.samples = samples
         self.burstIndex = burstIndex
+        self.recordIndex = recordIndex
     }
 }
 
