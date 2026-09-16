@@ -1108,6 +1108,7 @@ public final class BLEManager: NSObject, ObservableObject {
     /// can re-subscribe them AFTER bonding — the strap refuses them ("Authentication is insufficient")
     /// until the link is encrypted (issue #17).
     private var whoop5NotifyCharacteristics: [CBCharacteristic] = []
+    private var whoop5NotifyLastAttempt: [CBUUID: ContinuousClock.Instant] = [:]
     /// Reassembly is characteristic-scoped. Interleaved fd4b0003/4/5/7 fragments must
     /// never share one byte window.
     private var reassembler = CharacteristicReassembler()
@@ -1636,6 +1637,24 @@ public final class BLEManager: NSObject, ObservableObject {
                 await MainActor.run { [self, actor] in
                     guard actor?.deliverySessionIsCurrent == true else { return }
                     self?.afterBackfillIngest()
+                }
+            },
+            chunkInfo: { [weak self, weak actor] events in
+                guard let self, actor?.deliverySessionIsCurrent == true else { return }
+                for event in events {
+                    switch event {
+                    case .log(let line): self.log(line)
+                    case .connectionLog(let line): self.state.append(log: line, domain: .connection)
+                    case .firmwareLayout(let version): self.state.setStrapFirmwareLayout(version)
+                    case .chunk(let decoded, let console):
+                        if decoded { self.state.decodedChunksThisSession += 1 }
+                        if console { self.state.consoleChunksThisSession += 1 }
+                    case .banked(let hr, let rr, _, _, let spo2, let skinTemp, let resp, let gravity):
+                        self.offloadChunks += 1
+                        self.offloadHr += hr; self.offloadRr += rr
+                        self.offloadGravity += gravity; self.offloadResp += resp
+                        self.offloadSkinTemp += skinTemp; self.offloadSpo2 += spo2
+                    }
                 }
             })
         await actor.configure(store: store, deviceId: deviceId, hooks: hooks,
@@ -3308,6 +3327,9 @@ public final class BLEManager: NSObject, ObservableObject {
         // #42/#364: consecutiveAutoContinues > 0 means this offload is re-kicked after an EARLIER session in
         // the same burst banked rows — tell the backfiller so its no-cursor END reads as "caught up", not
         // "no banked history / charge to 100%". A fresh offload (count 0) keeps the honest guidance.
+        // Bootstrap can install this actor after requestSync reserved the manager's session but
+        // before this task starts. Give that newly installed pipeline the same reservation.
+        actor.reserveSession(sessionID)
         let began = await actor.begin(family: selectedModel.deviceFamily,
                                       continuedAfterRows: consecutiveAutoContinues > 0,
                                       sessionID: sessionID)
@@ -3623,6 +3645,11 @@ public final class BLEManager: NSObject, ObservableObject {
            let dynLine = bf.sessionDynAccel.logLine(threshold: dynAccelStillThresholdG) {
             log(dynLine)
         }
+        // One bounded summary per session also survives when verbose connection diagnostics are off.
+        // Samples are already collected; avoid enabling per-packet logging to measure sync latency.
+        if let bf = snapshot, let phaseLine = Backfiller.sessionPhaseTimingSummaryLine(bf.phaseSamples) {
+            log(phaseLine)
+        }
         // Connection test mode: the offload OUTCOME the readout's lastOffloadResult id binds. Gated
         // zero-cost (the .connection bool is read before any string is built). Diagnostic only - it reads
         // the same per-session tallies the existing summary above does, changing no offload behaviour. A
@@ -3646,9 +3673,6 @@ public final class BLEManager: NSObject, ObservableObject {
                 result = "\(reason) rows=\(rows)"
             }
             state.append(log: "offload result=\(result)", domain: .connection)
-            if let phaseLine = Backfiller.sessionPhaseTimingSummaryLine(bf.phaseSamples) {
-                state.append(log: phaseLine, domain: .connection)
-            }
         }
         // #547 RE-POLLUTION: this session's ingest gate dropped bad-clock records, so the strap has a
         // wandering clock and may have banked similar garbage on an OLDER build whose gate was weaker. Arm
@@ -3832,37 +3856,10 @@ public final class BLEManager: NSObject, ObservableObject {
                 chunks: state.syncChunksThisSession,
                 rows: snapshot?.sessionRowsPersisted ?? 0,
                 deepPackets: state.deepPacketsThisSession)
-            if selectedModel.deviceFamily == .whoop5 {
-                let crossed = whoop5EmptyOffload.recordOffload(bankedRecords: bankedThisOffload)
-                if whoop5EmptyOffload.historyEmpty {
-                    // Honest home state (#580): NOT a sync error — connected + live HR, history experimental.
-                    state.historySyncExperimental = true
-                    state.lastSyncError = nil
-                    if crossed {
-                        log("Backfill: WHOOP 5/MG offload empty \(whoop5EmptyOffload.consecutiveEmpty)× — history sync is experimental on 5.0; surfacing 'connected, history experimental' (not a sync error) and backing off the bounce loop.")
-                    }
-                } else {
-                    // Either the first empty cycle (could be the strap waking flash — stay quiet, don't
-                    // cry failure) OR a banking offload that just cleared the streak (recovery — drop the
-                    // experimental note). Both want a clean, error-free state.
-                    state.historySyncExperimental = false
-                    state.lastSyncError = nil
-                }
-            } else {
-                // #324/#928: a future-dated strap TIMES OUT on its deep future-dated backlog — that's not
-                // "the strap went quiet", it's the clock being set ahead. Prefer the honest future-clock
-                // banner so the reporter's timeout case (the common one) names the real cause + remedy.
-                //
-                // #1466: past that, only claim the strap went quiet when this offload actually handed over
-                // NOTHING. A WHOOP 4.0 routinely ends a full, successful night on the idle timeout rather
-                // than HISTORY_COMPLETE — one field log shows a session banking 17,205 rows across a night
-                // and still exiting reason=timeout. Announcing "sync interrupted" there tells the user a
-                // sync that worked had failed, which is worse than saying nothing: it trains them to
-                // distrust the one banner that matters when a sync really does stall. `bankedThisOffload`
-                // was already computed above for the 5/MG path and simply never consulted here.
-                state.lastSyncError = BLEManager.timeoutSyncError(futureClockBanner: futureClockBanner,
-                                                                  bankedThisOffload: bankedThisOffload)
-            }
+            applyBackfillTimeoutOutcome(family: selectedModel.deviceFamily,
+                                        persistStalled: snapshot?.persistStalled ?? false,
+                                        bankedThisOffload: bankedThisOffload,
+                                        futureClockBanner: futureClockBanner)
         }
         checkStrapLiveness()         // safety-net: strap ahead of us AND our frontier frozen ⇒ stuck?
         // #364 / #25: a session that ended on the 60s IDLE cap OR on a true HISTORY_COMPLETE while still
@@ -4049,6 +4046,29 @@ public final class BLEManager: NSObject, ObservableObject {
     /// real stall.
     nonisolated static func offloadBankedAnything(chunks: Int, rows: Int, deepPackets: Int) -> Bool {
         chunks > 0 || rows > 0 || deepPackets > 0
+    }
+
+    /// A storage failure must not be reclassified as an empty experimental offload on WHOOP 5/MG.
+    /// Earlier chunks may have landed, but the failed chunk was deliberately left unacknowledged.
+    func applyBackfillTimeoutOutcome(family: DeviceFamily, persistStalled: Bool,
+                                     bankedThisOffload: Bool, futureClockBanner: String?) {
+        if persistStalled {
+            whoop5EmptyOffload.reset()
+            state.historySyncExperimental = false
+            state.lastSyncError = String(localized: "History sync stopped because records could not be saved on this device. The unacknowledged chunk remains on the strap. See Test Centre for the storage error.")
+            return
+        }
+        if family == .whoop5 {
+            let crossed = whoop5EmptyOffload.recordOffload(bankedRecords: bankedThisOffload)
+            state.historySyncExperimental = whoop5EmptyOffload.historyEmpty
+            state.lastSyncError = nil
+            if crossed {
+                log("Backfill: WHOOP 5/MG offload empty \(whoop5EmptyOffload.consecutiveEmpty)× — history sync is experimental on 5.0; surfacing 'connected, history experimental' (not a sync error) and backing off the bounce loop.")
+            }
+        } else {
+            state.lastSyncError = BLEManager.timeoutSyncError(futureClockBanner: futureClockBanner,
+                                                              bankedThisOffload: bankedThisOffload)
+        }
     }
 
     /// #1466: the banner (if any) for an offload that ended on the idle TIMEOUT rather than
@@ -5697,6 +5717,7 @@ public final class BLEManager: NSObject, ObservableObject {
         disHwRev = nil
         disFirmware = nil
         whoop5NotifyCharacteristics.removeAll()
+        whoop5NotifyLastAttempt.removeAll()
     }
 
     /// Start a service-filtered scan for `model`, re-framing the inbound stream for its family (so a
@@ -5780,6 +5801,7 @@ public final class BLEManager: NSObject, ObservableObject {
 
     private func enableLiveNotifications(reason: String) {
         guard let p = peripheral, p.state == .connected else { return }
+        repairWhoop5Notifications(on: p, reason: reason)
         let chars = [
             cmdNotifyCharacteristic,
             eventNotifyCharacteristic,
@@ -6023,6 +6045,34 @@ public final class BLEManager: NSObject, ObservableObject {
         else { return }
         try? rs.setModel(attesting.id, model: "WHOOP 5.0 / MG")
         log("Corrected device model \"\(attesting.model ?? "nil")\" → \"WHOOP 5.0 / MG\" from DIS attestation (variant=\(variant.label))")
+    }
+
+    nonisolated static func shouldRepairWhoop5Notification(
+        isCurrentConnection: Bool, encryptedBond: Bool, isNotifying: Bool,
+        restoring: Bool, sinceLastAttempt: Duration?
+    ) -> Bool {
+        guard isCurrentConnection, encryptedBond, !isNotifying || restoring else { return false }
+        return sinceLastAttempt.map { $0 >= .seconds(30) } ?? true
+    }
+
+    private func repairWhoop5Notifications(on p: CBPeripheral, reason: String) {
+        guard selectedModel.deviceFamily == .whoop5 else { return }
+        let now = ContinuousClock.Instant.now
+        for c in whoop5NotifyCharacteristics {
+            guard c.service?.peripheral === p,
+                  Self.shouldRepairWhoop5Notification(
+                    isCurrentConnection: p === peripheral && p.state == .connected && state.connected,
+                    encryptedBond: didBond && state.encryptedBond,
+                    isNotifying: c.isNotifying,
+                    restoring: restoreNeedsResubscribe,
+                    sinceLastAttempt: whoop5NotifyLastAttempt[c.uuid].map { $0.duration(to: now) }) else {
+                continue
+            }
+            // Failed proprietary subscriptions otherwise stay broken while standard HR/battery
+            // keeps the link watchdog satisfied. Retry only at existing reconciliation points.
+            whoop5NotifyLastAttempt[c.uuid] = now
+            requestNotify(c, on: p, reason: reason)
+        }
     }
 
     private func requestNotify(_ c: CBCharacteristic, on p: CBPeripheral, reason: String) {
@@ -7308,7 +7358,11 @@ extension BLEManager: @preconcurrency CBPeripheralDelegate {
                 // is insufficient", which (per a 5/MG owner's verified flow, issue #17) also wedges the bond.
                 // didWriteValueFor subscribes them once the CLIENT_HELLO .withResponse write confirms.
                 if BLEManager.whoop5NotifyChars.contains(c.uuid) {
-                    whoop5NotifyCharacteristics.append(c)
+                    if let index = whoop5NotifyCharacteristics.firstIndex(where: { $0.uuid == c.uuid }) {
+                        whoop5NotifyCharacteristics[index] = c
+                    } else {
+                        whoop5NotifyCharacteristics.append(c)
+                    }
                 }
             }
         }
@@ -7453,10 +7507,7 @@ extension BLEManager: @preconcurrency CBPeripheralDelegate {
                 emitConnectionBondState("encryptedBond family=whoop5 (CLIENT_HELLO acked)")
                 log("WHOOP 5/MG: CLIENT_HELLO acked — link established; subscribing notify chars (experimental).")
             }
-            for c in whoop5NotifyCharacteristics where !c.isNotifying || restoreNeedsResubscribe {
-                requestNotify(c, on: peripheral, reason: "post-bond puffin")   // #613: force re-arm on restore
-            }
-            enableLiveNotifications(reason: "post-bond 5/MG")   // standard HR/battery that failed pre-bond
+            enableLiveNotifications(reason: "post-bond 5/MG")   // proprietary + standard subscriptions
             if sensorAcquisition.cleanupRequired {
                 // A relaunch/link loss is recovery-only: establish normal handshake state, then
                 // send the idempotent stop contract before any ordinary custom command.

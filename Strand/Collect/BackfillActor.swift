@@ -37,6 +37,9 @@ struct BackfillMainHooks: Sendable {
     let onChunkCommitBegin: @Sendable () async -> Void
     let onChunkCommitAborted: @Sendable () async -> Void
     let onOffloadComplete: @Sendable () async -> Void
+    /// Optional so existing injected hooks preserve their delivery behavior. Production uses a
+    /// synchronous main-actor body: one batch cannot suspend between its ordered observations.
+    var chunkInfo: (@MainActor @Sendable ([BackfillChunkInfo]) -> Void)? = nil
 }
 
 /// Thread-safe handoff for BLE notify-path frame yields into the actor pipeline.
@@ -142,6 +145,18 @@ actor BackfillActor {
                                                                                          sessionOldestUnix: $3, sessionNewestUnix: $4,
                                                                                          subLagInterp: PuffinExperiment.ppgHrSubLagInterpEnabled) }) {
         let sink = pipelineSink
+        let chunkInfoSink: (([BackfillChunkInfo]) async -> Void)?
+        if let deliver = hooks.chunkInfo {
+            chunkInfoSink = { events in
+                guard sink.deliveryIsCurrent else { return }
+                await MainActor.run {
+                    guard sink.deliveryIsCurrent else { return }
+                    deliver(events)
+                }
+            }
+        } else {
+            chunkInfoSink = nil
+        }
         onOffloadComplete = {
             guard sink.deliveryIsCurrent else { return }
             await hooks.onOffloadComplete()
@@ -196,6 +211,7 @@ actor BackfillActor {
                 guard sink.deliveryIsCurrent else { return }
                 await hooks.onChunkCommitAborted()
             },
+            chunkInfo: chunkInfoSink,
             extract: extract)
         let (stream, continuation) = AsyncStream<BackfillPipelineItem>.makeStream()
         pipelineSink.install(continuation)

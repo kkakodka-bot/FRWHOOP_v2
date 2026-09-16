@@ -117,4 +117,43 @@ final class BLEManagerReconnectPolicyTests: XCTestCase {
                 secondsSincePauseTripped: elapsed))
         }
     }
+
+    func testFailedWhoop5NotificationCanRecoverOnAStillConnectedLink() {
+        XCTAssertTrue(BLEManager.shouldRepairWhoop5Notification(
+            isCurrentConnection: true, encryptedBond: true, isNotifying: false,
+            restoring: false, sinceLastAttempt: .seconds(30)))
+    }
+
+    func testWhoop5NotificationRepairCannotUseUnbondedOrStaleConnection() {
+        for current in [false, true] {
+            for bonded in [false, true] where !current || !bonded {
+                XCTAssertFalse(BLEManager.shouldRepairWhoop5Notification(
+                    isCurrentConnection: current, encryptedBond: bonded, isNotifying: false,
+                    restoring: true, sinceLastAttempt: nil))
+            }
+        }
+    }
+
+    func testWhoop5NotificationRepairIsRateLimitedAcrossReconciliationTriggers() {
+        XCTAssertTrue(BLEManager.shouldRepairWhoop5Notification(
+            isCurrentConnection: true, encryptedBond: true, isNotifying: false,
+            restoring: false, sinceLastAttempt: nil))
+        for elapsed in [Duration.zero, .seconds(1), .seconds(29)] {
+            XCTAssertFalse(BLEManager.shouldRepairWhoop5Notification(
+                isCurrentConnection: true, encryptedBond: true, isNotifying: false,
+                restoring: false, sinceLastAttempt: elapsed))
+        }
+    }
+
+    func testActiveWhoop5NotificationsAreUntouchedExceptForRestoration() {
+        XCTAssertFalse(BLEManager.shouldRepairWhoop5Notification(
+            isCurrentConnection: true, encryptedBond: true, isNotifying: true,
+            restoring: false, sinceLastAttempt: .seconds(300)))
+        XCTAssertTrue(BLEManager.shouldRepairWhoop5Notification(
+            isCurrentConnection: true, encryptedBond: true, isNotifying: true,
+            restoring: true, sinceLastAttempt: nil))
+        XCTAssertFalse(BLEManager.shouldRepairWhoop5Notification(
+            isCurrentConnection: true, encryptedBond: true, isNotifying: true,
+            restoring: true, sinceLastAttempt: .seconds(1)))
+    }
 }

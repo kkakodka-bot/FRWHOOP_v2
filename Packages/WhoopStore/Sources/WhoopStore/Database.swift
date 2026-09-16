@@ -967,6 +967,38 @@ extension WhoopStore {
                 t.column("fetchedAt", .integer).notNull()
             }
         }
+        // Some installed research builds already widened this key under v45-v26-record-index.
+        // Adopt that lossless shape without rebuilding those databases or deleting indexed records.
+        migrator.registerMigration("v46-ppg-record-identity") { db in
+            let columns = try db.columns(in: "ppgWaveformSample").map(\.name)
+            let key = try db.primaryKey("ppgWaveformSample").columns
+            if columns.contains("recordIndex") {
+                guard key == ["deviceId", "ts", "recordIndex"] else {
+                    throw DatabaseError(resultCode: .SQLITE_SCHEMA,
+                                        message: "Unsupported PPG waveform record identity key")
+                }
+                return
+            }
+            guard key == ["deviceId", "ts"] else {
+                throw DatabaseError(resultCode: .SQLITE_SCHEMA,
+                                    message: "Unsupported legacy PPG waveform key")
+            }
+            try db.create(table: "ppgWaveformSample_v46") { t in
+                t.column("deviceId", .text).notNull()
+                t.column("ts", .integer).notNull()
+                t.column("samples", .blob).notNull()
+                t.column("burstIndex", .integer)
+                t.column("recordIndex", .integer).notNull()
+                t.primaryKey(["deviceId", "ts", "recordIndex"])
+            }
+            // Unknown historical identities keep their own sentinel; no wire counter is invented.
+            try db.execute(sql: """
+                INSERT INTO ppgWaveformSample_v46 (rowid, deviceId, ts, samples, burstIndex, recordIndex)
+                SELECT rowid, deviceId, ts, samples, burstIndex, -1 FROM ppgWaveformSample
+                """)
+            try db.drop(table: "ppgWaveformSample")
+            try db.rename(table: "ppgWaveformSample_v46", to: "ppgWaveformSample")
+        }
         return migrator
     }
 }

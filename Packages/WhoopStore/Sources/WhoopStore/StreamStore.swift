@@ -10,12 +10,17 @@ public struct BackfillInsertOutcome: Sendable {
     public var counts: (hr: Int, rr: Int, events: Int, battery: Int,
                         spo2: Int, skinTemp: Int, resp: Int, gravity: Int)
     public var markedJobs: Bool
+    /// Actual newly stored sensor rows, including streams outside the legacy counts tuple.
+    /// Events and battery rows do not establish historical sensor progress.
+    public var insertedHistoricalSensorRows: Int
 
     public init(counts: (hr: Int, rr: Int, events: Int, battery: Int,
                          spo2: Int, skinTemp: Int, resp: Int, gravity: Int),
-                markedJobs: Bool) {
+                markedJobs: Bool, insertedHistoricalSensorRows: Int? = nil) {
         self.counts = counts
         self.markedJobs = markedJobs
+        self.insertedHistoricalSensorRows = insertedHistoricalSensorRows
+            ?? (counts.hr + counts.rr + counts.spo2 + counts.skinTemp + counts.resp + counts.gravity)
     }
 }
 
@@ -288,7 +293,8 @@ extension WhoopStore {
         // Banked rows, accumulated across batches so the sweep does not run on every one.
         var v18Written = 0
         var ppgWaveformWritten = 0
-        let result: (counts: (Int, Int, Int, Int, Int, Int, Int, Int), markedJobs: Bool)
+        let result: (counts: (Int, Int, Int, Int, Int, Int, Int, Int), markedJobs: Bool,
+                     insertedHistoricalSensorRows: Int)
             = try syncWrite { db in
             var hr = 0, rr = 0, ev = 0, bat = 0
             var spo2 = 0, skin = 0, resp = 0, grav = 0
@@ -510,20 +516,21 @@ extension WhoopStore {
             }
             // RAW v26 optical PPG waveform (#156 follow-up) — the samples `ppgHr` above is derived FROM.
             // Persist-only, same as steps/sleepState/ppgHr: not added to the 8-field return tuple. ON
-            // CONFLICT DO NOTHING keeps the FIRST-seen waveform for a second, matching every other
-            // per-second stream's dedupe rule. Packed into one compact BLOB per row (see
+            // CONFLICT DO NOTHING keeps the first waveform for each wire record identity. Multiple
+            // records in the same second survive. Packed into one compact BLOB per row (see
             // `packPpgSamples`) rather than 24 scalar rows, so this insert is O(records), not O(samples).
-            if !streams.ppgWaveform.isEmpty, !shouldSkip("ppgWaveform", timestamps: streams.ppgWaveform.map(\.ts)) {
+            // A timestamp frontier cannot prove every recordIndex in that second was stored.
+            if !streams.ppgWaveform.isEmpty {
                 let stmt = try db.cachedStatement(sql: """
-                    INSERT INTO ppgWaveformSample (deviceId, ts, samples, burstIndex) VALUES (?, ?, ?, ?)
-                    ON CONFLICT(deviceId, ts) DO NOTHING
+                    INSERT INTO ppgWaveformSample (deviceId, ts, samples, burstIndex, recordIndex)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(deviceId, ts, recordIndex) DO NOTHING
                     """)
                 for s in streams.ppgWaveform {
                     try stmt.execute(arguments: [deviceId, s.ts, WhoopStore.packPpgSamples(s.samples),
-                                                 s.burstIndex])
-                    ppgWaveformWritten += 1
+                                                 s.burstIndex, s.recordIndex ?? -1])
+                    ppgWaveformWritten += db.changesCount
                 }
-                try recordFrontier("ppgWaveform", timestamps: streams.ppgWaveform.map(\.ts))
             }
             // Every remaining v18 slot (v31), one compact blob per strap-second. Persist-only, same as
             // steps/sleepState/ppgHr/ppgWaveform: not added to the 8-field return tuple. A sample whose
@@ -538,7 +545,7 @@ extension WhoopStore {
                     let blob = V18AuxCodec.pack(s)
                     if blob.isEmpty { continue }
                     try stmt.execute(arguments: [deviceId, s.ts, blob])
-                    v18Written += 1
+                    v18Written += db.changesCount
                 }
                 try recordFrontier("v18Aux", timestamps: streams.v18Aux.map(\.ts))
             }
@@ -564,7 +571,10 @@ extension WhoopStore {
                 }
                 markedJobs = true
             }
-            return (counts: (hr, rr, ev, bat, spo2, skin, resp, grav), markedJobs: markedJobs)
+            let historicalSensorRows = hr + rr + spo2 + skin + resp + grav
+                + stepsInserted + sleepStateInserted + ppgHrInserted + ppgWaveformWritten + v18Written
+            return (counts: (hr, rr, ev, bat, spo2, skin, resp, grav), markedJobs: markedJobs,
+                    insertedHistoricalSensorRows: historicalSensorRows)
         }
 
         // Rolling retention is amortised. The delete finds the Nth-newest row by rank, so it walks up to
@@ -609,7 +619,8 @@ extension WhoopStore {
                 ppgWaveformRowsSincePrune[deviceId] = 0
             }
         }
-        return BackfillInsertOutcome(counts: result.counts, markedJobs: result.markedJobs)
+        return BackfillInsertOutcome(counts: result.counts, markedJobs: result.markedJobs,
+                                     insertedHistoricalSensorRows: result.insertedHistoricalSensorRows)
     }
 
     // MARK: - Raw sensor CSV export (diagnostic)
@@ -877,13 +888,14 @@ extension WhoopStore {
         -> [PpgWaveformSample] {
         try syncRead { db in
             try Row.fetchAll(db, sql: """
-                SELECT ts, samples, burstIndex FROM ppgWaveformSample
+                SELECT ts, samples, burstIndex, recordIndex FROM ppgWaveformSample
                 WHERE deviceId = ? AND ts >= ? AND ts <= ?
-                ORDER BY ts LIMIT ?
+                ORDER BY ts, recordIndex LIMIT ?
                 """, arguments: [deviceId, from, to, limit])
                 .map { PpgWaveformSample(ts: $0["ts"],
                                          samples: WhoopStore.unpackPpgSamples($0["samples"]),
-                                         burstIndex: $0["burstIndex"]) }
+                                         burstIndex: $0["burstIndex"],
+                                         recordIndex: ($0["recordIndex"] as Int) == -1 ? nil : $0["recordIndex"]) }
         }
     }
 
