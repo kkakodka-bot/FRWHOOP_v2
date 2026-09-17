@@ -72,7 +72,7 @@ class NoopApplication : Application() {
         WhoopRepository(WhoopDatabase.get(this))
     }
 
-    /** Phase 4: authenticated server HRV/sleep readback (default off). */
+    /** Phase 4: authenticated server HRV/sleep readback (default on for this fork). */
     val serverScoreRepository: ServerScoreRepository by lazy {
         ServerScoreRepository(this, applicationScope).also { repo ->
             if (ServerScoringSettings.isEnabled(this)) {

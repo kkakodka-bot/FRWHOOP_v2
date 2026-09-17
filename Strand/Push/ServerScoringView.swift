@@ -30,7 +30,7 @@ struct ServerScoringView: View {
         ) {
             pushToggle(
                 title: String(localized: "Use server scores"),
-                detail: String(localized: "Default off. Requires a Supabase account on your VPS."),
+                detail: String(localized: "On by default. Requires a Supabase account on your VPS."),
                 isOn: enabled
             ) { requested in
                 ServerScoringSettings.setEnabled(requested)

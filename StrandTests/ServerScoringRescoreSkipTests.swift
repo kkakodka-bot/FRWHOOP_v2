@@ -31,6 +31,10 @@ final class ServerScoringRescoreSkipTests: XCTestCase {
         else { UserDefaults.standard.removeObject(forKey: key) }
     }
 
+    func testDefaultOnWhenUnset() {
+        XCTAssertTrue(ServerScoringSettings.isEnabled)
+    }
+
     func testSkipsSyncCoupledRescoreWhenFlagOn() {
         ServerScoringSettings.setEnabled(true)
         XCTAssertTrue(ServerScoringSettings.skipsSyncCoupledRescore)
