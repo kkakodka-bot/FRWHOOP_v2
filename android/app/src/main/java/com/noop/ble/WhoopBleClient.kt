@@ -40,6 +40,8 @@ import com.noop.protocol.Whoop5RawImu
 import com.noop.testcentre.ImuContinuousRecorder
 import com.noop.testcentre.ImuSessionFileStore
 import com.noop.data.WhoopRepository
+import com.noop.push.SelfHostedPushScheduler
+import com.noop.push.ServerScoringSettings
 import com.noop.protocol.AlarmPayload
 import com.noop.protocol.DYN_ACCEL_STILL_THRESHOLD_G
 import com.noop.protocol.BackfillCaptureJsonl
@@ -3126,6 +3128,7 @@ class WhoopBleClient(
     @Suppress("UNUSED_PARAMETER")
     private fun onBackfillChunkCommitted(batch: StreamBatch) {
         decodedChunksThisSession += 1   // invoked once per non-empty decoded chunk (#77 family tally)
+        SelfHostedPushScheduler.enqueueOnChunkCommitted(context)
         // No scoring here. The productive insert atomically marked durable syncJob debt before ACK;
         // the terminal BackfillContinuation decision drains it once for the whole oldest-first burst.
     }
@@ -3156,6 +3159,13 @@ class WhoopBleClient(
                         analyzeAfterBackfillPending.set(true)
                         return@launch
                     }
+                if (ServerScoringSettings.skipsSyncCoupledRescore(context)) {
+                    log("re-score: skipped (serverScoring on — VPS scores HRV/sleep)")
+                    if (!repository.settleSyncJob(rescoreJob)) {
+                        analyzeAfterBackfillPending.set(true)
+                        return@launch
+                    }
+                } else {
                 val profileStore = ProfileStore.from(context)
                 // #1493: was built longhand here and silently omitted waistCm, so this pass scored VO₂max
                 // with the Uth fallback while the 15-minute pass used the waist-based Nes estimate — the

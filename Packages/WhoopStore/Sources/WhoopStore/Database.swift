@@ -955,6 +955,18 @@ extension WhoopStore {
         migrator.registerMigration("v46-rr-source-index") { db in
             try db.create(index: "rrInterval_source_suspect", on: "rrInterval", columns: ["srcChannel", "tsSuspect"])
         }
+        // Phase 4: last-known server HRV/sleep scores (authenticated readback cache).
+        migrator.registerMigration("v47-server-score-cache") { db in
+            try db.create(table: "serverScoreCache", options: [.ifNotExists]) { t in
+                t.column("day", .text).primaryKey()
+                t.column("algorithmVersion", .text).notNull()
+                t.column("dailyJson", .text)
+                t.column("nightsJson", .text).notNull()
+                t.column("computedAt", .text)
+                t.column("stale", .boolean).notNull().defaults(to: true)
+                t.column("fetchedAt", .integer).notNull()
+            }
+        }
         return migrator
     }
 }
