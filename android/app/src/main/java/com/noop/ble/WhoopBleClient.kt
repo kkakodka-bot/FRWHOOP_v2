@@ -40,6 +40,8 @@ import com.noop.protocol.Whoop5RawImu
 import com.noop.testcentre.ImuContinuousRecorder
 import com.noop.testcentre.ImuSessionFileStore
 import com.noop.data.WhoopRepository
+import com.noop.push.SelfHostedPushScheduler
+import com.noop.push.ServerScoringSettings
 import com.noop.protocol.AlarmPayload
 import com.noop.protocol.DYN_ACCEL_STILL_THRESHOLD_G
 import com.noop.protocol.BackfillCaptureJsonl
@@ -3126,6 +3128,7 @@ class WhoopBleClient(
     @Suppress("UNUSED_PARAMETER")
     private fun onBackfillChunkCommitted(batch: StreamBatch) {
         decodedChunksThisSession += 1   // invoked once per non-empty decoded chunk (#77 family tally)
+        SelfHostedPushScheduler.enqueueOnChunkCommitted(context)
         // No scoring here. The productive insert atomically marked durable syncJob debt before ACK;
         // the terminal BackfillContinuation decision drains it once for the whole oldest-first burst.
     }
@@ -3156,6 +3159,13 @@ class WhoopBleClient(
                         analyzeAfterBackfillPending.set(true)
                         return@launch
                     }
+                if (ServerScoringSettings.skipsSyncCoupledRescore(context)) {
+                    log("re-score: skipped (serverScoring on — VPS scores HRV/sleep)")
+                    if (!repository.settleSyncJob(rescoreJob)) {
+                        analyzeAfterBackfillPending.set(true)
+                        return@launch
+                    }
+                } else {
                 val profileStore = ProfileStore.from(context)
                 // #1493: was built longhand here and silently omitted waistCm, so this pass scored VO₂max
                 // with the Uth fallback while the 15-minute pass used the waist-based Nes estimate — the
@@ -8359,7 +8369,7 @@ class WhoopBleClient(
 
         // Record it continuously — independent of the realtime stream or which screen is open.
         // Port of BLEManager.parseStandardHR -> collector.ingestStandardHR(hr:rr:at:).
-        ingestStandardHr(hr, rr, contact, (System.currentTimeMillis() / 1000L))
+        ingestStandardHr(hr, rr, contact, (System.currentTimeMillis() / 1000L), connectedFamily)
     }
 
     /** The Test Centre gate, bound once to the app's single "noop_testcentre" prefs file. Lazily built so
@@ -9856,10 +9866,13 @@ class WhoopBleClient(
      * Buffer one standard 0x2A37 reading (carries a wall-clock ts directly, no clock ref needed).
      * Auto-flushes ~every 30 readings. Port of `Collector.ingestStandardHR`.
      */
-    private fun ingestStandardHr(hr: Int, rr: List<Int>, contact: StandardHrContact, ts: Long) {
+    private fun ingestStandardHr(hr: Int, rr: List<Int>, contact: StandardHrContact, ts: Long,
+                                 family: DeviceFamily) {
         val shouldFlush = synchronized(collectorLock) {
             if (hr in 30..220) stdHr.add(HrRow(ts, hr))
-            for (r in rr) if (r in 250..3000) stdRr.add(RrRow(ts, r))
+            val source = if (family == DeviceFamily.WHOOP5)
+                com.noop.protocol.RrSourceChannel.WHOOP5_STANDARD else null
+            for (r in rr) if (r in 250..3000) stdRr.add(RrRow(ts, r, source))
             stdContact.add(StandardHrMapping.contactEvent(ts, contact))
             standardHrBufferReachedFlushThreshold(stdHr.size, stdRr.size, stdContact.size)
         }

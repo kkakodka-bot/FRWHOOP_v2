@@ -1509,7 +1509,10 @@ public final class BLEManager: NSObject, ObservableObject {
                                   // Research push: migrate live rows to B2 on a cadence, not only
                                   // after full offload. Covers hrSample, skinTempSample, gravitySample,
                                   // and the binary lane (ppgWaveformSample, v18AuxSample, rawImuSession).
-                                  CloudPushPeriodicScheduler.pushIfDue(db: pushWriter, reason: "live")
+                                  let pushInterval = CloudPushPeriodicScheduler.effectiveInterval(
+                                      serverScoringEnabled: ServerScoringSettings.isEnabled)
+                                  CloudPushPeriodicScheduler.pushIfDue(
+                                      db: pushWriter, interval: pushInterval, reason: "live")
                               })
         // The store can finish bootstrapping AFTER connect(model:) already ran (both wait on
         // poweredOn), so apply the family/clock configuration here too — whichever runs last wins.
@@ -1531,6 +1534,12 @@ public final class BLEManager: NSObject, ObservableObject {
                     self.offloadHr += c.hr; self.offloadRr += c.rr
                     self.offloadGravity += c.gravity; self.offloadResp += c.resp
                     self.offloadSkinTemp += c.skinTemp; self.offloadSpo2 += c.spo2
+                    if ServerScoringSettings.isEnabled {
+                        CloudPushPeriodicScheduler.pushIfDue(
+                            db: pushWriter,
+                            interval: ServerScoringSettings.syncPushIntervalSeconds,
+                            reason: "chunk-ack")
+                    }
                 }
             },
             log: { [weak self] s in await MainActor.run { self?.log(s) } },
@@ -5994,6 +6003,7 @@ public final class BLEManager: NSObject, ObservableObject {
         if m.hr >= 30 && m.hr <= 220, state.heartRate != m.hr { state.heartRate = m.hr }
         // Record it continuously — independent of the realtime stream or the open screen.
         collector?.ingestStandardHR(hr: m.hr, rr: m.rr, contact: m.contact,
+                                    family: router.family,
                                     at: Int(Date().timeIntervalSince1970))
     }
 }

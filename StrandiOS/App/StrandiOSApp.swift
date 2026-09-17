@@ -365,6 +365,13 @@ struct StrandiOSApp: App {
                 // into Apple Health. Gated inside writeIfEnabled on the opt-in default (OFF) — a
                 // no-op until the user turns on Shortcuts Export.
                 Task { await ShortcutHealthExport.writeIfEnabled(repo: model.repo) }
+                if ServerScoringSettings.isEnabled {
+                    Task {
+                        guard let writer = await model.repo.registryWriterForPush() else { return }
+                        CloudPushPeriodicScheduler.resetThrottle()
+                        _ = await CloudPushWorker.runOnce(db: writer, trigger: "background")
+                    }
+                }
             }
         }
     }

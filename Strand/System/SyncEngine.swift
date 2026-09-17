@@ -133,6 +133,10 @@ final class SyncEngine {
 
     private func runRescore(token: String, reason: SyncDrainPolicy.WakeReason,
                             host: AppModel) async -> Bool {
+        if ServerScoringSettings.skipsSyncCoupledRescore {
+            ServerScoringSettings.settleSkippedLocalRescoreDebt()
+            return await settle(.rescore, token: token)
+        }
         switch reason {
         case .offloadComplete, .bleEvent, .stateRestoration:
             // CoreBluetooth may restore us for a short background wake. An owed

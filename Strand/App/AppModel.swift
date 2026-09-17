@@ -62,6 +62,9 @@ final class AppModel: ObservableObject {
     /// Post-offload orchestrator (#1538): re-score, cloud push, Health write-back, widget publish.
     let syncEngine = SyncEngine()
 
+    /// Phase 4: authenticated server HRV/sleep readback (default on for this fork).
+    let serverScores = ServerScoreRepository()
+
     /// Observable cache over the paired-device registry; `activeDeviceId` drives the source coordinator.
     /// Built lazily once the store opens (see `wireSourceCoordinator`). nil until then , with no generic
     /// strap paired the active id stays "my-whoop", so this never affects the WHOOP startup path.
@@ -416,7 +419,28 @@ final class AppModel: ObservableObject {
             // event. Resume that durable handoff on launch; this is a no-op when no job is owed.
             await self.syncEngine.drain(reason: .stateRestoration)
             await self.wireSourceCoordinator()                 // dormant unless a generic strap is active
+            if let store = await self.repo.storeHandle() {
+                self.serverScores.wire(store: store)
+                if ServerScoringSettings.isEnabled, let day = self.repo.today?.day {
+                    self.serverScores.startPolling(todayKey: day)
+                }
+            }
             await self.recordAppVersionChangeIfNeeded()        // #1410: stamp an update transition once
+            if ServerScoringSettings.isEnabled {
+                Task(priority: .utility) { [weak self] in
+                    while !Task.isCancelled {
+                        guard let self,
+                              ServerScoringSettings.isEnabled,
+                              let writer = await self.repo.registryWriterForPush() else {
+                            try? await Task.sleep(nanoseconds: 5_000_000_000)
+                            continue
+                        }
+                        CloudPushPeriodicScheduler.pushIfDue(db: writer, reason: "server-scoring-idle")
+                        try? await Task.sleep(
+                            nanoseconds: UInt64(ServerScoringSettings.idlePushIntervalSeconds * 1_000_000_000))
+                    }
+                }
+            }
             try? await Task.sleep(nanoseconds: 6_000_000_000)  // give the first offload a moment
             // FIX 2(a): DEFER the heavy one-shot 4000-day heal/rescore while an import is in flight. A
             // large Apple Health import is the worst-case launch overlap , running a 4000-iteration heal
@@ -476,11 +500,13 @@ final class AppModel: ObservableObject {
                 // `live = self.live` spelled out: this is nested inside the cadence `Task`, which
                 // requires explicit `self`, so the bare-name capture shorthand used elsewhere in this
                 // type would not resolve here.
-                await RescoreBackgroundScheduler.run(owesOnDefer: false,
-                                                     log: { [live = self.live] line in
-                                                         live.append(log: line)
-                                                     }) {
-                    await self.intelligence.analyzeRecent(force: false)
+                if !ServerScoringSettings.skipsSyncCoupledRescore {
+                    await RescoreBackgroundScheduler.run(owesOnDefer: false,
+                                                         log: { [live = self.live] line in
+                                                             live.append(log: line)
+                                                         }) {
+                        await self.intelligence.analyzeRecent(force: false)
+                    }
                 }
                 // v5: recompute the skin-temp suite snapshots (cycle phase + body clock) from the
                 // freshly-scored history so the Health hub cards read a ready result.
@@ -616,10 +642,14 @@ final class AppModel: ObservableObject {
         // This also runs on a CoreBluetooth-restored launch. Scoring the full
         // history there can outlive the short background wake and restart on
         // every restoration, starving the offload. Keep the score owed instead.
-        await RescoreBackgroundScheduler.run(log: { [live] line in
-            live.append(log: line)
-        }) {
-            await intelligence.analyzeRecent()
+        if ServerScoringSettings.skipsSyncCoupledRescore {
+            ServerScoringSettings.settleSkippedLocalRescoreDebt()
+        } else {
+            await RescoreBackgroundScheduler.run(log: { [live] line in
+                live.append(log: line)
+            }) {
+                await intelligence.analyzeRecent()
+            }
         }
     }
 
@@ -643,6 +673,10 @@ final class AppModel: ObservableObject {
     /// a question whose answer is already known to be "yes, there is work".
     func runDeferredRescoreIfOwed() async {
         guard RescoreBackgroundScheduler.isRescoreOwed else { return }
+        if ServerScoringSettings.skipsSyncCoupledRescore {
+            ServerScoringSettings.settleSkippedLocalRescoreDebt()
+            return
+        }
         live.append(log: "re-score: resuming a pass an earlier attempt could not finish (#1538)")
         await intelligence.analyzeRecent()
         // Export surfaces remain owed in SyncEngine and run only after the captured rescore token settles.

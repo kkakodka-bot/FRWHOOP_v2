@@ -548,6 +548,11 @@ struct TodayView: View {
         return repo.days.last(where: { $0.day == selectedDayKey })
     }
 
+    /// Phase 4: last-known server HRV/sleep overlay when `serverScoring` is on.
+    private var serverOverlay: ServerScoreDayCache? {
+        app.serverScores.overlay(for: selectedDayKey)
+    }
+
     /// Recovery cold-start: recovery is nil until the HRV baseline crosses the seed gate
     /// (Baselines.minNightsSeed valid nights). While calibrating, this is the count of nights
     /// banked so far, it drives an honest "Calibrating, N of 4 nights" on the recovery ring,
@@ -1524,6 +1529,9 @@ struct TodayView: View {
         // day-scoped, so navigating must re-fetch them for the newly selected window.
         .task(id: TodayLoadKey(seq: repo.refreshSeq, offset: selectedDayOffset,
                               dayCycleMode: dayCycleModeRaw)) { await loadAll() }
+        .task(id: selectedDayKey) {
+            await app.serverScores.refreshVisibleDays(todayKey: selectedDayKey)
+        }
         // #989: hydration writes don't bump refreshSeq, so the card needs its own triggers, a logged /
         // edited / deleted drink (hydrationSeq) and the Settings feature toggle both re-read just the two
         // hydration fields. Cheap (one metricSeries row), never re-runs the heavy loads.
@@ -2666,12 +2674,18 @@ struct TodayView: View {
             // has carried via `carriedVital(perField:)` all along — showed a number on the same screen.
             // Not the whole-row `lastVitalsDay`: its OR predicate resolves nil HRV on a respiratory-only
             // row. Mirrors the Android dashboardCardValue.
+            if let server = ServerScoreDisplay.hrvRmssd(day: selectedDayKey, overlay: serverOverlay) {
+                return withUnit("\(Int(server.rounded()))")
+            }
             return withUnit((d?.avgHrv ?? lastHrvDay?.avgHrv).map { "\(Int($0.rounded()))" } ?? "—")
         case .restingHr:
             #if DEBUG
             if let f = DemoDayHarness.active { return withUnit("\(f.rhrBpm)") }
             #endif
             // PER-FIELD carry — twin of `.hrv` above (#1842).
+            if let server = ServerScoreDisplay.restingHr(day: selectedDayKey, overlay: serverOverlay) {
+                return withUnit("\(server)")
+            }
             return withUnit((d?.restingHr ?? lastRestingHrDay?.restingHr).map { "\($0)" } ?? "—")
         case .respiratory:
             // PER-FIELD carry: today → the STALENESS-BOUNDED prior night (`lastRespDay`). Recovery-
@@ -5159,6 +5173,10 @@ struct TodayView: View {
     }
 
     private func sleepValue(_ d: DailyMetric?) -> String {
+        if let server = ServerScoreDisplay.sleepTotalMin(day: selectedDayKey, overlay: serverOverlay) {
+            let h = Int(server) / 60, mm = Int(server) % 60
+            return String(localized: "\(h)h \(mm)m")
+        }
         guard let m = d?.totalSleepMin else { return "—" }
         let h = Int(m) / 60, mm = Int(m) % 60
         return String(localized: "\(h)h \(mm)m")
