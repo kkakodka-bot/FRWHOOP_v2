@@ -75,3 +75,16 @@ by `AnalyticsEngine` but **not written** to Postgres — only HRV + sleep column
 
 HR/RR/resp/gravity/events are read from Postgres `noop_*` projection tables (populated by the push
 receiver). B2 raw-object fetch is not required for the locked HRV+sleep scope.
+
+## Derived artifact lane (Phase 5)
+
+After each successful `engine_ingest_scored` write, the service archives the in-memory bundle to
+the **same B2 bucket** as raw objects:
+
+```text
+v3/derived/users/{userId}/days/{YYYY-MM-DD}/frwhoop-server-1.json.zst
+```
+
+Requires the same B2 env as Edge (`B2_KEY_ID`, `B2_APPLICATION_KEY`, `B2_BUCKET_NAME`, …) — the
+VPS compose override loads `/opt/frwhoop/b2.env`. Postgres scores commit even when B2 fails;
+`scoring_work_items.derived_artifact_error` records the last archive failure for ops.

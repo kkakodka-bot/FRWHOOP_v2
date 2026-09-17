@@ -4,6 +4,7 @@ import com.frwhoop.scoring.ScoringConfig
 import com.frwhoop.scoring.db.EngineIngestWriter
 import com.frwhoop.scoring.db.ScoreInputProvider
 import com.frwhoop.scoring.db.ScoringWorkQueue
+import com.frwhoop.scoring.derived.DerivedArtifactWriter
 import com.frwhoop.scoring.health.HeartbeatReporter
 import org.slf4j.LoggerFactory
 import java.util.UUID
@@ -14,6 +15,7 @@ class ScoringPoller(
     private val queue: ScoringWorkQueue,
     private val scorer: DayScorer,
     private val writer: EngineIngestWriter,
+    private val derivedWriter: DerivedArtifactWriter?,
     private val heartbeat: HeartbeatReporter,
 ) {
     private val log = LoggerFactory.getLogger(ScoringPoller::class.java)
@@ -63,6 +65,7 @@ class ScoringPoller(
         }
         val bundle = scorer.score(inputs, config.algorithmVersion)
         writer.write(bundle)
+        archiveDerived(bundle)
         heartbeat.recordScore(userId, day)
         log.info(
             "scored {} {} {} (hr={}, rr={}, sleeps={})",
@@ -84,8 +87,9 @@ class ScoringPoller(
             }
             val bundle = scorer.score(inputs, config.algorithmVersion)
             writer.write(bundle)
+            val derivedError = archiveDerived(bundle)
             val durationMs = ((System.nanoTime() - started) / 1_000_000).toInt()
-            val done = queue.markDone(item, durationMs)
+            val done = queue.markDone(item, durationMs, derivedError)
             if (done) {
                 heartbeat.recordScore(item.userId, item.day)
                 log.info(
@@ -106,6 +110,28 @@ class ScoringPoller(
                 "score failed for {} {} {}: {}",
                 item.userId, item.deviceId, item.day, err.message, err,
             )
+        }
+    }
+
+    /** Returns an error message when B2 archive fails; scores are already committed. */
+    private fun archiveDerived(bundle: ServerScoreBundle): String? {
+        val writer = derivedWriter ?: return null
+        if (!writer.enabled) return null
+        return try {
+            val result = writer.archive(bundle)
+            log.info(
+                "derived archive {} {} {} ({} bytes, sha256={})",
+                bundle.userId, bundle.deviceId, bundle.day,
+                result.compressedBytes, result.sha256.take(12),
+            )
+            null
+        } catch (err: Exception) {
+            val msg = err.message ?: err.javaClass.simpleName
+            log.warn(
+                "derived archive failed for {} {} {}: {}",
+                bundle.userId, bundle.deviceId, bundle.day, msg,
+            )
+            msg
         }
     }
 }

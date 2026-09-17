@@ -143,9 +143,10 @@ export async function reconcileObjects({
     const prefixes = userId
       ? [
           `v3/core/users/${userId}/`, `v3/imu/users/${userId}/`,
+          `v3/derived/users/${userId}/`,
           `v2/users/${userId}/`, `v1/users/${userId}/`,
         ]
-      : ['v3/core/', 'v3/imu/', 'v2/', 'v1/'];
+      : ['v3/core/', 'v3/imu/', 'v3/derived/', 'v2/', 'v1/'];
     const seen = new Set<string>();
     for (const prefix of prefixes) {
       let keys: string[] = [];

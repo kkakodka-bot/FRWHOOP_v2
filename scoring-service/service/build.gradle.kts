@@ -19,6 +19,7 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.json:json:20240303")
     implementation("org.slf4j:slf4j-simple:2.0.13")
+    implementation("com.github.luben:zstd-jni:1.5.6-3")
 
     testImplementation("junit:junit:4.13.2")
 }

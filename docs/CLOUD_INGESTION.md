@@ -3,11 +3,27 @@
 This fork ships **every patient-owned row** NOOP collects to the FRWHOOP durability pipeline:
 on-device SQLite → authenticated push → fsync'd NDJSON WAL → B2 archive → verified
 `object_manifests` row → Supabase upsert → UI read path. NOOP remains authoritative for BLE decode
-on-device. With the default-off **`serverScoring`** flag (Test Centre / cloud settings), the receiver
-still does not decode BLE and does not recompute scores. When that flag is **on** for this fork's
-test builds, authenticated push feeds the VPS JVM scoring service, which recomputes HRV and sleep
-(`algorithm_version = frwhoop-server-1`); the phone skips sync-coupled local `analyzeRecent` and
-renders server scores from Remaining 2's cache/Realtime instead.
+on-device. With **`serverScoring`** on (the fork default when unset), authenticated push feeds the
+VPS JVM scoring service, which recomputes HRV and sleep (`algorithm_version = frwhoop-server-1`);
+the phone skips sync-coupled local `analyzeRecent` and renders server scores from the on-device
+last-known cache. Realtime `postgres_changes` on `server_daily_scores` / `server_sleep_nights`
+(filtered to `auth.uid()`) wakes a `get_day_snapshot` refetch; a 60 s poll remains the fallback.
+
+### Server-scoring read latency budget (not yet soak-proven)
+
+Intended strap→render path when Realtime is connected:
+
+| Stage | Budget |
+|---|---|
+| BLE offload push throttle (flag on) | ≤ 10 s |
+| JVM scorer poll (`scoring_work_items`) | ~8 s |
+| Realtime wake-up + snapshot refetch | usually &lt; 5 s |
+| Poll-only fallback (socket down) | up to 60 s + scorer lag |
+
+The original Phase 4 gate is **≤ ~60 s** end-to-end under normal conditions. That sum can meet the
+gate when Realtime is wired; poll-only worst case is ~poll interval plus scorer lag. No overnight or
+manufactured-day timed measurement is checked in-tree yet — run the airplane-mode and reconnect
+steps in [`SYNC_TEST_PROCEDURE.md`](SYNC_TEST_PROCEDURE.md) on hardware before claiming the gate.
 
 The matrix below is enforced by `cloud_ingestion_registry.json` (byte-identical Swift/Android copy)
 and `swift test` / `./gradlew testFullDebugUnitTest --tests com.noop.push.CloudIngestionRegistryTest`.
@@ -41,6 +57,26 @@ v3/{retentionClass}/users/{userId}/devices/{deviceId}/{b2Stream}/{YYYY}/{MM}/{DD
 
 `object_manifests.object_key` indexes every archive. Binary streams upsert manifest rows only;
 row-shaped streams also project into the Supabase tables named below.
+
+### Derived scores lane (JVM scorer → B2)
+
+After each successful server score, the VPS scoring service archives the in-memory HRV/sleep
+bundle to the **same B2 bucket** as raw objects:
+
+```text
+v3/derived/users/{userId}/days/{YYYY-MM-DD}/{algorithmVersion}.json.zst
+```
+
+| Field | Value |
+|---|---|
+| Codec | zstd over JSON (`compression=zstd`, `content_type=application/json`) |
+| Manifest `object_kind` | `derived_scores` |
+| Manifest `object_class` | `derived` |
+| Retention | 90 days (`expires_at` on insert; `retention-sweep` deletes B2 then row) |
+| Failure policy | Postgres score rows commit even when B2 PUT fails; `scoring_work_items.derived_artifact_error` records the last failure and the archive retries on the next re-score of that day |
+
+The archive contains only locked-scope inferred metrics (`daily` + `nights` with stages). It does
+not include Charge/Effort/Rest, raw PPG/IMU, or BLE frames. Apps do not download these objects.
 
 ## Coverage matrix
 
