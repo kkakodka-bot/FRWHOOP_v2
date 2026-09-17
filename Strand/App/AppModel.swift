@@ -62,7 +62,7 @@ final class AppModel: ObservableObject {
     /// Post-offload orchestrator (#1538): re-score, cloud push, Health write-back, widget publish.
     let syncEngine = SyncEngine()
 
-    /// Phase 4: authenticated server HRV/sleep readback (default off).
+    /// Phase 4: authenticated server HRV/sleep readback (default on for this fork).
     let serverScores = ServerScoreRepository()
 
     /// Observable cache over the paired-device registry; `activeDeviceId` drives the source coordinator.

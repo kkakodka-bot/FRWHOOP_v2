@@ -1,6 +1,6 @@
 import Foundation
 
-/// Phase 4: opt-in server HRV/sleep readback. Default off; toggled from Test Centre / cloud settings.
+/// Phase 4: server HRV/sleep readback. Default on for this fork; toggled from Settings → Advanced.
 enum ServerScoringSettings {
     static let defaultsKey = "noop.serverScoring"
     static let authEmailKey = "noop.serverScoring.authEmail"
@@ -25,7 +25,8 @@ enum ServerScoringSettings {
     }
 
     static var isEnabled: Bool {
-        UserDefaults.standard.bool(forKey: defaultsKey)
+        if UserDefaults.standard.object(forKey: defaultsKey) == nil { return true }
+        return UserDefaults.standard.bool(forKey: defaultsKey)
     }
 
     static func setEnabled(_ enabled: Bool) {

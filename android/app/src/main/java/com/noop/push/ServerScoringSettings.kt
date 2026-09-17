@@ -4,7 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import com.noop.BuildConfig
 
-/** Phase 4: opt-in server HRV/sleep readback. Default off. */
+/** Phase 4: server HRV/sleep readback. Default on for this fork. */
 object ServerScoringSettings {
     const val DEFAULTS_KEY = "noop.serverScoring"
     const val AUTH_EMAIL_KEY = "noop.serverScoring.authEmail"
@@ -22,7 +22,7 @@ object ServerScoringSettings {
         context.getSharedPreferences("noop_server_scoring", Context.MODE_PRIVATE)
 
     fun isEnabled(context: Context): Boolean =
-        prefs(context).getBoolean(DEFAULTS_KEY, false)
+        prefs(context).getBoolean(DEFAULTS_KEY, true)
 
     fun setEnabled(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(DEFAULTS_KEY, enabled).apply()
