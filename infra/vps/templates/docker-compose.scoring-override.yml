@@ -10,6 +10,8 @@ services:
     depends_on:
       - db
       - rest
+    env_file:
+      - /opt/frwhoop/b2.env
     environment:
       DATABASE_URL: ${SCORING_DATABASE_URL}
       INGEST_SECRET: ${INGEST_SECRET}
@@ -18,6 +20,8 @@ services:
       WORKER_SECRET: ${WORKER_SECRET}
       SCORING_POLL_SECONDS: ${SCORING_POLL_SECONDS:-8}
       SCORING_ALGORITHM_VERSION: frwhoop-server-1
+      B2_BUCKET: ${B2_BUCKET_NAME:-FRWHOOP}
+      DERIVED_RETENTION_DAYS: ${DERIVED_RETENTION_DAYS:-90}
     networks:
       - default
     healthcheck:

@@ -75,6 +75,14 @@ userinfo, passing user/password via Hikari data-source properties
 libpq form — do not hand-encode it as a bare JDBC URL with userinfo
 (`jdbc:postgresql://host:port/db?user=...&password=...` also works if you must).
 
+## Derived artifact lane (scoring service → B2)
+
+The JVM scoring container shares `/opt/frwhoop/b2.env` with Edge Functions. After each scored day
+it PUTs `v3/derived/users/{userId}/days/{day}/frwhoop-server-1.json.zst` and upserts
+`object_manifests` (`object_kind=derived_scores`, 90-day `expires_at`). Scores land in Postgres
+even when B2 blinks; check `scoring_work_items.derived_artifact_error` for the last archive
+failure. Optional smoke: `node infra/vps/scripts/b2-derived-smoke.mjs` (service-role PUT + HEAD).
+
 ## Restart stack
 
 ```bash

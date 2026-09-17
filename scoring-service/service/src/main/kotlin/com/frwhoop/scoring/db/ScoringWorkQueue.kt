@@ -88,7 +88,7 @@ class ScoringWorkQueue(
             }
         }
 
-    fun markDone(item: WorkItem, durationMs: Int): Boolean =
+    fun markDone(item: WorkItem, durationMs: Int, derivedArtifactError: String? = null): Boolean =
         db.withConnection { conn ->
             val updated = conn.prepareStatement(
                 """
@@ -96,16 +96,20 @@ class ScoringWorkQueue(
                 set done_at = now(),
                     claimed_at = null,
                     last_duration_ms = ?,
-                    last_error = null
+                    last_error = null,
+                    derived_artifact_error = ?,
+                    derived_artifact_at = case when ? is null then derived_artifact_at else now() end
                 where user_id = ? and device_id = ? and day = ?::date
                   and dirty_at <= ?
                 """.trimIndent(),
             ).use { ps ->
                 ps.setInt(1, durationMs)
-                ps.setObject(2, item.userId)
-                ps.setObject(3, item.deviceId)
-                ps.setString(4, item.day)
-                ps.setTimestamp(5, Timestamp.from(item.dirtyAt))
+                ps.setString(2, derivedArtifactError?.take(2000))
+                ps.setString(3, derivedArtifactError?.take(2000))
+                ps.setObject(4, item.userId)
+                ps.setObject(5, item.deviceId)
+                ps.setString(6, item.day)
+                ps.setTimestamp(7, Timestamp.from(item.dirtyAt))
                 ps.executeUpdate()
             }
             if (updated == 0) {
