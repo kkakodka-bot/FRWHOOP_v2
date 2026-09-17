@@ -4,6 +4,7 @@ import com.frwhoop.scoring.db.EngineIngestWriter
 import com.frwhoop.scoring.db.PostgresClient
 import com.frwhoop.scoring.db.ScoringWorkQueue
 import com.frwhoop.scoring.db.SignalSampleReader
+import com.frwhoop.scoring.derived.DerivedArtifactWriter
 import com.frwhoop.scoring.health.HeartbeatReporter
 import com.frwhoop.scoring.scoring.DayScorer
 import com.frwhoop.scoring.scoring.ScoringPoller
@@ -19,8 +20,14 @@ fun main(args: Array<String>) {
     val queue = ScoringWorkQueue(db)
     val scorer = DayScorer()
     val writer = EngineIngestWriter(config.supabaseUrl, config.serviceRoleKey, config.ingestSecret)
+    val derivedWriter = config.b2Config?.let {
+        DerivedArtifactWriter(it, config.supabaseUrl, config.serviceRoleKey)
+    }
+    if (derivedWriter == null) {
+        log.warn("B2 credentials missing — derived artifact lane disabled (scores still write to Postgres)")
+    }
     val heartbeat = HeartbeatReporter(db, config.algorithmVersion)
-    val poller = ScoringPoller(config, reader, queue, scorer, writer, heartbeat)
+    val poller = ScoringPoller(config, reader, queue, scorer, writer, derivedWriter, heartbeat)
 
     if (args.contains("--replay-day") || config.replayUserId != null) {
         val userId = UUID.fromString(config.replayUserId ?: error("REPLAY_USER_ID required for --replay-day"))

@@ -1,5 +1,6 @@
 package com.frwhoop.scoring
 
+import com.frwhoop.scoring.b2.B2Config
 import java.time.Duration
 
 /** Env-only configuration for the VPS scoring container. */
@@ -8,6 +9,7 @@ data class ScoringConfig(
     val ingestSecret: String,
     val supabaseUrl: String,
     val serviceRoleKey: String,
+    val b2Config: B2Config? = null,
     val pollInterval: Duration = Duration.ofSeconds(8),
     val algorithmVersion: String = "frwhoop-server-1",
     val workerSecret: String? = null,
@@ -27,6 +29,7 @@ data class ScoringConfig(
                 ingestSecret = ingestSecret,
                 supabaseUrl = supabaseUrl,
                 serviceRoleKey = serviceRoleKey,
+                b2Config = B2Config.fromEnv(),
                 pollInterval = Duration.ofSeconds(pollSec),
                 algorithmVersion = System.getenv("SCORING_ALGORITHM_VERSION") ?: "frwhoop-server-1",
                 workerSecret = System.getenv("WORKER_SECRET"),
