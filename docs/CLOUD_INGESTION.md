@@ -2,8 +2,12 @@
 
 This fork ships **every patient-owned row** NOOP collects to the FRWHOOP durability pipeline:
 on-device SQLite → authenticated push → fsync'd NDJSON WAL → B2 archive → verified
-`object_manifests` row → Supabase upsert → UI read path. NOOP remains authoritative: the server
-never decodes a BLE frame and never recomputes a score.
+`object_manifests` row → Supabase upsert → UI read path. NOOP remains authoritative for BLE decode
+on-device. With the default-off **`serverScoring`** flag (Test Centre / cloud settings), the receiver
+still does not decode BLE and does not recompute scores. When that flag is **on** for this fork's
+test builds, authenticated push feeds the VPS JVM scoring service, which recomputes HRV and sleep
+(`algorithm_version = frwhoop-server-1`); the phone skips sync-coupled local `analyzeRecent` and
+renders server scores from Remaining 2's cache/Realtime instead.
 
 The matrix below is enforced by `cloud_ingestion_registry.json` (byte-identical Swift/Android copy)
 and `swift test` / `./gradlew testFullDebugUnitTest --tests com.noop.push.CloudIngestionRegistryTest`.
@@ -71,7 +75,7 @@ row-shaped streams also project into the Supabase tables named below.
 
 | Table | Wire stream | B2 stream | Supabase table | Why |
 |---|---|---|---|---|
-| `dailyMetric` | `dailyMetric` | `dailyMetric` | `daily_metrics` | NOOP-computed daily scores; upserted, never recomputed server-side. |
+| `dailyMetric` | `dailyMetric` | `dailyMetric` | `daily_metrics` | NOOP-computed daily scores when `serverScoring` is off; with the flag on, local rescore is skipped and the VPS service writes authoritative HRV/sleep rows. |
 | `sleepSession` | `sleepSession` | `sleepSession` | `sessions` (`kind=sleep`) | Sleep sessions with stages JSON verbatim. |
 | `workout` | `workout` | `workout` | `sessions` (`kind=workout`) | Workout sessions with zones/route in summary JSON. |
 | `journal` | `journal` | `journal` | `noop_journal_entries` | Daily Q&A journal — **not** FRWHOOP flat `events`; **new migration**. |

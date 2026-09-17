@@ -1685,6 +1685,21 @@ struct SettingsView: View {
             }
             .buttonStyle(LiquidPressStyle())
             .accessibilityLabel("Open Test Centre")
+            #if os(macOS)
+            NavigationLink(destination: ServerScoringView()) {
+                HStack {
+                    Text("Server scoring (HRV / sleep)")
+                        .font(StrandFont.body)
+                        .foregroundStyle(StrandPalette.textPrimary)
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(StrandPalette.textTertiary)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(LiquidPressStyle())
+            #endif
         }
     }
 
@@ -1695,6 +1710,19 @@ struct SettingsView: View {
             title: "Self-hosted push",
             blurb: "Experimental one-way export to an endpoint you control. Off by default."
         ) {
+            NavigationLink(destination: ServerScoringView()) {
+                HStack {
+                    Text("Server scoring (HRV / sleep)")
+                        .font(StrandFont.body)
+                        .foregroundStyle(StrandPalette.textPrimary)
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(StrandPalette.textTertiary)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(LiquidPressStyle())
             NavigationLink(destination: CloudPushView()) {
                 HStack {
                     Text("Configure self-hosted push")

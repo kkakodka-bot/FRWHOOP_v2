@@ -124,6 +124,7 @@ targets:
         # Absent/blank values leave push manual-configure, exactly as before.
         NOOPPushEndpoint: $(NOOP_PUSH_ENDPOINT)
         NOOPPushToken: $(NOOP_PUSH_TOKEN)
+        NOOPSupabaseAnonKey: $(NOOP_SUPABASE_ANON_KEY)
         # Registers the noop:// URL scheme so ASWebAuthenticationSession's OAuth redirect
         # (noop://oura/callback) reaches OuraOAuthProvider instead of bouncing off the OS.
         CFBundleURLTypes:
@@ -327,6 +328,7 @@ targets:
         # Absent/blank values leave push manual-configure, exactly as before.
         NOOPPushEndpoint: $(NOOP_PUSH_ENDPOINT)
         NOOPPushToken: $(NOOP_PUSH_TOKEN)
+        NOOPSupabaseAnonKey: $(NOOP_SUPABASE_ANON_KEY)
         # Registers the noop:// URL scheme so ASWebAuthenticationSession's OAuth redirect
         # (noop://oura/callback) reaches OuraOAuthProvider instead of bouncing off the OS.
         CFBundleURLTypes:

@@ -231,7 +231,10 @@ struct SleepView: View {
                                               newStartTs: newBedTs, newEndTs: newWakeTs)
                     // Re-score the day so the dashboard aggregates (Rest / recovery) honor the corrected
                     // sleep window, not just the Sleep tab's session view; then refresh the read cache.
-                    await intelligence.analyzeRecent()
+                    if !ServerScoringSettings.isEnabled {
+                        await intelligence.analyzeRecent()
+                    }
+                    // serverScoring on: edits persist; VPS rescores HRV/sleep — local analyzeRecent deferred.
                     await repo.refresh()
                 }, onDelete: {
                     // Delete = the edit path minus the re-insert: drop this session so every metric
@@ -241,7 +244,9 @@ struct SleepView: View {
                     // deleted row into its ORIGINAL namespace and lifts the tombstone.
                     let snapshot = await repo.deleteSleepSession(detectedStartTs: edit.detectedStartTs,
                                                                  endTs: edit.wakeTs)
-                    await intelligence.analyzeRecent()
+                    if !ServerScoringSettings.isEnabled {
+                        await intelligence.analyzeRecent()
+                    }
                     await repo.refresh()
                     // `edit.bedTs` is the effective (displayed) onset, so the banner shows the same clock
                     // time the user saw for this night.
@@ -263,8 +268,9 @@ struct SleepView: View {
                                 blurb: "Pick when the nap started and ended. NARA stages it from your data as its own session, separate from the night's sleep.",
                                 bedLabel: "Nap started", wakeLabel: "Nap ended") { startTs, endTs in
                     await repo.addManualNap(startTs: startTs, endTs: endTs)
-                    // Re-score so the day's aggregates pick up the new session, exactly like an edit.
-                    await intelligence.analyzeRecent()
+                    if !ServerScoringSettings.isEnabled {
+                        await intelligence.analyzeRecent()
+                    }
                     await repo.refresh()
                 }
             }
@@ -302,7 +308,9 @@ struct SleepView: View {
     private func undoSleepDelete(_ banner: SleepUndoBanner) async {
         sleepUndoTask?.cancel()
         await repo.undoDeleteSleepSession(banner.snapshot)
-        await intelligence.analyzeRecent()
+        if !ServerScoringSettings.isEnabled {
+            await intelligence.analyzeRecent()
+        }
         await repo.refresh()
         await MainActor.run { withAnimation(.easeOut(duration: 0.2)) { sleepUndo = nil } }
     }
