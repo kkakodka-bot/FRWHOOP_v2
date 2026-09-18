@@ -89,6 +89,14 @@ No agent may modify another owner's files. Server and Edge changes use separate 
 
 ## Requirement ledger
 
+### Scoring-input checkpoint, 2026-09-18 07:50 local
+
+- `3c208ca` preserves the typed readback checkpoint. The following focused input checkpoint captures the separately durable account-owned journal, revision/head/receipt protocol, bounded conflict retention, consent denial barrier and control reserve, owner-fenced coordinator, bounded RPC readback and native/real-loopback harness. Exact allowlist: `ROOT-SCORING-INPUT-CHECKPOINT.files` in the evidence directory.
+- Independent reserve review ran **60 tests, zero failures, 22.630 s**, including the full 4096-row/16 MiB held-queue case (`CONSENT-CONTROL-RESERVE-INDEPENDENT-REVIEW.md`). Root's subsequent completion-callback regression reproduced two new assertion failures before repair and passed **61 tests, zero failures, 23.779 s** afterward (`root-consent-completion-before.log` / `root-consent-completion-after.log`). Bacon independently reviewed that exact three-file delta and hashes in `ROOT-CONTEXT-PUBLICATION-INDEPENDENT-REVIEW.md`. The callback now runs once after saving clears, including failed writes, and never after retirement.
+- The current 152-test app-host run includes the consent/journal/coordinator/capacity cases; the separate 122-test app-host run includes typed input readback/streaming transport. Earlier seven real Swift-to-PostgREST tests exercised ordinary authenticated roles, lost-response replay, opaque revisions, conflicts/rebase, tombstones and cross-owner rejection, with 13 distinct synthetic server mutations. These are local integration evidence, not deployed RLS acceptance.
+- Pending debt is not evicted to make room. The reserved denial lane does not guarantee delivery through every pre-existing conflict or disk failure, and local denial cannot recall an already-sent request. App producer preference-to-outbox crash windows and complete consumer/input UI integration remain separate open work. No production data, personal credentials or deployment was touched.
+- Root also reproduced the frozen operational repair's **54 offline tests, zero failures/skips, 26.395 s** (`root-ops4-repair-offline.log`) and source scan of 267 Kotlin files/eight additive migrations. Independent review is active; no remote acceptance or whole-day parity pass is inferred.
+
 ### Readback checkpoint and current verification, 2026-09-18 07:45 local
 
 - The fresh hermetic macOS app host passed **152 tests, zero failures/skips, 27.565 s** (`root-context-barrier-app-tests.log/.xcresult`), including the six additional real-Repository suspension/retirement controls for context publication. The local illness and cycle enable flags are rechecked after suspended reads; server-owned nulls do not reopen local computation. This build predates the subsequent account-preference and prepared-selection changes, which require their own fresh integrated build.
