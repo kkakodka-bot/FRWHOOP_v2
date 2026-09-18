@@ -19,7 +19,8 @@ services:
       SUPABASE_SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY}
       WORKER_SECRET: ${WORKER_SECRET}
       SCORING_POLL_SECONDS: ${SCORING_POLL_SECONDS:-8}
-      SCORING_ALGORITHM_VERSION: frwhoop-server-1
+      # v2 writes shadow snapshots; per-feature defaults stay on the preserved baseline.
+      SCORING_ALGORITHM_VERSION: frwhoop-physiology-2
       B2_BUCKET: ${B2_BUCKET_NAME:-FRWHOOP}
       DERIVED_RETENTION_DAYS: ${DERIVED_RETENTION_DAYS:-90}
     networks:

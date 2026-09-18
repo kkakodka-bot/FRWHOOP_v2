@@ -21,9 +21,9 @@ object UserDayBounds {
         val dayLo = dayStart.toEpochSecond()
         val dayHi = nextDayStart.toEpochSecond() - 1
         val tzOffset = zoneId.rules.getOffset(dayStart.toInstant()).totalSeconds.toLong()
-        // Night window: prior evening through noon next day (matches IntelligenceEngine read span).
-        val nightLo = dayLo - 30L * 3_600L
-        val nightHi = dayLo + 12L * 3_600L
+        // Full scoring day plus the preceding local day. Calendar arithmetic preserves DST boundaries.
+        val nightLo = localDay.minusDays(1).atStartOfDay(zoneId).toEpochSecond()
+        val nightHi = dayHi
         return Bounds(dayLo, dayHi, tzOffset, nightLo, nightHi)
     }
 

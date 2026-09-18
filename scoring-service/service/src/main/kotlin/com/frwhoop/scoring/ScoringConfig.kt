@@ -11,12 +11,13 @@ data class ScoringConfig(
     val serviceRoleKey: String,
     val b2Config: B2Config? = null,
     val pollInterval: Duration = Duration.ofSeconds(8),
-    val algorithmVersion: String = "frwhoop-server-1",
+    val algorithmVersion: String = "frwhoop-physiology-2",
     val workerSecret: String? = null,
     val replayUserId: String? = null,
     val replayDay: String? = null,
     val replayDeviceId: String? = null,
 ) {
+    init { require(pollInterval.toMillis() in 1..600_000) { "Scoring poll interval must be positive and at most 10 minutes" } }
     companion object {
         fun fromEnv(): ScoringConfig {
             val dbUrl = required("DATABASE_URL")
@@ -31,7 +32,7 @@ data class ScoringConfig(
                 serviceRoleKey = serviceRoleKey,
                 b2Config = B2Config.fromEnv(),
                 pollInterval = Duration.ofSeconds(pollSec),
-                algorithmVersion = System.getenv("SCORING_ALGORITHM_VERSION") ?: "frwhoop-server-1",
+                algorithmVersion = System.getenv("SCORING_ALGORITHM_VERSION") ?: "frwhoop-physiology-2",
                 workerSecret = System.getenv("WORKER_SECRET"),
                 replayUserId = System.getenv("REPLAY_USER_ID"),
                 replayDay = System.getenv("REPLAY_DAY"),

@@ -38,14 +38,9 @@ val androidTestResources = rootProject.file("../android/app/src/test/resources")
  *  declarations with comments/strings stripped. 25 files. Includes the day-window glue (DayCycle,
  *  LocalDayWindows) that only tests reference.
  *
- *  SCOPE EXCLUSION (2026-09-17, Phase 3 gate): CurrentHrv.kt / SpotHrvReading.kt / RrEmissionStats.kt
- *  are LIVE on-device readouts/instrumentation — CurrentHrv is the trailing-window current-HRV strip,
- *  SpotHrvReading the on-demand Live-screen "take a reading now" path, RrEmissionStats pre-storage
- *  instrumentation ("Nothing in the shipped path reads any of this"). The locked server scope is the
- *  RR/HRV + sleep staging/score pipeline consumed by [AnalyticsEngine.analyzeDay]; these display-only
- *  helpers belong on the app (locked decision #3: app keeps live display readouts). Their oracle tests
- *  remain in the Android tree (CurrentHrvTest.midWindowEctopicIsGapAware currently fails there too —
- *  Android baseline), but they do not gate the server extraction. */
+ *  W2 includes CurrentHrv and its test to verify its shared five-minute measurement contract.
+ *  SpotHrvReading / RrEmissionStats remain excluded live-only helpers; no server publication is
+ *  introduced for those display/instrumentation paths. */
 val kernelAnalyticsFiles = listOf(
     "AnalyticsEngine.kt",
     "AnalyticsModels.kt",
@@ -54,6 +49,11 @@ val kernelAnalyticsFiles = listOf(
     "GuidedCaptureProgress.kt",
     "HRVReadiness.kt",
     "HrvAnalyzer.kt",
+    "HrvWindow.kt",
+    "HrvSeries.kt",
+    "PhysiologyQuality.kt",
+    "RespirationEstimator.kt",
+    "CurrentHrv.kt", // W2: shared five-minute contract, tested byte-identically with the app.
     "HrvFreqDomain.kt",
     "HypnogramCoverage.kt",
     "LocalDayWindows.kt",
@@ -62,6 +62,7 @@ val kernelAnalyticsFiles = listOf(
     "RecoveryScorer.kt",
     "ScoreConfidence.kt",
     "SleepStageTotals.kt",
+    "SleepOpportunityDetector.kt",
     "SleepStageVocabulary.kt",
     "SleepStager.kt",
     "SleepStagerTrace.kt",
@@ -76,6 +77,9 @@ val kernelAnalyticsFiles = listOf(
 /** Pure protocol types the kernel references (DeviceFamily, ParsedFrame, Whoop4SkinTemp /
  *  skinTempCelsius). No BLE, no android.bluetooth. */
 val kernelProtocolFiles = listOf(
+    "RrPacketProvenance.kt",
+    "Crc.kt",
+    "Whoop5RR.kt",
     "DeviceFamily.kt",
     "ParsedFrame.kt",
     "Streams.kt",
@@ -104,6 +108,9 @@ val kernelTestcentreFiles = listOf(
  *      (repository contract tests, import tests, UI-adjacent tests) — not analytics formulas.
  *  90 top-level + 6 agreement tests = 96 files. */
 val kernelTestFiles = listOf(
+    "SleepEvidenceTest.kt",
+    "SleepOpportunityDetectorTest.kt",
+    "SleepStagerV2Test.kt",
     "AnalyticsEngineDayBoundsTest.kt",
     "AnalyticsEngineDaySliceTest.kt",
     "AnalyticsEngineHrOnlyDayTest.kt",
@@ -129,6 +136,11 @@ val kernelTestFiles = listOf(
     "GuidedCaptureProgressTest.kt",
     "HrOnlyPhysiologyIsolationTest.kt",
     "HrvAnalyzerGateTest.kt",
+    "HrvWindowTest.kt",
+    "HrvIntegrationTest.kt",
+    "HrvPacketAdapterTest.kt",
+    "HrvSeriesTest.kt",
+    "CurrentHrvTest.kt",
     "HrvAnalyzerRollingTest.kt",
     "HrvAnalyzerSampleOrdTest.kt",
     "HrvAnalyzerSdnnIndexTest.kt",
@@ -153,6 +165,7 @@ val kernelTestFiles = listOf(
     "RecoveryIndexActivityBalanceTest.kt",
     "RespRateGapAwareTest.kt",
     "RespRateRsaTest.kt",
+    "RespirationEstimatorTest.kt",
     "RestNeedTest.kt",
     "RhrBinGateDiagnosticTest.kt",
     "RrCoverageVerdictTest.kt",
@@ -201,6 +214,9 @@ val kernelTestFiles = listOf(
 
 /** Test resources the scoped tests load from the classpath. */
 val kernelTestResourceFiles = listOf(
+    "sleep_evidence_oracle.json",
+    "hrv_window_oracle.json",
+    "respiration_oracle.json",
     "local_day_windows_oracle.json",
 )
 

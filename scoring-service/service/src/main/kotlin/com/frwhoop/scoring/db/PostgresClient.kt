@@ -17,7 +17,7 @@ import java.sql.Connection
  * password to Hikari as data-source properties, keeping the URL userinfo-free.
  */
 class PostgresClient private constructor(
-    private val dataSource: HikariDataSource,
+    internal val dataSource: HikariDataSource,
 ) : AutoCloseable {
 
     constructor(databaseUrl: String) : this(

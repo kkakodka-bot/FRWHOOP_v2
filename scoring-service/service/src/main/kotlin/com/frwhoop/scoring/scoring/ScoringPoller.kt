@@ -4,10 +4,14 @@ import com.frwhoop.scoring.ScoringConfig
 import com.frwhoop.scoring.db.EngineIngestWriter
 import com.frwhoop.scoring.db.ScoreInputProvider
 import com.frwhoop.scoring.db.ScoringWorkQueue
-import com.frwhoop.scoring.derived.DerivedArtifactWriter
+import com.frwhoop.scoring.derived.DerivedArchiveOutbox
+import com.frwhoop.scoring.derived.ArchiveRetryWorker
 import com.frwhoop.scoring.health.HeartbeatReporter
 import org.slf4j.LoggerFactory
 import java.util.UUID
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 class ScoringPoller(
     private val config: ScoringConfig,
@@ -15,81 +19,72 @@ class ScoringPoller(
     private val queue: ScoringWorkQueue,
     private val scorer: DayScorer,
     private val writer: EngineIngestWriter,
-    private val derivedWriter: DerivedArtifactWriter?,
     private val heartbeat: HeartbeatReporter,
+    private val archiveOutbox: DerivedArchiveOutbox? = null,
 ) {
     private val log = LoggerFactory.getLogger(ScoringPoller::class.java)
 
     fun runForever() {
         log.info("scoring poller started (interval={}s, version={})", config.pollInterval.seconds, config.algorithmVersion)
-        while (true) {
-            try {
-                pollOnce()
-            } catch (err: Exception) {
-                log.error("poll cycle failed: {}", err.message, err)
-                heartbeat.recordError(err.message ?: err.javaClass.simpleName)
+        val archive=archiveOutbox?.let { outbox -> ArchiveRetryWorker(config.pollInterval,
+            work={ outbox.processOne();Unit },
+            onError={ log.warn("Archive queue unavailable: {}",it.javaClass.simpleName) }) }
+        try {
+            while (!Thread.currentThread().isInterrupted) {
+                try {
+                    pollOnce()
+                } catch (err: Exception) {
+                    log.error("poll cycle failed: {}", err.message, err)
+                    heartbeat.recordError(err.message ?: err.javaClass.simpleName)
+                }
+                Thread.sleep(config.pollInterval.toMillis())
             }
-            Thread.sleep(config.pollInterval.toMillis())
-        }
+        } finally { archive?.close() }
     }
 
     fun pollOnce() {
         heartbeat.recordPoll()
-        val watermark = queue.readWatermark()
-        val readAt = java.time.Instant.now()
-        val discovered = queue.discoverAndEnqueue(watermark, readAt)
-        if (discovered > 0) {
-            log.info("discovered {} work-item upsert(s) since {}", discovered, watermark)
-        }
-
-        val claimed = queue.claimDue()
-        if (claimed.isEmpty()) {
-            log.debug("no due work items")
-            return
-        }
-        log.info("claimed {} work item(s)", claimed.size)
-        for (item in claimed) {
+        repeat(8) {
+            val item = queue.claimOne() ?: return
             processWorkItem(item)
         }
     }
 
     fun scoreDay(userId: UUID, deviceId: UUID, day: String) {
-        val inputs = inputs.loadDay(userId, day, deviceId)
-        if (inputs == null) {
-            log.warn("skip {} {} {} — no device/inputs", userId, deviceId, day)
-            return
-        }
-        if (inputs.hr.isEmpty() && inputs.rr.isEmpty()) {
-            log.warn("skip {} {} {} — no hr/rr samples in night window", userId, deviceId, day)
-            return
-        }
-        val bundle = scorer.score(inputs, config.algorithmVersion)
-        writer.write(bundle)
-        archiveDerived(bundle)
-        heartbeat.recordScore(userId, day)
-        log.info(
-            "scored {} {} {} (hr={}, rr={}, sleeps={})",
-            userId, deviceId, day, inputs.hr.size, inputs.rr.size, bundle.result.sleepSessions.size,
-        )
+        queue.dirtyWorkItem(userId, deviceId, day)
+        val item = queue.claimOne(userId, deviceId, day)
+            ?: error("Replay revision is owned by another worker")
+        check(processWorkItem(item)) { "Replay did not finish publication; inspect the durable work status" }
     }
 
-    private fun processWorkItem(item: ScoringWorkQueue.WorkItem) {
+    private fun processWorkItem(item: ScoringWorkQueue.WorkItem): Boolean {
         val started = System.nanoTime()
+        val leaseLost = AtomicBoolean(false)
+        val renewal = Executors.newSingleThreadScheduledExecutor { task ->
+            Thread(task, "scoring-lease-renewal").apply { isDaemon = true }
+        }
+        val periodMs = (queue.claimLease.toMillis() / 3).coerceAtLeast(100)
+        renewal.scheduleAtFixedRate({
+            try {
+                if (!queue.renew(item)) leaseLost.set(true)
+            } catch (err: Exception) {
+                leaseLost.set(true)
+                log.warn("lease renewal failed for run {}: {}", item.runId, err.message)
+            }
+        }, periodMs, periodMs, TimeUnit.MILLISECONDS)
         try {
-            val inputs = inputs.loadDay(item.userId, item.day, item.deviceId)
+            val inputs = inputs.loadDay(item.userId, item.day, item.deviceId, item.timezoneId)
             if (inputs == null) {
-                queue.markFailed(item, "no device/inputs")
-                return
+                queue.markWaiting(item, "no device/inputs")
+                return false
             }
-            if (inputs.hr.isEmpty() && inputs.rr.isEmpty()) {
-                queue.markFailed(item, "no hr/rr samples in night window")
-                return
-            }
-            val bundle = scorer.score(inputs, config.algorithmVersion)
-            writer.write(bundle)
-            val derivedError = archiveDerived(bundle)
+            // Empty inputs can be an intentional correction/deletion. Publish an unavailable
+            // snapshot so an old generated episode cannot survive a tombstone or removed data.
+            val bundle = scorer.score(inputs, config.algorithmVersion,item.inputRevision.toString())
+            check(!leaseLost.get()) { "Scoring lease was lost before publication" }
+            writer.write(bundle, item)
             val durationMs = ((System.nanoTime() - started) / 1_000_000).toInt()
-            val done = queue.markDone(item, durationMs, derivedError)
+            val done = queue.markDone(item, durationMs)
             if (done) {
                 heartbeat.recordScore(item.userId, item.day)
                 log.info(
@@ -99,39 +94,25 @@ class ScoringPoller(
                 )
             } else {
                 log.info(
-                    "re-queue {} {} {} — dirty_at moved during scoring",
+                    "completion fenced for {} {} {} because lease or revision changed",
                     item.userId, item.deviceId, item.day,
                 )
             }
+            return done
         } catch (err: Exception) {
-            queue.markFailed(item, err.message ?: err.javaClass.simpleName)
-            heartbeat.recordError(err.message ?: err.javaClass.simpleName)
-            log.error(
-                "score failed for {} {} {}: {}",
-                item.userId, item.deviceId, item.day, err.message, err,
-            )
+            if (queue.markFailed(item, err.message ?: err.javaClass.simpleName)) {
+                heartbeat.recordError(err.message ?: err.javaClass.simpleName)
+                log.error(
+                    "score failed for {} {} {}: {}",
+                    item.userId, item.deviceId, item.day, err.message, err,
+                )
+            } else {
+                log.info("discarded superseded scoring run {}", item.runId)
+            }
+            return false
+        } finally {
+            renewal.shutdownNow()
         }
     }
 
-    /** Returns an error message when B2 archive fails; scores are already committed. */
-    private fun archiveDerived(bundle: ServerScoreBundle): String? {
-        val writer = derivedWriter ?: return null
-        if (!writer.enabled) return null
-        return try {
-            val result = writer.archive(bundle)
-            log.info(
-                "derived archive {} {} {} ({} bytes, sha256={})",
-                bundle.userId, bundle.deviceId, bundle.day,
-                result.compressedBytes, result.sha256.take(12),
-            )
-            null
-        } catch (err: Exception) {
-            val msg = err.message ?: err.javaClass.simpleName
-            log.warn(
-                "derived archive failed for {} {} {}: {}",
-                bundle.userId, bundle.deviceId, bundle.day, msg,
-            )
-            msg
-        }
-    }
 }

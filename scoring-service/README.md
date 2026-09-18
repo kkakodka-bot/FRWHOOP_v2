@@ -1,15 +1,17 @@
-# FRWHOOP Scoring Service (Phase 3)
+# FRWHOOP Physiology Scoring Service
 
 Standalone JVM service that runs the extracted Android analytics Kotlin twin (`com.noop.analytics`).
-Scores HRV/RR + sleep on arrival and writes canonical rows via `engine_ingest_scored` under
-`algorithm_version = frwhoop-server-1`.
+Scores HRV/RR, sleep and qualified respiration on arrival. It writes immutable owner/device/day/revision
+snapshots via `engine_publish_physiology` under `algorithm_version = frwhoop-physiology-2`.
+This version remains shadow by default; readback selection retains the v1 baseline. Starting the
+service does not promote its outputs. This build refuses to impersonate the v1 algorithm version.
 
 ## Layout
 
 | Module | Role |
 |---|---|
 | `analytics-kernel` | Scoped Kotlin twin — sources are BYTE-VERBATIM copies from `android/app/src/main/java` (synced by Gradle). Oracle tests run unmodified. |
-| `service` | Durable work-queue poller + `AnalyticsEngine.analyzeDay` + `engine_ingest_scored` writer. |
+| `service` | Fenced revision/lease queue, snapshot-scoped analytics, publication and independent archival. |
 
 ## Build
 
@@ -18,6 +20,7 @@ cd scoring-service
 export JAVA_HOME="$(brew --prefix openjdk@17)/libexec/openjdk.jdk/Contents/Home"
 ./gradlew :analytics-kernel:test          # parity oracle (alias: :analytics-kernel:parityGate)
 ./gradlew :service:test :service:installDist
+bash scripts/test-physiology-queue.sh  # new disposable local PostgreSQL; retained evidence logs
 ```
 
 ## Run locally
@@ -25,12 +28,16 @@ export JAVA_HOME="$(brew --prefix openjdk@17)/libexec/openjdk.jdk/Contents/Home"
 ```bash
 export DATABASE_URL='postgresql://postgres:…@localhost:5432/postgres'
 export INGEST_SECRET='…'
-export SUPABASE_URL='https://api.example.com'
+export SUPABASE_URL='https://api.example.com/rest/v1'
 export SUPABASE_SERVICE_ROLE_KEY='…'
 ./service/build/install/service/bin/service
 ```
 
-Replay one day (bypasses the work queue; writes directly):
+`SUPABASE_URL` is the PostgREST base. The compose template correctly uses the direct container
+`http://rest:3000`; a gateway URL needs `/rest/v1`. The writer appends `/rpc/engine_publish_physiology`.
+Do not run this against production merely to verify configuration: starting/replaying performs writes.
+
+Replay one day (dirties, claims and renews the same queue lease; publication stays revision-fenced):
 
 ```bash
 export REPLAY_USER_ID='…'
@@ -40,6 +47,12 @@ export REPLAY_DAY='2026-09-15'
 ```
 
 If the user has exactly one registered device, `REPLAY_DEVICE_ID` may be omitted.
+A one-shot replay can leave an archive pending; the long-running process owns archive retries.
+
+For a read-only owner/night signal-availability report, use `--inventory-signals` with explicit
+`INVENTORY_USER_ID`, `INVENTORY_DEVICE_ID`, `INVENTORY_DAY` and optional paired `INVENTORY_START`/`INVENTORY_END`.
+See the [inventory contract and example](../docs/physiology-v2/acquisition.md#executable-ownernight-inventory).
+Unlike replay, this command does not initialize scoring or mutate queue/archive state.
 
 ## Durable state (Postgres)
 
@@ -47,11 +60,16 @@ All progress survives container restarts (`kill -9` → clean resume):
 
 | Table | Purpose |
 |---|---|
-| `scoring_work_items` | One row per (user, device, local day); PK `(user_id, device_id, day)` |
-| `scorer_state` | Singleton `discovery_watermark` — advanced after each discovery upsert |
+| `scoring_work_items` | Device/day debt, input and measurement revisions, renewable run/lease tokens, waiting/failure state |
+| `scoring_timezone_history` | Prospective event-time IANA ownership segments |
 | `scoring_service_heartbeats` | Singleton liveness row (`last_poll_at`, `last_score_at`) |
-| `server_daily_scores` | Shadow daily scores keyed by `algorithm_version` |
-| `server_sleep_nights` | Shadow sleep nights keyed by `algorithm_version` |
+| `server_physiology_results` | Immutable version/revision snapshots, including the complete generated episode set |
+| `physiology_sleep_overrides` | Owner-scoped optimistic corrections and tombstones |
+| `physiology_archive_outbox` | Independent retries of the exact committed payload |
+| `physiology_feature_qualifications` / `physiology_source_selection` | Human-reviewed feature gates and explicit owner/device/version selection |
+
+The old `server_daily_scores` and `server_sleep_nights` remain readable for rollback. See
+[revision-protocol.md](docs/revision-protocol.md) for actual transaction and dependency behavior.
 
 The scorer **never** writes `daily_metrics` or `sleep_nights` (device-pushed tables).
 
@@ -68,23 +86,49 @@ See `infra/vps/templates/docker-compose.scoring-override.yml`.
 ## Scoped kernel (Locked #3)
 
 Server computes: RR/HRV pipeline + sleep staging/score. Charge/Effort/Rest are computed internally
-by `AnalyticsEngine` but **not written** to Postgres — only HRV + sleep columns are emitted via
-`engine_ingest_scored`.
+by `AnalyticsEngine` but **not written** to Postgres. Only the scoped physiology snapshot is published.
 
 ## Input sources
 
-HR/RR/resp/gravity/events are read from Postgres `noop_*` projection tables (populated by the push
-receiver). B2 raw-object fetch is not required for the locked HRV+sleep scope.
+HR/RR/resp/gravity/steps/events, band state and supported annotations come from `noop_*` projections.
+Checked RR receipts preserve original packet-local words/zeros but do not invent a verified beat clock
+or cross-packet continuity. Coarse timing remains unavailable for qualified HRV/RSA. Historical IANA
+segments own full local days and preceding-night context, including DST and within-day travel.
+Snapshot fencing rejects future-dated samples/spans and incomplete HRV windows. Known awake/off-body
+gaps stay distinct from unknown; reported boundaries are not sleep truth. Unsupported inputs, including
+habitual timing and waveform channel semantics, carry explicit unavailable states.
 
-## Derived artifact lane (Phase 5)
+Optional raw/model work uses bounded GET/hash/decode and a separately configured shadow lane. See
+[inference/README.md](inference/README.md). The JVM Docker image does not install approved Python model
+environments; absent activation/assets disables those candidates, not the independent deterministic work.
 
-After each successful `engine_ingest_scored` write, the service archives the in-memory bundle to
-the **same B2 bucket** as raw objects:
+## Immutable derived archives
+
+Publication atomically creates durable archive debt for the exact canonical JSON snapshot. A separate
+bounded worker retries upload and readback verification to the same configured B2 bucket:
 
 ```text
-v3/derived/users/{userId}/days/{YYYY-MM-DD}/frwhoop-server-1.json.zst
+v3/derived/users/{user}/devices/{device}/days/{day}/{algorithm}/revisions/{revision}/{hash}.json.zst
 ```
 
 Requires the same B2 env as Edge (`B2_KEY_ID`, `B2_APPLICATION_KEY`, `B2_BUCKET_NAME`, …) — the
-VPS compose override loads `/opt/frwhoop/b2.env`. Postgres scores commit even when B2 fails;
-`scoring_work_items.derived_artifact_error` records the last archive failure for ops.
+VPS compose override loads `/opt/frwhoop/b2.env`. Postgres scores remain readable when B2 fails;
+`physiology_archive_outbox` retains the independent status/retry debt. A client hash or HEAD response
+does not verify raw content. Changed decode metadata revokes old proof, while identical repeat
+verification does not endlessly dirty scores. Raw-uncompressed and derived-compressed digest
+conventions remain distinct.
+
+## Selection, rollback and evidence
+
+Per-feature source selection rejects unqualified shadow versions. The offline benchmark gate only
+returns eligibility for human review; it never changes production selection. Preserve additive
+migrations and immutable snapshots during rollback. Select the retained `frwhoop-server-1` feature
+and use its actual retained binary/image if old computation must resume. Changing this build's version
+string, dropping tables or rewriting user data is not rollback.
+
+See the [implementation ledger](../docs/physiology-v2/implementation-plan.md),
+[acquisition contract](../docs/physiology-v2/acquisition.md), [HRV contract](../docs/physiology-v2/hrv.md),
+and [benchmark harness](../Tools/physiology-bench/README.md). Outputs remain provisional without
+acquisition completeness attestation; period closure alone is insufficient. Local tests and builds
+do not establish ECG/PSG/respiratory accuracy, verified WHOOP subsecond clocks, model rights/weights,
+physical background/power soak, target-VPS resources, or deployed/rollout readiness.

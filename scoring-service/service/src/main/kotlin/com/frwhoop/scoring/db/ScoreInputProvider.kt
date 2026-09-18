@@ -8,4 +8,8 @@ import java.util.UUID
  */
 interface ScoreInputProvider {
     fun loadDay(userId: UUID, day: String, deviceId: UUID): SignalSampleReader.DayInputs?
+
+    /** Queue jobs retain the event-time zone even if the user's current profile later changes. */
+    fun loadDay(userId: UUID, day: String, deviceId: UUID, timezoneId: String): SignalSampleReader.DayInputs? =
+        loadDay(userId, day, deviceId)
 }

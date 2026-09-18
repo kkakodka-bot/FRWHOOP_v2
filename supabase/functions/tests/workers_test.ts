@@ -12,6 +12,40 @@ import {
 
 const USER = '7f2c9a10-4b3e-4d8a-9c11-00000000f001';
 
+async function digest(bytes: Uint8Array): Promise<string> {
+  return [...new Uint8Array(await crypto.subtle.digest('SHA-256', new Uint8Array(bytes)))].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+Deno.test('raw gzip checksum covers decoded NPB1 content and unsupported zstd stays unverified', async () => {
+  const decoded = new TextEncoder().encode('NPB1 synthetic raw compression contract fixture');
+  const encoded = new Uint8Array(await new Response(new Blob([decoded]).stream().pipeThrough(new CompressionStream('gzip'))).arrayBuffer());
+  const rest = await memRest([
+    { id: 'gzip', object_key: 'gzip', status: 'uploaded', user_id: USER, sha256: await digest(decoded),
+      object_class: 'raw', format: 'bin_gzip_noop_push_v1', compression: 'gzip', compressed_bytes: encoded.length, uncompressed_bytes: decoded.length },
+    { id: 'zstd', object_key: 'zstd', status: 'uploaded', user_id: USER, sha256: await digest(decoded),
+      object_class: 'raw', format: 'bin_zstd_noop_push_v1', compression: 'zstd', compressed_bytes: encoded.length, uncompressed_bytes: decoded.length },
+  ]);
+  const report = await reconcileObjects({ rest: rest as any, verifyChecksums: true,
+    objectStore: { head: async () => ({ exists: true, contentLength: encoded.length }), getObject: async () => ({ body: encoded }) } as any });
+  assertEquals(report.checksum_mismatch, 0); assertEquals(report.checksum_unverified, 1);
+  assertEquals([...rest.manifests.values()].find((r: any) => r.id === 'gzip')?.status, 'ready');
+  assertEquals([...rest.manifests.values()].find((r: any) => r.id === 'zstd')?.status, 'uploaded');
+});
+
+Deno.test('derived checksum covers stored bytes and unknown digest contracts do not become ready', async () => {
+  const bytes = new Uint8Array([1, 2, 3, 4]);
+  const rest = await memRest([
+    { id: 'derived', object_key: 'derived', status: 'uploaded', user_id: USER, sha256: await digest(bytes),
+      object_class: 'derived', format: 'json_zstd_frwhoop_derived_v2', compression: 'zstd' },
+    { id: 'unknown', object_key: 'unknown', status: 'uploaded', user_id: USER, sha256: await digest(bytes), format: 'unknown' },
+  ]);
+  const report = await reconcileObjects({ rest: rest as any, verifyChecksums: true,
+    objectStore: { head: async () => ({ exists: true }), getObject: async () => ({ body: bytes }) } as any });
+  assertEquals(report.checksum_mismatch, 0); assertEquals(report.checksum_unverified, 1);
+  assertEquals([...rest.manifests.values()].find((r: any) => r.id === 'derived')?.status, 'ready');
+  assertEquals([...rest.manifests.values()].find((r: any) => r.id === 'unknown')?.status, 'uploaded');
+});
+
 async function memRest(rows: any[]) {
   const rest = makeMemRest();
   for (const row of rows) await rest.upsert('object_manifests', { ...row });

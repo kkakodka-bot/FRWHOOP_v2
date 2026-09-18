@@ -28,6 +28,10 @@ tasks.withType<Test>().configureEach {
     useJUnit()
 }
 
+sourceSets.test {
+    resources.srcDir(rootProject.file("../android/app/src/test/resources"))
+}
+
 tasks.named<JavaExec>("run") {
     dependsOn(":analytics-kernel:compileKotlin")
 }

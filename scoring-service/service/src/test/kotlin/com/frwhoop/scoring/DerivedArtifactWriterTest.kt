@@ -16,6 +16,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.Instant
 import java.util.UUID
+import com.sun.net.httpserver.HttpServer
+import java.net.InetSocketAddress
 
 class DerivedArtifactWriterTest {
     private val userId = UUID.fromString("00000000-0000-4000-8000-000000000001")
@@ -99,18 +101,36 @@ class DerivedArtifactWriterTest {
             }
         }
         val cfg = B2Config("k", "s", "FRWHOOP", "s3.us-west-004.backblazeb2.com", "us-west-004")
-        val writer = DerivedArtifactWriter(cfg, "http://rest:3000", "role-key", fakePut)
-        val result = writer.archive(sampleBundle())
-        assertEquals(captured!!.size, result.compressedBytes)
-        assertEquals(B2ObjectStore.sha256Hex(captured!!), result.sha256)
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        var registered = false
+        server.createContext("/object_manifests") { exchange ->
+            exchange.requestBody.readBytes()
+            registered = true
+            exchange.sendResponseHeaders(201, -1)
+            exchange.close()
+        }
+        server.start()
+        try {
+            val get = object : B2ObjectStore.GetClient {
+                override fun getObject(key: String, maximumBytes: Int): ByteArray = captured!!.copyOf()
+            }
+            val writer = DerivedArtifactWriter(cfg, "http://127.0.0.1:${server.address.port}", "role-key", fakePut,
+                getClient = get)
+            val result = writer.archive(sampleBundle())
+            assertEquals(captured!!.size, result.compressedBytes)
+            assertEquals(B2ObjectStore.sha256Hex(captured!!), result.sha256)
+            assertTrue(registered)
+        } finally { server.stop(0) }
     }
 
     @Test
     fun writerUsesFakePutClientWithoutNetwork() {
         val keys = mutableListOf<String>()
+        var stored = byteArrayOf()
         val fakePut = object : B2ObjectStore.PutClient {
             override fun putObject(key: String, body: ByteArray, contentType: String): B2ObjectStore.PutResult {
                 keys.add(key)
+                stored = body.copyOf()
                 assertTrue(body.isNotEmpty())
                 assertEquals("application/json", contentType)
                 return B2ObjectStore.PutResult(etag = null, bytes = body.size)
@@ -118,13 +138,36 @@ class DerivedArtifactWriterTest {
         }
         val cfg = B2Config("k", "s", "FRWHOOP", "s3.us-west-004.backblazeb2.com", "us-west-004")
         // Manifest registration will fail without a server — test only the PUT path by catching.
-        val writer = DerivedArtifactWriter(cfg, "http://127.0.0.1:1", "role-key", fakePut)
+        val get = object : B2ObjectStore.GetClient {
+            override fun getObject(key: String, maximumBytes: Int) = stored
+        }
+        val writer = DerivedArtifactWriter(cfg, "http://127.0.0.1:1", "role-key", fakePut, getClient = get)
         try {
             writer.archive(sampleBundle())
         } catch (_: Exception) {
             // manifest upsert expected to fail in unit test
         }
         assertEquals(1, keys.size)
-        assertTrue(keys[0].endsWith("frwhoop-server-1.json.zst"))
+        assertTrue(keys[0].contains("/devices/$deviceId/"))
+        assertTrue(keys[0].contains("/frwhoop-server-1/revisions/0/"))
+        assertTrue(keys[0].endsWith(".json.zst"))
+    }
+
+    @Test
+    fun corruptReadbackCannotBeRegisteredAsVerified() {
+        val put = object : B2ObjectStore.PutClient {
+            override fun putObject(key: String, body: ByteArray, contentType: String) =
+                B2ObjectStore.PutResult(null,body.size)
+        }
+        val get = object : B2ObjectStore.GetClient {
+            override fun getObject(key: String, maximumBytes: Int) = byteArrayOf(1,2,3)
+        }
+        val cfg = B2Config("k", "s", "bucket", "example.invalid", "region")
+        try {
+            DerivedArtifactWriter(cfg,"http://127.0.0.1:1","key",put,getClient=get).archive(sampleBundle())
+            org.junit.Assert.fail("corrupt readback accepted")
+        } catch (expected: IllegalStateException) {
+            assertEquals("derived archive content digest mismatch",expected.message)
+        }
     }
 }

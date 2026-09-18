@@ -35,6 +35,7 @@ const STREAM_EXT: Record<string, string> = {
   hr_rr: 'ndjson.gz',
   hrSample: 'ndjson.gz',
   rrInterval: 'ndjson.gz',
+  rrPacketProvenance: 'ndjson.gz',
   event: 'ndjson.gz',
   battery: 'ndjson.gz',
   spo2Sample: 'ndjson.gz',
@@ -95,6 +96,7 @@ export const RETENTION_CLASS: Record<string, string> = {
   whoop5_optical_v20: 'core',
   hrSample: 'core',
   rrInterval: 'core',
+  rrPacketProvenance: 'core',
   event: 'core',
   battery: 'core',
   spo2Sample: 'core',
@@ -141,7 +143,8 @@ export const OBJECT_LANE_STREAMS: ReadonlySet<string> = Object.freeze(new Set([
 
 /** Nominal records per second for an object-lane stream, or null when the stream has no fixed rate. */
 export const OBJECT_LANE_RECORD_HZ: Record<string, number | null> = Object.freeze({
-  ppgWaveformSample: 1,
+  // A decoded second can contain multiple distinct optical records. Counter density is not time coverage.
+  ppgWaveformSample: null,
   rawImuSession: 1,
   v18AuxSample: 1,
   rawBatch: null,

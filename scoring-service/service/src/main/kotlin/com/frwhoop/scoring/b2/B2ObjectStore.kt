@@ -13,13 +13,17 @@ import java.time.format.DateTimeFormatter
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
-/** Minimal SigV4 PUT for B2's S3-compatible API (path-style, same as Edge `s3.ts`). */
+/** Bounded SigV4 PUT/GET for B2's S3-compatible API (path-style, same as Edge `s3.ts`). */
 class B2ObjectStore(
     private val config: B2Config,
-    private val http: OkHttpClient = OkHttpClient.Builder().build(),
+    private val http: OkHttpClient = OkHttpClient.Builder().callTimeout(30,java.util.concurrent.TimeUnit.SECONDS).build(),
 ) {
     interface PutClient {
         fun putObject(key: String, body: ByteArray, contentType: String): PutResult
+    }
+
+    interface GetClient {
+        fun getObject(key: String, maximumBytes: Int): ByteArray
     }
 
     data class PutResult(val etag: String?, val bytes: Int)
@@ -35,13 +39,33 @@ class B2ObjectStore(
             .build()
         http.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) {
-                error("B2 PUT failed (${resp.code}): ${resp.body?.string()?.take(180)}")
+                error("B2 PUT failed: HTTP ${resp.code}")
             }
             return PutResult(etag = resp.header("ETag"), bytes = body.size)
         }
     }
 
-    internal fun signPut(key: String, body: ByteArray, contentType: String): SignedRequest {
+    /** Bounded byte retrieval is used for digest verification; HEAD is not content evidence. */
+    fun getObject(key: String, maximumBytes: Int): ByteArray {
+        require(maximumBytes in 1..128 * 1024 * 1024)
+        val signed = signRequest("GET", key, byteArrayOf(), null)
+        val request = Request.Builder().url(signed.url).get().apply {
+            signed.headers.forEach { (name, value) -> header(name, value) }
+        }.build()
+        http.newCall(request).execute().use { response ->
+            check(response.isSuccessful) { "B2 GET failed: HTTP ${response.code}" }
+            val body = response.body ?: error("B2 response body missing")
+            require(body.contentLength() <= maximumBytes) { "B2 object exceeds byte limit" }
+            val bytes = body.byteStream().readNBytes(maximumBytes + 1)
+            require(bytes.size <= maximumBytes) { "B2 object exceeds byte limit" }
+            return bytes
+        }
+    }
+
+    internal fun signPut(key: String, body: ByteArray, contentType: String): SignedRequest =
+        signRequest("PUT", key, body, contentType)
+
+    private fun signRequest(method: String, key: String, body: ByteArray, contentType: String?): SignedRequest {
         val now = Instant.now()
         val amzDate = AMZ_DATE.format(now.atOffset(ZoneOffset.UTC))
         val dateStamp = amzDate.substring(0, 8)
@@ -52,14 +76,14 @@ class B2ObjectStore(
             "host" to host,
             "x-amz-content-sha256" to payloadHash,
             "x-amz-date" to amzDate,
-            "content-type" to contentType,
-            "content-length" to body.size.toString(),
         )
+        if (contentType != null) headers["content-type"] = contentType
+        if (method == "PUT") headers["content-length"] = body.size.toString()
         val signedHeaderNames = headers.keys.sorted()
         val canonicalHeaders = signedHeaderNames.map { "$it:${headers[it]}\n" }.joinToString("")
         val signedHeaders = signedHeaderNames.joinToString(";")
         val canonicalRequest = listOf(
-            "PUT",
+            method,
             uri,
             "",
             canonicalHeaders,
