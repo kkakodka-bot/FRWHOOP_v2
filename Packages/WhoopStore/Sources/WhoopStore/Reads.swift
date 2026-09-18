@@ -421,6 +421,22 @@ extension WhoopStore {
         }
     }
 
+    /// Recent battery context for forecasts. Apply the limit to the newest rows, then return time order.
+    /// The ascending export reader above intentionally keeps its existing semantics.
+    public func recentBatterySamples(deviceId: String, from: Int, to: Int, limit: Int) async throws -> [BatterySample] {
+        guard limit > 0 else { return [] }
+        return try syncRead { db in
+            try Row.fetchAll(db, sql: """
+                SELECT ts, soc, mv FROM (
+                    SELECT ts, soc, mv FROM battery
+                    WHERE deviceId = ? AND ts >= ? AND ts <= ? AND soc BETWEEN 0 AND 100
+                    ORDER BY ts DESC LIMIT ?
+                ) ORDER BY ts ASC
+                """, arguments: [deviceId, from, to, limit])
+                .map { BatterySample(ts: $0["ts"], soc: $0["soc"], mv: $0["mv"]) }
+        }
+    }
+
     public func spo2Samples(deviceId: String, from: Int, to: Int, limit: Int) async throws -> [SpO2Sample] {
         try syncRead { db in
             try Row.fetchAll(db, sql: """

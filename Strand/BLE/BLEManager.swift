@@ -1410,6 +1410,8 @@ public final class BLEManager: NSObject, ObservableObject {
         // before any BLE data arrives.
         self.collector = nil
         super.init()
+        state.selectBatteryDevice(deviceId)
+        configureCollectorFamily()
         guard startCentral else { return }
         #if DEBUG
         // Hosted regression tests must not connect to a nearby physical strap.
@@ -2963,6 +2965,13 @@ public final class BLEManager: NSObject, ObservableObject {
     @discardableResult
     public func send(_ command: WhoopCommand, payload: [UInt8] = [0x00],
                      writeType: CBCharacteristicWriteType = .withoutResponse) -> Bool {
+        // Onboarding reset owns the command lane. History and sensor commands must
+        // not race an erase/verification cycle for the selected device.
+        if onboardingSetup.required {
+            if onboardingSetup.phase == .resetting || onboardingSetup.phase == .verifying { return false }
+            if onboardingSetup.blocksData,
+               command == .sendHistoricalData || command == .historicalDataResult { return false }
+        }
         // #314 parity: CoreBluetooth already covers both Android defects here — this `p.state == .connected`
         // guard makes a write a no-op once the radio powers off (no DeadObjectException to crash on), and
         // centralManagerDidUpdateState publishes state.connected = false on .poweredOff, so the iOS/macOS UI
@@ -3279,6 +3288,7 @@ public final class BLEManager: NSObject, ObservableObject {
     private func beginBackfill(sessionID: UUID) async -> Bool {
         guard backfillStartingSessionID == sessionID,
               state.connected, state.bonded, !intentionalDisconnect else { return false }
+        guard !onboardingSetup.blocksData else { return false }
         guard sensorAcquisition.permitsHistoryStart else {
             log("Backfill: deferred while verified sensor capture or cleanup owns the command lane")
             return false
@@ -5585,6 +5595,7 @@ public final class BLEManager: NSObject, ObservableObject {
     func requestSync(_ trigger: BackfillTrigger) {
         guard backfillStartingSessionID == nil, backfillEndingSessionID == nil,
               !intentionalDisconnect else { return }
+        guard !onboardingSetup.blocksData else { return }
         guard BLEManager.shouldRunPeriodicBackfill(
             connected: state.connected, bonded: state.bonded, backfilling: backfilling) else { return }
         let now = Date().timeIntervalSince1970
@@ -6727,6 +6738,9 @@ extension BLEManager: @preconcurrency CBCentralManagerDelegate {
                                error: Error?) {
         invalidateBackfillDelivery()
         confirmedCommandWriteQueue.removeAll()
+        if onboardingSetup.busy, peripheral.identifier.uuidString == onboardingSetup.selectedID {
+            failOnboarding("The connection was interrupted. Keep your WHOOP nearby and retry to finish setup.")
+        }
         Task { @MainActor in await collector?.flush() }
         // Reboot trail: if a user reboot is in flight, this drop is the strap acting on it. Log how long
         // the link stayed up (a real reboot drops within ~1-2 s) and cancel the no-disconnect watchdog. The
@@ -7373,6 +7387,17 @@ extension BLEManager: @preconcurrency CBPeripheralDelegate {
                            didWriteValueFor characteristic: CBCharacteristic,
                            error: Error?) {
         guard peripheral === self.peripheral, characteristic === cmdCharacteristic else { return }
+        if onboardingEraseWritePending, peripheral.identifier.uuidString == onboardingSetup.selectedID {
+            onboardingEraseWritePending = false
+            if error != nil {
+                failOnboarding("Your WHOOP did not accept the reset. Keep it nearby and tap Clear storage and retry.")
+            } else {
+                onboardingSetup.eraseAcknowledged()
+                // Only a subsequent empty history session confirms the erase.
+                requestOnboardingVerification()
+            }
+            return
+        }
         let completedWrite = confirmedCommandWriteQueue.isEmpty ? nil : confirmedCommandWriteQueue.removeFirst()
         if let completedWrite, completedWrite.sessionID != nil {
             if confirmedCommandWritesOutstanding > 0 { confirmedCommandWritesOutstanding -= 1 }

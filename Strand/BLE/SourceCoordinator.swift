@@ -168,6 +168,7 @@ final class SourceCoordinator: ObservableObject {
             return
         }
 
+        live.selectBatteryDevice(id)
         if isWhoop(id) {
             switchToWhoop(id: id)
         } else {
