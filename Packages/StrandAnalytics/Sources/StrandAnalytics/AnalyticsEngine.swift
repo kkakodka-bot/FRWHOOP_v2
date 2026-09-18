@@ -487,8 +487,8 @@ public enum AnalyticsEngine {
                                   // UTC [start,end) admission, independently supplied from a real local day.
                                   // nil retains the legacy fixed-offset predicate.
                                   localDayBounds: Range<Int>? = nil,
-                                  // Per-instant offsets for main-night grouping only. SleepStager still
-                                  // uses tzOffsetSeconds; this is not zone-aware automatic staging.
+                                  // Per-instant offsets for main-night grouping and automatic detection.
+                                  // Day membership still requires localDayBounds or uses the fixed offset.
                                   timezone: TimeZone? = nil) -> DayResult {
 
         // Precompute the day's UTC bounds ONCE (#996). `dayString(ts, offsetSec:)` formats the UTC
@@ -510,6 +510,7 @@ public enum AnalyticsEngine {
                                                   tzOffsetSeconds: tzOffsetSeconds, wristOff: wristOff,
                                                   bandSleepState: bandSleepState,
                                                   useSleepStagerV2: useSleepStagerV2,
+                                                  timezone: timezone,
                                                   traceSink: traceSink)
             : []
         // Motion-aware wake refinement (#364 follow-up) runs AFTER V1/V2 staging, over every detected
