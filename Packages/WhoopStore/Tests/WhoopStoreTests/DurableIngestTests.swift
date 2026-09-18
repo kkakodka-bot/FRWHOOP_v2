@@ -85,6 +85,9 @@ final class DurableIngestTests: XCTestCase {
         let retained = try await reopened.pendingSensorQuarantine(scope: unassigned)
         let hidden = try await reopened.pendingSensorQuarantine(scope: scope)
         XCTAssertEqual(retained.map(\.frame), [Data([7, 8, 9])])
+        let archiveID = QuarantineArchiveIdentity(recordID: retained[0].id, family: retained[0].family, trim: retained[0].trim).batchID
+        let archived = try await reopened.rawFrames(batchId: archiveID)
+        XCTAssertEqual(archived, [[7, 8, 9]], "exact recovery bytes survive a real file-store reopen")
         XCTAssertTrue(hidden.isEmpty)
         do { try await reopened.bindAccountOwner(projectURL: scope.environment!, userID: scope.accountID!); XCTFail("no adoption") }
         catch { XCTAssertEqual(error as? LocalAccountOwnershipError, .unassignedExistingData) }
@@ -118,7 +121,7 @@ final class DurableIngestTests: XCTestCase {
         let auxBefore = try await s.v18AuxSamples(deviceId: scope.deviceID, from: 0, to: 200)
         XCTAssertEqual(ppgBefore.map(\.ts), [100, 101, 102, 103])
         XCTAssertEqual(auxBefore.map(\.ts), [100, 101, 102, 103])
-        for (lane, key) in [("ppgWaveformSample", "100:1"), ("v18AuxSample", "100")] {
+        for (lane, key) in [("ppgWaveformSample", "100:1"), ("v18AuxSample", "100:-1")] {
             let identity = try await s.rawResourceIdentity(scope: scope, lane: lane, resourceKey: key)
             try await s.recordRawDurabilityReceipt(receipt(XCTUnwrap(identity)))
         }

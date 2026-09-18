@@ -304,6 +304,10 @@ extension WhoopStore {
         let result: (counts: (Int, Int, Int, Int, Int, Int, Int, Int), markedJobs: Bool,
                      insertedHistoricalSensorRows: Int)
             = try syncWrite { db in
+            if let captureScope,
+               try Self.captureScope(db, deviceID: deviceId) != captureScope {
+                throw DurableIngestError.identityConflict
+            }
             var hr = 0, rr = 0, ev = 0, bat = 0
             var spo2 = 0, skin = 0, resp = 0, grav = 0
             var stepsInserted = 0
@@ -477,12 +481,12 @@ extension WhoopStore {
             //, nil (the byte was 0xFF/invalid/absent) stores SQL NULL, so an absent class stays absent.
             if !streams.steps.isEmpty, !shouldSkip("steps", timestamps: streams.steps.map(\.ts)) {
                 let stmt = try db.cachedStatement(sql: """
-                    INSERT INTO stepSample (deviceId, ts, counter, activityClass) VALUES (?, ?, ?, ?)
+                    INSERT INTO stepSample (deviceId, ts, counter, activityClass, provenanceJSON) VALUES (?, ?, ?, ?, ?)
                     ON CONFLICT(deviceId, ts) DO NOTHING
                     """)
                 var insertedStepTimestamps: [Int] = []
                 for s in streams.steps {
-                    try stmt.execute(arguments: [deviceId, s.ts, s.counter, s.activityClass])
+                    try stmt.execute(arguments: [deviceId, s.ts, s.counter, s.activityClass, try s.provenance?.canonicalJSON()])
                     let inserted = db.changesCount
                     stepsInserted += inserted
                     if inserted > 0 { insertedStepTimestamps.append(s.ts) }
@@ -498,11 +502,11 @@ extension WhoopStore {
             // existing #175 consumer is bit-identical. nil stores SQL NULL.
             if !streams.sleepState.isEmpty, !shouldSkip("sleepState", timestamps: streams.sleepState.map(\.ts)) {
                 let stmt = try db.cachedStatement(sql: """
-                    INSERT INTO sleepStateSample (deviceId, ts, state, rawByte) VALUES (?, ?, ?, ?)
+                    INSERT INTO sleepStateSample (deviceId, ts, state, rawByte, provenanceJSON) VALUES (?, ?, ?, ?, ?)
                     ON CONFLICT(deviceId, ts) DO NOTHING
                     """)
                 for s in streams.sleepState {
-                    try stmt.execute(arguments: [deviceId, s.ts, s.state, s.rawByte])
+                    try stmt.execute(arguments: [deviceId, s.ts, s.state, s.rawByte, try s.provenance?.canonicalJSON()])
                     sleepStateInserted += db.changesCount
                 }
                 try recordFrontier("sleepState", timestamps: streams.sleepState.map(\.ts))
@@ -513,11 +517,11 @@ extension WhoopStore {
             // keeps the FIRST estimate for a second; the measured hrSample is never touched here.
             if !streams.ppgHr.isEmpty, !shouldSkip("ppgHr", timestamps: streams.ppgHr.map(\.ts)) {
                 let stmt = try db.cachedStatement(sql: """
-                    INSERT INTO ppgHrSample (deviceId, ts, bpm, conf) VALUES (?, ?, ?, ?)
+                    INSERT INTO ppgHrSample (deviceId, ts, bpm, conf, provenanceJSON) VALUES (?, ?, ?, ?, ?)
                     ON CONFLICT(deviceId, ts) DO NOTHING
                     """)
                 for s in streams.ppgHr {
-                    try stmt.execute(arguments: [deviceId, s.ts, s.bpm, s.conf])
+                    try stmt.execute(arguments: [deviceId, s.ts, s.bpm, s.conf, try s.provenance?.canonicalJSON()])
                     ppgHrInserted += db.changesCount
                 }
                 try recordFrontier("ppgHr", timestamps: streams.ppgHr.map(\.ts))
@@ -548,24 +552,33 @@ extension WhoopStore {
                     }
                 }
             }
-            // Every remaining v18 slot (v31), one compact blob per strap-second. Persist-only, same as
-            // steps/sleepState/ppgHr/ppgWaveform: not added to the 8-field return tuple. A sample whose
-            // slots are all absent packs to empty and is SKIPPED rather than banking a meaningless row —
-            // which is also what keeps a WHOOP 4.0 offload from writing here at all.
-            if !streams.v18Aux.isEmpty, !shouldSkip("v18Aux", timestamps: streams.v18Aux.map(\.ts)) {
+            // A timestamp is not record identity. Preserve same-second siblings and the receipt
+            // key of migrated rows; a conflicting payload is not an idempotent replay.
+            if !streams.v18Aux.isEmpty {
                 let stmt = try db.cachedStatement(sql: """
-                    INSERT INTO v18AuxSample (deviceId, ts, fields) VALUES (?, ?, ?)
-                    ON CONFLICT(deviceId, ts) DO NOTHING
+                    INSERT INTO v18AuxSample (deviceId, ts, recordIndex, fields, resourceKey)
+                    VALUES (?, ?, ?, ?, ?)
                     """)
                 for s in streams.v18Aux {
+                    if let index = s.recordIndex, !(0...Int(UInt32.max)).contains(index) {
+                        throw DurableIngestError.identityConflict
+                    }
                     let blob = V18AuxCodec.pack(s)
                     if blob.isEmpty { continue }
-                    try stmt.execute(arguments: [deviceId, s.ts, blob])
+                    let index = s.recordIndex ?? -1
+                    if let existing = try Data.fetchOne(db, sql: """
+                        SELECT fields FROM v18AuxSample WHERE deviceId = ? AND ts = ? AND recordIndex = ?
+                        """, arguments: [deviceId, s.ts, index]) {
+                        guard existing == blob else { throw DurableIngestError.identityConflict }
+                        continue
+                    }
+                    let resourceKey = "\(s.ts):\(index)"
+                    try stmt.execute(arguments: [deviceId, s.ts, index, blob, resourceKey])
                     let inserted = db.changesCount
                     v18Written += inserted
                     if inserted > 0 {
                         try Self.registerRawResource(db, scope: try captureScope ?? Self.captureScope(db, deviceID: deviceId),
-                            lane: "v18AuxSample", key: String(s.ts), bytes: blob)
+                            lane: "v18AuxSample", key: resourceKey, bytes: blob)
                     }
                 }
                 try recordFrontier("v18Aux", timestamps: streams.v18Aux.map(\.ts))
@@ -620,11 +633,11 @@ extension WhoopStore {
             if banked >= v18AuxPruneEveryRows,
                (try? syncWrite { db in
                    try db.execute(sql: """
-                       DELETE FROM v18AuxSample WHERE deviceId = ? AND ts < (
-                           SELECT MIN(ts) FROM (
-                               SELECT ts FROM v18AuxSample WHERE deviceId = ? ORDER BY ts DESC LIMIT ?))
-                       AND \(Self.rawReceiptPredicate(table: "v18AuxSample", keySQL: "CAST(v18AuxSample.ts AS TEXT)"))
-                       """, arguments: [deviceId, deviceId, v18AuxRetentionRows, Int(Date().timeIntervalSince1970)])
+                       DELETE FROM v18AuxSample WHERE deviceId = ? AND rowid IN (
+                           SELECT rowid FROM v18AuxSample WHERE deviceId = ?
+                           ORDER BY ts DESC, recordIndex DESC, rowid DESC LIMIT -1 OFFSET ?)
+                       AND \(Self.rawReceiptPredicate(table: "v18AuxSample", keySQL: "v18AuxSample.resourceKey"))
+                       """, arguments: [deviceId, deviceId, max(0, v18AuxRetentionRows), Int(Date().timeIntervalSince1970)])
                }) != nil {
                 v18AuxRowsSincePrune[deviceId] = 0
             }
@@ -872,13 +885,14 @@ extension WhoopStore {
         -> [SleepStateSample] {
         try syncRead { db in
             try Row.fetchAll(db, sql: """
-                SELECT ts, state, rawByte FROM sleepStateSample
+                SELECT ts, state, rawByte, provenanceJSON FROM sleepStateSample
                 WHERE deviceId = ? AND ts >= ? AND ts <= ?
                 ORDER BY ts LIMIT ?
                 """, arguments: [deviceId, from, to, limit])
                 // rawByte (v31) is the whole @81 byte; nil on any pre-v31 row. `state` is unchanged, so
                 // the H7 guard and the Deep Timeline track see exactly what they saw before.
-                .map { SleepStateSample(ts: $0["ts"], state: $0["state"], rawByte: $0["rawByte"]) }
+                .map { try SleepStateSample(ts: $0["ts"], state: $0["state"], rawByte: $0["rawByte"],
+                    provenance: ScalarProvenance.decodeJSON($0["provenanceJSON"])) }
         }
     }
 
@@ -886,19 +900,25 @@ extension WhoopStore {
         try syncRead { db in try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM sleepStateSample") ?? 0 }
     }
 
-    /// The remaining 5/MG v18 per-second fields (v31) in `[from, to]` for one device, ascending by ts.
-    /// Each row is one strap-second's slots, decoded from the compact blob by `V18AuxCodec`. Empty for a
+    /// The remaining 5/MG v18 fields in `[from, to]`, ordered by timestamp and record identity.
+    /// Same-second siblings remain separate; the stored identity overrides tolerant BLOB decoding. Empty for a
     /// WHOOP 4.0 and for any window offloaded before v31. INSTRUMENTATION: no analytic calls this — it
     /// exists so the banked bytes are reachable for a census, and so the write path has a round-trip test.
     public func v18AuxSamples(deviceId: String, from: Int, to: Int, limit: Int = 200_000) async throws
         -> [V18AuxSample] {
         try syncRead { db in
             try Row.fetchAll(db, sql: """
-                SELECT ts, fields FROM v18AuxSample
+                SELECT ts, fields, recordIndex FROM v18AuxSample
                 WHERE deviceId = ? AND ts >= ? AND ts <= ?
-                ORDER BY ts LIMIT ?
+                ORDER BY ts, recordIndex, rowid LIMIT ?
                 """, arguments: [deviceId, from, to, limit])
-                .map { V18AuxCodec.unpack($0["fields"] ?? Data(), ts: $0["ts"]) }
+                .map { row in
+                    let ts: Int = row["ts"]
+                    var values = V18AuxCodec.unpack(row["fields"], ts: ts).slotValues
+                    let index: Int = row["recordIndex"]
+                    values[V18AuxSlot.recordIndex.rawValue] = index == -1 ? nil : index
+                    return V18AuxSample(ts: ts, slotValues: values)
+                }
         }
     }
 
@@ -908,6 +928,18 @@ extension WhoopStore {
 
     public func ppgHrCountForTest() async throws -> Int {
         try syncRead { db in try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM ppgHrSample") ?? 0 }
+    }
+
+    public func ppgHrSamples(deviceId: String, from: Int, to: Int, limit: Int = 200_000) async throws -> [PpgHrSample] {
+        try syncRead { db in
+            try Row.fetchAll(db, sql: """
+                SELECT ts, bpm, conf, provenanceJSON FROM ppgHrSample
+                WHERE deviceId = ? AND ts >= ? AND ts <= ? ORDER BY ts LIMIT ?
+                """, arguments: [deviceId, from, to, limit]).map {
+                    try PpgHrSample(ts: $0["ts"], bpm: $0["bpm"], conf: $0["conf"],
+                        provenance: ScalarProvenance.decodeJSON($0["provenanceJSON"]))
+                }
+        }
     }
 
     /// The RAW v26 optical PPG waveform (#156 follow-up), one record per second, in `[from, to]` for one

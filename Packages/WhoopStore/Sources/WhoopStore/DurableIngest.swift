@@ -1,6 +1,7 @@
 import Foundation
 import CryptoKit
 import GRDB
+import WhoopProtocol
 
 /// Captured by an ingest instance. Nil ownership is retained, never inferred from the next login.
 public struct DurableIngestScope: Codable, Equatable, Sendable {
@@ -217,19 +218,38 @@ extension WhoopStore {
     @discardableResult
     public func persistSensorQuarantine(_ frames: [[UInt8]], scope: DurableIngestScope,
                                         family: String, trim: UInt32,
+                                        clockRef: ClockRef? = nil,
+                                        preserveOccurrences: Bool = false,
                                         maxBytes: Int = 64 * 1_048_576,
                                         maxRecords: Int = 100_000) async throws -> Int {
         guard !frames.isEmpty else { return 0 }
         guard frames.count <= maxRecords, maxBytes >= 0 else { throw DurableIngestError.capacityExceeded }
         return try syncWrite { db in
+            guard try Self.captureScope(db, deviceID: scope.deviceID) == scope else {
+                throw DurableIngestError.identityConflict
+            }
             var retained = try Int.fetchOne(db, sql: "SELECT COALESCE(SUM(length(frame)), 0) FROM sensorQuarantine") ?? 0
             var count = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM sensorQuarantine") ?? 0
+            let offeredBytes = frames.reduce(0) { $0 + $1.count }
+            if offeredBytes > maxBytes - retained || frames.count > maxRecords - count {
+                // Recover capacity only from exact verified receipts whose grace elapsed. Never
+                // evict unsent evidence to make the current chunk fit; admission remains atomic.
+                _ = try Self.pruneSensorQuarantine(db, now: Int(Date().timeIntervalSince1970))
+                retained = try Int.fetchOne(db, sql: "SELECT COALESCE(SUM(length(frame)), 0) FROM sensorQuarantine") ?? 0
+                count = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM sensorQuarantine") ?? 0
+            }
             var inserted = 0
-            for frame in frames {
+            let chunkDigest = preserveOccurrences ? DurableIngestScope.sha256(Self.packFrames(frames)) : ""
+            for (ordinal, frame) in frames.enumerated() {
                 let bytes = Data(frame)
                 let digest = DurableIngestScope.sha256(bytes)
-                let id = DurableIngestScope.sha256(Data("\(scope.key)\n\(family)\n\(digest)".utf8))
-                if try Bool.fetchOne(db, sql: "SELECT EXISTS(SELECT 1 FROM sensorQuarantine WHERE id = ?)", arguments: [id]) == true { continue }
+                let occurrence = preserveOccurrences ? "\n\(trim)\n\(chunkDigest)\n\(ordinal)" : ""
+                let memberDigest = DurableIngestScope.sha256(Data("\(scope.key)\n\(family)\n\(digest)\(occurrence)".utf8))
+                let id = preserveOccurrences ? "h1-\(memberDigest)-\(chunkDigest)-\(ordinal)" : memberDigest
+                if let existing = try Row.fetchOne(db, sql: "SELECT * FROM sensorQuarantine WHERE id = ?", arguments: [id]) {
+                    try Self.enqueueQuarantineArchive(db, row: existing, clockRef: clockRef)
+                    continue
+                }
                 guard bytes.count <= maxBytes - retained, count < maxRecords else { throw DurableIngestError.capacityExceeded }
                 try db.execute(sql: """
                     INSERT INTO sensorQuarantine
@@ -238,6 +258,8 @@ extension WhoopStore {
                     """, arguments: [id, scope.key, scope.environment, scope.accountID, scope.deviceID,
                                       family, Int64(trim), bytes, Int(Date().timeIntervalSince1970)])
                 try Self.registerRawResource(db, scope: scope, lane: "sensorQuarantine", key: id, bytes: bytes)
+                let row = try Row.fetchOne(db, sql: "SELECT * FROM sensorQuarantine WHERE id = ?", arguments: [id])!
+                try Self.enqueueQuarantineArchive(db, row: row, clockRef: clockRef)
                 retained += bytes.count; count += 1; inserted += 1
             }
             if inserted > 0 { try Self.markRawUploadOwed(db) }
@@ -250,26 +272,31 @@ extension WhoopStore {
         try syncRead { db in
             try Row.fetchAll(db, sql: """
                 SELECT * FROM sensorQuarantine WHERE scopeKey = ? AND id > ? ORDER BY id LIMIT ?
-                """, arguments: [scope.key, afterID ?? "", min(max(1, limit), 500)]).map {
-                    SensorQuarantineRecord(id: $0["id"], scope: scope, family: $0["family"],
-                                           trim: UInt32($0["trim"] as Int64), frame: $0["frame"], capturedAt: $0["capturedAt"])
+                """, arguments: [scope.key, afterID ?? "", min(max(1, limit), 500)]).map { row in
+                    guard let trim = UInt32(exactly: row["trim"] as Int64) else { throw DurableIngestError.identityConflict }
+                    return SensorQuarantineRecord(id: row["id"], scope: scope, family: row["family"],
+                                                  trim: trim, frame: row["frame"], capturedAt: row["capturedAt"])
                 }
         }
     }
 
     @discardableResult
     public func pruneSensorQuarantine(now: Int) async throws -> Int {
-        try syncWrite { db in
-            let rows = try Row.fetchAll(db, sql: "SELECT id, deviceId FROM sensorQuarantine")
-            var deleted = 0
-            for row in rows {
-                let key: String = row["id"]
-                if try Self.rawResourceCanPrune(db, lane: "sensorQuarantine", deviceID: row["deviceId"], key: key, now: now) {
-                    try db.execute(sql: "DELETE FROM sensorQuarantine WHERE id = ?", arguments: [key])
-                    deleted += db.changesCount
-                }
+        try syncWrite { try Self.pruneSensorQuarantine($0, now: now) }
+    }
+
+    nonisolated static func pruneSensorQuarantine(_ db: Database, now: Int) throws -> Int {
+        let rows = try Row.fetchAll(db, sql: "SELECT * FROM sensorQuarantine")
+        var deleted = 0
+        for row in rows {
+            guard UInt32(exactly: row["trim"] as Int64) != nil else { continue }
+            let key: String = row["id"]
+            if try Self.rawResourceCanPrune(db, lane: "sensorQuarantine", deviceID: row["deviceId"], key: key, now: now)
+                || Self.quarantineArchiveCanPrune(db, row: row, now: now) {
+                try db.execute(sql: "DELETE FROM sensorQuarantine WHERE id = ?", arguments: [key])
+                deleted += db.changesCount
             }
-            return deleted
         }
+        return deleted
     }
 }

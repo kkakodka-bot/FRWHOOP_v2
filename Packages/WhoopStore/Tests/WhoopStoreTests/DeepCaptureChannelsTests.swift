@@ -27,7 +27,7 @@ final class DeepCaptureChannelsTests: XCTestCase {
         XCTAssertTrue(skin.contains("aux1Raw"))
         XCTAssertTrue(skin.contains("aux2Raw"))
         XCTAssertTrue(tables.contains("v18AuxSample"))
-        XCTAssertEqual(auxPK, ["deviceId", "ts"])
+        XCTAssertEqual(auxPK, ["deviceId", "ts", "recordIndex"])
         // The pre-existing columns must survive untouched — this is an ALTER, not a rebuild.
         XCTAssertTrue(["deviceId", "ts", "x", "y", "z"].allSatisfy(grav.contains))
         XCTAssertTrue(["deviceId", "ts", "state"].allSatisfy(band.contains))

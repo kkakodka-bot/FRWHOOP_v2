@@ -1,6 +1,6 @@
 {
   "_readme": "SHARED Room<->GRDB SCHEMA ORACLE (#775). Two byte-identical copies: Packages/WhoopStore/Tests/WhoopStoreTests/Resources/schema_oracle.json and android/app/src/test/resources/schema_oracle.json. SchemaOracleTests.swift compares GRDB's PRAGMA table_info/index_list against it; SchemaOracleTest.kt compares Room's exported schema JSON against it. `columns` is the iOS/GRDB shape in GRDB column order (macOS is the reference implementation); every way Android differs is spelled out in an `android` / `iosAbsent` / `androidColumnOrder` override naming a key in `divergenceReasons`. Adding a column, reordering one, or changing a type/nullability on one platform only fails both suites until it is either fixed or written down here.",
-  "roomVersion": 40,
+  "roomVersion": 42,
   "grdbMigrations": [
     "v1",
     "v2",
@@ -52,9 +52,12 @@
     "v46-ppg-record-identity",
     "v48-scoped-server-score-cache",
     "v49-durable-ingest-receipts",
-    "v50-account-store-owner"
+    "v50-account-store-owner",
+    "v51-v18-aux-record-identity",
+    "v52-scalar-provenance"
   ],
   "divergenceReasons": {
+    "integer-rowid-pk-nullability": "GRDB's INTEGER PRIMARY KEY AUTOINCREMENT is a non-null rowid alias although PRAGMA table_info reports notnull=0. Room declares its non-null Long primary key NOT NULL explicitly. Both allocate an integer identity for a null/omitted SQL id; this records the declaration difference without rewriting deployed migrations.",
     "android-orphan-synced-column": "REAL COLUMN DRIFT: `synced` exists on Android only. GRDB's v10 note is explicit that stepSample gets no `synced` column ('unused; see StreamStore'), and v12's ppgHrSample never had one either; the Room entities copied the flag from the older per-second entities. Nothing reads it on Android \u2014 the per-row upload flag belongs to an upload path that does not exist there \u2014 so it is dead width, not divergent data. Removing it needs a Room table rebuild.",
     "battery-alter-append-order": "REAL COLUMN-ORDER DRIFT (CLAUDE.md: 'column order in a Room CREATE TABLE must match the entity field order'). GRDB appended `synced` (v5) then `charging` (v6) with ALTER TABLE, which can only append; the Room entity declares `charging` before `synced`. Same columns, same types, different positions \u2014 so any positional copy (INSERT INTO battery SELECT * FROM \u2026) swaps them. Fixing it means reordering the Room entity's fields, which changes Room's identity hash and therefore needs a version bump plus a no-op migration.",
     "grdb-boolean-affinity": "GRDB's .boolean column type is declared BOOLEAN, which SQLite gives NUMERIC affinity; Room maps Kotlin Boolean to INTEGER. For the 0/1 values both sides write, NUMERIC and INTEGER affinity store bit-identical INTEGERs, so a .noopbak round-trips. Closing it means a GRDB table rebuild.",
@@ -1620,6 +1623,12 @@
           "default": null,
           "iosAbsent": true,
           "divergence": "android-orphan-synced-column"
+        },
+        {
+          "name": "provenanceJSON",
+          "affinity": "TEXT",
+          "notNull": false,
+          "default": null
         }
       ],
       "primaryKey": [
@@ -2071,6 +2080,12 @@
           "affinity": "INTEGER",
           "notNull": false,
           "default": null
+        },
+        {
+          "name": "provenanceJSON",
+          "affinity": "TEXT",
+          "notNull": false,
+          "default": null
         }
       ],
       "primaryKey": [
@@ -2157,6 +2172,12 @@
           "default": null,
           "iosAbsent": true,
           "divergence": "android-orphan-synced-column"
+        },
+        {
+          "name": "provenanceJSON",
+          "affinity": "TEXT",
+          "notNull": false,
+          "default": null
         }
       ],
       "primaryKey": [
@@ -2220,7 +2241,9 @@
           "name": "id",
           "affinity": "INTEGER",
           "notNull": false,
-          "default": null
+          "default": null,
+          "android": { "notNull": true },
+          "divergence": "integer-rowid-pk-nullability"
         },
         {
           "name": "ts",
@@ -2280,17 +2303,39 @@
           "default": null
         },
         {
+          "name": "recordIndex",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": null
+        },
+        {
           "name": "fields",
           "affinity": "BLOB",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "resourceKey",
+          "affinity": "TEXT",
           "notNull": true,
           "default": null
         }
       ],
       "primaryKey": [
         "deviceId",
-        "ts"
+        "ts",
+        "recordIndex"
       ],
-      "indices": []
+      "indices": [
+        {
+          "name": "index_v18AuxSample_deviceId_resourceKey",
+          "unique": true,
+          "columns": [
+            "deviceId",
+            "resourceKey"
+          ]
+        }
+      ]
     },
     "workout": {
       "platform": "both",

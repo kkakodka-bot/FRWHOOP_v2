@@ -1006,6 +1006,12 @@ extension WhoopStore {
         migrator.registerMigration("v50-account-store-owner") { db in
             try WhoopStore.installAccountOwnershipSchema(db)
         }
+        migrator.registerMigration("v51-v18-aux-record-identity") { db in
+            try WhoopStore.installV18AuxIdentitySchema(db)
+        }
+        migrator.registerMigration("v52-scalar-provenance") { db in
+            try WhoopStore.installScalarProvenanceSchema(db)
+        }
         return migrator
     }
 }
