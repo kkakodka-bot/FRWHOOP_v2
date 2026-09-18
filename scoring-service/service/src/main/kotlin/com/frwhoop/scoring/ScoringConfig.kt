@@ -20,10 +20,14 @@ data class ScoringConfig(
     companion object {
         fun fromEnv(): ScoringConfig {
             val dbUrl = required("DATABASE_URL")
-            val ingestSecret = required("INGEST_SECRET")
-            val supabaseUrl = required("SUPABASE_URL").trimEnd('/')
-            val serviceRoleKey = required("SUPABASE_SERVICE_ROLE_KEY")
+            // v2 publication/archive settlement use the database, not the old HTTP ingest RPC.
+            // Keep these configuration fields for source compatibility, without requiring secrets
+            // the production entrypoint no longer consumes.
+            val ingestSecret = ""
+            val supabaseUrl = ""
+            val serviceRoleKey = ""
             val pollSec = System.getenv("SCORING_POLL_SECONDS")?.toLongOrNull() ?: 8L
+            require(pollSec in 1..3600) { "SCORING_POLL_SECONDS must be between 1 and 3600" }
             return ScoringConfig(
                 databaseUrl = dbUrl,
                 ingestSecret = ingestSecret,

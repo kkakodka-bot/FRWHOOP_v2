@@ -30,10 +30,14 @@ class SignalSampleReader(private val db: PostgresClient) : ScoreInputProvider {
         val gravity: List<GravitySample>,
         val events: List<EventRow>,
         val deviceFamily: DeviceFamily,
+        val timezone: String = "UTC",
     )
 
     override fun loadDay(userId: UUID, day: String, deviceId: UUID): DayInputs? =
         db.withConnection { conn ->
+            conn.transactionIsolation = Connection.TRANSACTION_REPEATABLE_READ
+            conn.autoCommit = false
+            try {
             val deviceIdText = deviceId.toString()
             if (!deviceExistsForUser(conn, userId, deviceId)) return@withConnection null
             val profileRow = loadProfile(conn, userId, deviceId)
@@ -55,7 +59,13 @@ class SignalSampleReader(private val db: PostgresClient) : ScoreInputProvider {
                 gravity = loadGravity(conn, userId, deviceIdText, bounds.nightLo, bounds.nightHi),
                 events = loadEvents(conn, userId, deviceIdText, bounds.nightLo, bounds.nightHi),
                 deviceFamily = profileRow.deviceFamily,
+                timezone = profileRow.zoneId.id,
             )
+            } finally {
+                conn.rollback()
+                conn.autoCommit = true
+                conn.transactionIsolation = Connection.TRANSACTION_READ_COMMITTED
+            }
         }
 
     fun listDeviceIds(userId: UUID): List<UUID> =
@@ -165,6 +175,8 @@ class SignalSampleReader(private val db: PostgresClient) : ScoreInputProvider {
         }
     }
 
+    // Unknown-family evidence is window-local: a future modern beat must not change an already
+    // settled historical train. Explicit family changes still use the device invalidation trigger.
     fun loadRr(
         conn: Connection,
         userId: UUID,
@@ -174,8 +186,18 @@ class SignalSampleReader(private val db: PostgresClient) : ScoreInputProvider {
     ): List<RrInterval> = conn.prepareStatement(
         """
         select ts, "rrMs", seq, ord, "srcChannel", "tsSuspect"
-        from public.noop_rr_intervals
+        from public.noop_rr_intervals r
         where user_id = ? and device_id::text = ? and ts between ? and ?
+          and ("tsSuspect" is null or "tsSuspect" <> 1)
+          and ("srcChannel" is null or "srcChannel" <> 110)
+          and (not exists(select 1 from public.devices d where d.id=r.device_id and
+                 (lower(coalesce(d.device_family,'')) in ('whoop5','whoop5_mg','whoopmg','whoop 5.0','5.0','mg')
+                   or (d.device_family is null and exists(select 1 from public.noop_rr_intervals e
+                     where e.user_id=r.user_id and e.device_id=r.device_id and e.ts between ? and ?
+                       and e."srcChannel" in (5,6,7) and (e."tsSuspect" is null or e."tsSuspect"<>1)))))
+               or "srcChannel"=(select min(q."srcChannel") from public.noop_rr_intervals q
+                 where q.user_id=r.user_id and q.device_id=r.device_id and q.ts between ? and ?
+                   and q."srcChannel" in (5,7) and (q."tsSuspect" is null or q."tsSuspect"<>1)))
         order by ts asc, ord asc nulls first, "rrMs" asc, seq asc
         """.trimIndent(),
     ).use { ps ->
@@ -183,6 +205,10 @@ class SignalSampleReader(private val db: PostgresClient) : ScoreInputProvider {
         ps.setString(2, deviceId)
         ps.setLong(3, fromTs)
         ps.setLong(4, toTs)
+        ps.setLong(5, fromTs)
+        ps.setLong(6, toTs)
+        ps.setLong(7, fromTs)
+        ps.setLong(8, toTs)
         ps.executeQuery().use { rs ->
             buildList {
                 while (rs.next()) {

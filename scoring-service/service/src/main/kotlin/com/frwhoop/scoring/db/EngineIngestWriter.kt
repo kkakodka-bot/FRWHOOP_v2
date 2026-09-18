@@ -2,124 +2,87 @@ package com.frwhoop.scoring.db
 
 import com.frwhoop.scoring.scoring.ServerScoreBundle
 import com.noop.analytics.DetectedSleep
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
+import com.noop.analytics.SleepStageTotals
 import org.json.JSONArray
 import org.json.JSONObject
 import java.time.Instant
+import java.util.UUID
 
-/** Writes scoped scores through `engine_ingest_scored` with service-role auth. */
-class EngineIngestWriter(
-    private val supabaseUrl: String,
-    private val serviceRoleKey: String,
-    private val ingestSecret: String,
-    private val http: OkHttpClient = OkHttpClient.Builder().build(),
-    private val rpcPath: String = "rpc/engine_ingest_scored",
-) {
-    private val jsonType = "application/json".toMediaType()
-
-    companion object {
-        fun buildPayload(bundle: ServerScoreBundle): JSONObject {
-            val daily = bundle.result.daily
-            val mainSleep = bundle.result.sleepSessions.maxByOrNull { it.end - it.start }
-            val inBedMin = mainSleep?.let { (it.end - it.start) / 60.0 }
-            val asleepMin = daily.totalSleepMin
-            val awakeMin = if (inBedMin != null && asleepMin != null) inBedMin - asleepMin else null
-            val computedAt = Instant.now().toString()
-            val dailyMetric = JSONObject()
-                .put("day", bundle.day)
-                .put("source_device_id", bundle.deviceId)
-                .put("computed_at", computedAt)
-                .put("hrv_rmssd_ms", daily.avgHrv)
-                .put("hrv_sdnn_ms", daily.avgSdnn)
-                .put("resting_hr_bpm", daily.restingHr)
-                .put("resp_rate_bpm", daily.respRateBpm)
-                .put("sleep_total_min", daily.totalSleepMin)
-                .put("sleep_in_bed_min", inBedMin)
-                .put("sleep_awake_min", awakeMin)
-                .put("sleep_light_min", daily.lightMin)
-                .put("sleep_deep_min", daily.deepMin)
-                .put("sleep_rem_min", daily.remMin)
-                .put("sleep_efficiency", daily.efficiency)
-                .put("sleep_onset_at", mainSleep?.start?.let { Instant.ofEpochSecond(it).toString() })
-                .put("wake_onset_at", mainSleep?.end?.let { Instant.ofEpochSecond(it).toString() })
-                .put("overnight_hr_bpm", mainSleep?.restingHR)
-                .put("disturbances", daily.disturbances)
-                .put(
-                    "provenance",
-                    JSONObject().put("scorer", "frwhoop-scoring-service").put("scope", "hrv_sleep"),
-                )
-
-            val sleepNights = JSONArray()
-            for (session in bundle.result.sleepSessions) {
-                sleepNights.put(sessionToJson(session, bundle))
-            }
-
-            return JSONObject()
-                .put("user_id", bundle.userId.toString())
-                .put("algorithm_version", bundle.algorithmVersion)
-                .put("daily_metrics", JSONArray().put(dailyMetric))
-                .put("sleep_nights", sleepNights)
-        }
-
-        private fun sessionToJson(session: DetectedSleep, bundle: ServerScoreBundle): JSONObject {
-            val stages = JSONArray()
-            for (seg in session.stages) {
-                stages.put(
-                    JSONObject()
-                        .put("start", seg.start)
-                        .put("end", seg.end)
-                        .put("stage", seg.stage),
-                )
-            }
-            val asleepMin = session.stages
-                .filter { it.stage != "wake" }
-                .sumOf { (it.end - it.start) } / 60.0
-            val inBedMin = (session.end - session.start) / 60.0
-            return JSONObject()
-                .put("period_day", bundle.day)
-                .put("device_id", bundle.deviceId)
-                .put("start_at", Instant.ofEpochSecond(session.start).toString())
-                .put("end_at", Instant.ofEpochSecond(session.end).toString())
-                .put("is_nap", false)
-                .put("in_bed_min", inBedMin)
-                .put("asleep_min", asleepMin)
-                .put("efficiency", session.efficiency)
-                .put("resting_hr_bpm", session.restingHR)
-                .put("hrv_rmssd_ms", session.avgHRV)
-                .put("stages", stages)
-                .put("hypnogram", JSONArray())
-                .put("computed_at", Instant.now().toString())
-        }
+/** Publishes only through the atomic queue-token/input-generation database fence. */
+class EngineIngestWriter(private val queue: ScoringWorkQueue) {
+    fun write(item: ScoringWorkQueue.WorkItem, bundle: ServerScoreBundle, durationMs: Long): Long? {
+        require(item.userId == bundle.userId && item.deviceId.toString() == bundle.deviceId &&
+            item.day == bundle.day && item.algorithmVersion == bundle.algorithmVersion)
+        return queue.publish(item, buildSnapshot(bundle), durationMs)
     }
 
-    fun write(bundle: ServerScoreBundle) {
-        val payload = buildPayload(bundle)
-        val body = JSONObject()
-            .put("p_secret", ingestSecret)
-            .put("p_payload", payload)
-            .toString()
-            .toRequestBody(jsonType)
-
-        val req = Request.Builder()
-            // Internal PostgREST serves RPCs at /rpc/<fn> (no Kong /rest/v1 prefix); the public
-            // gateway path is /rest/v1/rpc/<fn>. The VPS container talks to http://rest:3000 directly,
-            // so the default is the internal form (Phase 3 gate: engine_ingest_scored 404 PGRST125 on
-            // /rest/v1/rpc against the internal endpoint).
-            .url("$supabaseUrl/$rpcPath")
-            .post(body)
-            .header("apikey", serviceRoleKey)
-            .header("Authorization", "Bearer $serviceRoleKey")
-            .header("Content-Type", "application/json")
-            .header("Prefer", "return=minimal")
-            .build()
-
-        http.newCall(req).execute().use { resp ->
-            if (!resp.isSuccessful) {
-                error("engine_ingest_scored failed: ${resp.code} ${resp.body?.string()}")
-            }
+    companion object {
+        fun buildSnapshot(bundle: ServerScoreBundle): JSONObject {
+            val legacy = buildPayload(bundle)
+            val noData = bundle.dataThrough == null
+            return JSONObject()
+                .put("timezone", bundle.timezone)
+                .put("dataThrough", bundle.dataThrough?.let { Instant.ofEpochSecond(it).toString() } ?: JSONObject.NULL)
+                .put("status", if (noData) "no_data" else "partial")
+                .put("coverage", JSONObject()
+                    .put("hrSamples",bundle.hrSamples).put("rrIntervals",bundle.rrIntervals)
+                    .put("gaps",JSONArray(bundle.coverageGaps))
+                    .put("historicalStateAvailable",false))
+                .put("daily",if (noData) JSONObject.NULL else legacy.getJSONArray("daily_metrics").getJSONObject(0))
+                .put("sleep",legacy.getJSONArray("sleep_nights"))
         }
+
+        /** Legacy field spelling remains the nested v2 wire vocabulary. */
+        fun buildPayload(bundle: ServerScoreBundle): JSONObject {
+            val daily = bundle.result.daily
+            val sessions = bundle.result.sleepSessions
+            val group = SleepStageTotals.mainNightGroupIndices(
+                sessions.map { SleepStageTotals.NightBlock(it.start,it.end) }, bundle.tzOffsetSeconds,
+            )?.toSet() ?: emptySet()
+            val main = sessions.filterIndexed { index,_ -> index in group }
+            val start = main.minOfOrNull { it.start }
+            val end = main.maxOfOrNull { it.end }
+            val inBed = if (start != null && end != null) (end-start)/60.0 else null
+            val asleep = daily.totalSleepMin
+            val d = JSONObject()
+                .put("day",bundle.day).put("source_device_id",bundle.deviceId)
+                .value("hrv_rmssd_ms",daily.avgHrv).value("hrv_sdnn_ms",daily.avgSdnn)
+                .value("resting_hr_bpm",daily.restingHr).value("resp_rate_bpm",daily.respRateBpm)
+                .value("sleep_total_min",daily.totalSleepMin).value("sleep_in_bed_min",inBed)
+                .value("sleep_awake_min",if (inBed != null && asleep != null)
+                    (inBed-asleep).coerceAtLeast(0.0) else null)
+                .value("sleep_light_min",daily.lightMin).value("sleep_deep_min",daily.deepMin)
+                .value("sleep_rem_min",daily.remMin).value("sleep_efficiency",daily.efficiency)
+                .value("sleep_onset_at",start?.let { Instant.ofEpochSecond(it).toString() })
+                .value("wake_onset_at",end?.let { Instant.ofEpochSecond(it).toString() })
+                .value("overnight_hr_bpm",main.mapNotNull { it.restingHR }.minOrNull())
+                .value("disturbances",daily.disturbances)
+            val nights = JSONArray()
+            sessions.forEachIndexed { index,s -> nights.put(sessionToJson(s,bundle,index !in group)) }
+            return JSONObject().put("user_id",bundle.userId.toString()).put("algorithm_version",bundle.algorithmVersion)
+                .put("daily_metrics",JSONArray().put(d)).put("sleep_nights",nights)
+        }
+
+        private fun sessionToJson(s: DetectedSleep,b: ServerScoreBundle,nap: Boolean): JSONObject {
+            val stages = JSONArray()
+            s.stages.forEach { stages.put(JSONObject().put("start",it.start).put("end",it.end).put("stage",it.stage)) }
+            fun minutes(stage: String) = s.stages.filter { it.stage==stage }.sumOf { (it.end-it.start).coerceAtLeast(0) }/60.0
+            val inBed = (s.end-s.start)/60.0
+            val hasStages = s.stages.isNotEmpty()
+            val asleep = if (hasStages) minutes("light")+minutes("deep")+minutes("rem") else null
+            val id = UUID.nameUUIDFromBytes(
+                (b.userId.toString()+"|"+b.deviceId+"|"+b.day+"|"+b.algorithmVersion+"|"+s.start).toByteArray(Charsets.UTF_8))
+            return JSONObject().put("id",id.toString()).put("period_day",b.day).put("device_id",b.deviceId)
+                .put("start_at",Instant.ofEpochSecond(s.start).toString()).put("end_at",Instant.ofEpochSecond(s.end).toString())
+                .put("is_nap",nap).put("in_bed_min",inBed).value("asleep_min",asleep)
+                .value("awake_min",if (asleep != null) (inBed-asleep).coerceAtLeast(0.0) else null)
+                .value("light_min",if (hasStages) minutes("light") else null)
+                .value("deep_min",if (hasStages) minutes("deep") else null)
+                .value("rem_min",if (hasStages) minutes("rem") else null)
+                .value("efficiency",s.efficiency).value("resting_hr_bpm",s.restingHR).value("hrv_rmssd_ms",s.avgHRV)
+                .put("stages",stages)
+        }
+
+        private fun JSONObject.value(key: String,value: Any?): JSONObject = put(key,value ?: JSONObject.NULL)
     }
 }

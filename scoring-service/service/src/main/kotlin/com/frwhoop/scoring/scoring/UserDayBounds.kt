@@ -21,9 +21,9 @@ object UserDayBounds {
         val dayLo = dayStart.toEpochSecond()
         val dayHi = nextDayStart.toEpochSecond() - 1
         val tzOffset = zoneId.rules.getOffset(dayStart.toInstant()).totalSeconds.toLong()
-        // Night window: prior evening through noon next day (matches IntelligenceEngine read span).
+        // Include the complete wake day: daytime naps and late waking must remain readable.
         val nightLo = dayLo - 30L * 3_600L
-        val nightHi = dayLo + 12L * 3_600L
+        val nightHi = dayHi
         return Bounds(dayLo, dayHi, tzOffset, nightLo, nightHi)
     }
 

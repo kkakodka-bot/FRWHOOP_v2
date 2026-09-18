@@ -26,7 +26,13 @@ class DerivedArtifactWriter(
 ) {
     private val livePut: B2ObjectStore.PutClient? =
         if (putClient != null) putClient
-        else b2Config?.let { B2ObjectStore(it, http) }
+        else b2Config?.let { config ->
+            val store = B2ObjectStore(config, http)
+            object : B2ObjectStore.PutClient {
+                override fun putObject(key: String, body: ByteArray, contentType: String) =
+                    store.putObject(key, body, contentType)
+            }
+        }
 
     val enabled: Boolean = livePut != null
 

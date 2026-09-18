@@ -11,16 +11,17 @@ class HeartbeatReporter(
 ) {
     private val log = LoggerFactory.getLogger(HeartbeatReporter::class.java)
 
-    fun recordPoll() {
+    fun recordPoll(metrics: org.json.JSONObject = org.json.JSONObject()) {
         db.withConnection { conn ->
             conn.prepareStatement(
                 """
                 update public.scoring_service_heartbeats
-                set last_poll_at = now(), version = ?, last_error = null
+                set last_poll_at = now(), version = ?, meta = ?::jsonb
                 where id = 1
                 """.trimIndent(),
             ).use { ps ->
                 ps.setString(1, version)
+                ps.setString(2, metrics.toString())
                 ps.executeUpdate()
             }
         }

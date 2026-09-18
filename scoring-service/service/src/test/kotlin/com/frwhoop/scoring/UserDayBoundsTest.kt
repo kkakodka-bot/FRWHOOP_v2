@@ -13,10 +13,8 @@ class UserDayBoundsTest {
         // 2026-03-08 is US spring-forward Sunday; offset at midnight EST is -18000.
         val bounds = UserDayBounds.forDay("2026-03-08", zone)
         assertEquals(-18_000L, bounds.tzOffsetSeconds)
-        assertNotEquals(
-            zone.rules.getOffset(java.time.Instant.now()).totalSeconds.toLong(),
-            bounds.tzOffsetSeconds,
-        )
+        assertEquals(23L * 3600, bounds.dayHi - bounds.dayLo + 1)
+        assertEquals(bounds.dayHi, bounds.nightHi)
     }
 
     @Test

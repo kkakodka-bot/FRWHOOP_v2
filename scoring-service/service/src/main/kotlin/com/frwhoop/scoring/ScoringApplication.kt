@@ -4,7 +4,8 @@ import com.frwhoop.scoring.db.EngineIngestWriter
 import com.frwhoop.scoring.db.PostgresClient
 import com.frwhoop.scoring.db.ScoringWorkQueue
 import com.frwhoop.scoring.db.SignalSampleReader
-import com.frwhoop.scoring.derived.DerivedArtifactWriter
+import com.frwhoop.scoring.derived.SnapshotArchiveWorker
+import com.frwhoop.scoring.b2.B2ObjectStore
 import com.frwhoop.scoring.health.HeartbeatReporter
 import com.frwhoop.scoring.scoring.DayScorer
 import com.frwhoop.scoring.scoring.ScoringPoller
@@ -17,14 +18,18 @@ fun main(args: Array<String>) {
     val config = ScoringConfig.fromEnv()
     val db = PostgresClient(config.databaseUrl)
     val reader = SignalSampleReader(db)
-    val queue = ScoringWorkQueue(db)
+    val queue = ScoringWorkQueue(db, config.algorithmVersion)
     val scorer = DayScorer()
-    val writer = EngineIngestWriter(config.supabaseUrl, config.serviceRoleKey, config.ingestSecret)
+    val writer = EngineIngestWriter(queue)
     val derivedWriter = config.b2Config?.let {
-        DerivedArtifactWriter(it, config.supabaseUrl, config.serviceRoleKey)
+        val objectStore = B2ObjectStore(it)
+        SnapshotArchiveWorker(db, object : B2ObjectStore.PutClient {
+            override fun putObject(key: String, body: ByteArray, contentType: String) =
+                objectStore.putObject(key, body, contentType)
+        }, it.bucket, it.derivedRetentionDays)
     }
     if (derivedWriter == null) {
-        log.warn("B2 credentials missing — derived artifact lane disabled (scores still write to Postgres)")
+        log.warn("B2 credentials missing — archive debt remains pending in Postgres")
     }
     val heartbeat = HeartbeatReporter(db, config.algorithmVersion)
     val poller = ScoringPoller(config, reader, queue, scorer, writer, derivedWriter, heartbeat)

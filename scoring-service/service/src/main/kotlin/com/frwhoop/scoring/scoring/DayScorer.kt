@@ -47,6 +47,13 @@ class DayScorer {
             deviceId = inputs.deviceId,
             algorithmVersion = algorithmVersion,
             result = result,
+            timezone = inputs.timezone,
+            tzOffsetSeconds = inputs.tzOffsetSeconds,
+            dataThrough = listOfNotNull(inputs.hr.maxOfOrNull { it.ts }, inputs.rr.maxOfOrNull { it.ts },
+                inputs.resp.maxOfOrNull { it.ts }, inputs.gravity.maxOfOrNull { it.ts },
+                inputs.events.maxOfOrNull { it.ts }).maxOrNull(),
+            hrSamples = inputs.hr.size,
+            rrIntervals = inputs.rr.size,
         )
     }
 }
@@ -57,4 +64,13 @@ data class ServerScoreBundle(
     val deviceId: String,
     val algorithmVersion: String,
     val result: DayResult,
+    val timezone: String = "UTC",
+    val tzOffsetSeconds: Long = 0,
+    val dataThrough: Long? = null,
+    val hrSamples: Int = 0,
+    val rrIntervals: Int = 0,
+    val coverageGaps: List<String> = listOf(
+        "historical_baselines_unavailable", "sleep_preferences_unavailable", "sleep_edits_unavailable",
+        "hr_only_fallback_not_integrated", "kernel_fixed_offset_day_policy", "additional_streams_not_integrated",
+    ),
 )

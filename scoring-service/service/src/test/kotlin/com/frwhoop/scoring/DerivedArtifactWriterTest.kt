@@ -99,7 +99,11 @@ class DerivedArtifactWriterTest {
             }
         }
         val cfg = B2Config("k", "s", "FRWHOOP", "s3.us-west-004.backblazeb2.com", "us-west-004")
-        val writer = DerivedArtifactWriter(cfg, "http://rest:3000", "role-key", fakePut)
+        val manifestHttp = okhttp3.OkHttpClient.Builder().addInterceptor { chain ->
+            okhttp3.Response.Builder().request(chain.request()).protocol(okhttp3.Protocol.HTTP_1_1)
+                .code(201).message("fixture accepted").body(okhttp3.ResponseBody.create(null, "")).build()
+        }.build()
+        val writer = DerivedArtifactWriter(cfg, "http://fixture.invalid", "role-key", fakePut, manifestHttp)
         val result = writer.archive(sampleBundle())
         assertEquals(captured!!.size, result.compressedBytes)
         assertEquals(B2ObjectStore.sha256Hex(captured!!), result.sha256)
@@ -117,13 +121,12 @@ class DerivedArtifactWriterTest {
             }
         }
         val cfg = B2Config("k", "s", "FRWHOOP", "s3.us-west-004.backblazeb2.com", "us-west-004")
-        // Manifest registration will fail without a server — test only the PUT path by catching.
-        val writer = DerivedArtifactWriter(cfg, "http://127.0.0.1:1", "role-key", fakePut)
-        try {
-            writer.archive(sampleBundle())
-        } catch (_: Exception) {
-            // manifest upsert expected to fail in unit test
-        }
+        val manifestHttp = okhttp3.OkHttpClient.Builder().addInterceptor { chain ->
+            okhttp3.Response.Builder().request(chain.request()).protocol(okhttp3.Protocol.HTTP_1_1)
+                .code(503).message("fixture unavailable").body(okhttp3.ResponseBody.create(null, "")).build()
+        }.build()
+        val writer = DerivedArtifactWriter(cfg, "http://fixture.invalid", "role-key", fakePut, manifestHttp)
+        org.junit.Assert.assertThrows(IllegalStateException::class.java) { writer.archive(sampleBundle()) }
         assertEquals(1, keys.size)
         assertTrue(keys[0].endsWith("frwhoop-server-1.json.zst"))
     }

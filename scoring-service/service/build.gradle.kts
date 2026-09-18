@@ -26,6 +26,9 @@ dependencies {
 
 tasks.withType<Test>().configureEach {
     useJUnit()
+    // Migration-only edits must rerun the real database tests.
+    inputs.files(fileTree("../../supabase/migrations") { include("*.sql") })
+    maxParallelForks = 1
 }
 
 tasks.named<JavaExec>("run") {
@@ -34,7 +37,7 @@ tasks.named<JavaExec>("run") {
 
 tasks.register<JavaExec>("replayDay") {
     group = "application"
-    description = "Score one user/day from Postgres (Phase 3 replay gate)."
+    description = "Enqueue a fenced user/device/day replay and run one bounded worker pass."
     classpath = sourceSets["main"].runtimeClasspath
     mainClass.set("com.frwhoop.scoring.ScoringApplicationKt")
     args("--replay-day")
