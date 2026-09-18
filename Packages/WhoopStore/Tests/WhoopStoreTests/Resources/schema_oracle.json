@@ -1,6 +1,6 @@
 {
   "_readme": "SHARED Room<->GRDB SCHEMA ORACLE (#775). Two byte-identical copies: Packages/WhoopStore/Tests/WhoopStoreTests/Resources/schema_oracle.json and android/app/src/test/resources/schema_oracle.json. SchemaOracleTests.swift compares GRDB's PRAGMA table_info/index_list against it; SchemaOracleTest.kt compares Room's exported schema JSON against it. `columns` is the iOS/GRDB shape in GRDB column order (macOS is the reference implementation); every way Android differs is spelled out in an `android` / `iosAbsent` / `androidColumnOrder` override naming a key in `divergenceReasons`. Adding a column, reordering one, or changing a type/nullability on one platform only fails both suites until it is either fixed or written down here.",
-  "roomVersion": 39,
+  "roomVersion": 40,
   "grdbMigrations": [
     "v1",
     "v2",
@@ -49,7 +49,10 @@
     "v45-backfill-frontier",
     "v46-rr-source-index",
     "v47-server-score-cache",
-    "v46-ppg-record-identity"
+    "v46-ppg-record-identity",
+    "v48-scoped-server-score-cache",
+    "v49-durable-ingest-receipts",
+    "v50-account-store-owner"
   ],
   "divergenceReasons": {
     "android-orphan-synced-column": "REAL COLUMN DRIFT: `synced` exists on Android only. GRDB's v10 note is explicit that stepSample gets no `synced` column ('unused; see StreamStore'), and v12's ppgHrSample never had one either; the Room entities copied the flag from the older per-second entities. Nothing reads it on Android \u2014 the per-row upload flag belongs to an upload path that does not exist there \u2014 so it is dead width, not divergent data. Removing it needs a Room table rebuild.",
@@ -60,9 +63,337 @@
     "room-omits-sql-default": "GRDB declares these columns NOT NULL DEFAULT 0; Room emits NOT NULL with no SQL DEFAULT, because a Kotlin constructor default never reaches the schema (only @ColumnInfo(defaultValue=) does). Both sides are NOT NULL and both always name the column on insert, so no row differs; an INSERT that omitted the column would fail on Android and get 0 on iOS. Closing it means adding @ColumnInfo(defaultValue = \"0\") plus a Room version bump, since the generated CREATE TABLE \u2014 and therefore Room's identity hash \u2014 changes.",
     "sqlite-text-pk-nullable": "GRDB writes `id TEXT PRIMARY KEY`; SQLite's legacy quirk leaves a non-INTEGER PRIMARY KEY column NULLable, so PRAGMA reports notnull=0. Room writes `id TEXT NOT NULL, PRIMARY KEY(id)`. Every writer on both platforms supplies a non-null id, so no stored row differs. Closing it means a GRDB table rebuild.",
     "workout-route-polyline-android-only": "REAL COLUMN DRIFT \u2014 literally the case #775 was filed about: `workout.routePolyline` (encoded GPS route) was added by Room MIGRATION_3_4 and has no GRDB twin. A .noopbak exported from Android carries a column iOS's `workout` table cannot receive.",
-    "ppg-record-identity-ios": "iOS v46 preserves the wire record index, including databases already upgraded by research v45-v26-record-index. Android still keys PPG waveforms by device and second; its absent recordIndex is also absent from its primary key. This iOS compatibility repair does not migrate the Android production database."
+    "ppg-record-index-default": "Both platforms preserve device/timestamp/recordIndex identity. Room v40 declares DEFAULT -1 for the explicit unknown legacy identity; GRDB retains its deployed no-default column. Both writers bind the index explicitly, and the wire maps unknown to null."
   },
   "tables": {
+    "serverScoreSnapshotCache": {
+      "platform": "ios_only",
+      "columns": [
+        {
+          "name": "projectURL",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "userID",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "sourceDeviceID",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "day",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "timeZoneID",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "schemaVersion",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "algorithmVersion",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "inputRevision",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "resultRevision",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "state",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "payload",
+          "affinity": "BLOB",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "fetchedAt",
+          "affinity": "REAL",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "accessedAt",
+          "affinity": "REAL",
+          "notNull": true,
+          "default": null
+        }
+      ],
+      "primaryKey": [
+        "projectURL",
+        "userID",
+        "sourceDeviceID",
+        "day",
+        "timeZoneID",
+        "schemaVersion",
+        "algorithmVersion"
+      ],
+      "indices": [
+        {
+          "name": "serverScoreSnapshotCache_eviction",
+          "unique": false,
+          "columns": [
+            "accessedAt",
+            "resultRevision"
+          ]
+        }
+      ]
+    },
+    "ingestRawResource": {
+      "platform": "ios_only",
+      "columns": [
+        {
+          "name": "lane",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "deviceId",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "resourceKey",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "scopeKey",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "environment",
+          "affinity": "TEXT",
+          "notNull": false,
+          "default": null
+        },
+        {
+          "name": "accountId",
+          "affinity": "TEXT",
+          "notNull": false,
+          "default": null
+        },
+        {
+          "name": "contentSHA256",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "byteCount",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": null
+        }
+      ],
+      "primaryKey": [
+        "lane",
+        "deviceId",
+        "resourceKey"
+      ],
+      "indices": []
+    },
+    "sensorQuarantine": {
+      "platform": "ios_only",
+      "columns": [
+        {
+          "name": "id",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "scopeKey",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "environment",
+          "affinity": "TEXT",
+          "notNull": false,
+          "default": null
+        },
+        {
+          "name": "accountId",
+          "affinity": "TEXT",
+          "notNull": false,
+          "default": null
+        },
+        {
+          "name": "deviceId",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "family",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "trim",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "frame",
+          "affinity": "BLOB",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "capturedAt",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": null
+        }
+      ],
+      "primaryKey": [
+        "id"
+      ],
+      "indices": [
+        {
+          "name": "sensorQuarantine_scope",
+          "unique": false,
+          "columns": [
+            "scopeKey",
+            "capturedAt",
+            "id"
+          ]
+        }
+      ]
+    },
+    "rawDurabilityReceipt": {
+      "platform": "ios_only",
+      "columns": [
+        {
+          "name": "lane",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "deviceId",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "resourceKey",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "scopeKey",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "contentSHA256",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "objectKey",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "receiptId",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "verifiedAt",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "retainUntil",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": null
+        }
+      ],
+      "primaryKey": [
+        "lane",
+        "deviceId",
+        "resourceKey",
+        "scopeKey",
+        "contentSHA256"
+      ],
+      "indices": []
+    },
+    "localAccountOwner": {
+      "platform": "ios_only",
+      "columns": [
+        {
+          "name": "singleton",
+          "affinity": "INTEGER",
+          "notNull": false,
+          "default": null
+        },
+        {
+          "name": "projectURL",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "userID",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        }
+      ],
+      "primaryKey": [
+        "singleton"
+      ],
+      "indices": []
+    },
     "serverScoreCache": {
       "platform": "ios_only",
       "columns": [
@@ -1329,8 +1660,8 @@
           "affinity": "INTEGER",
           "notNull": true,
           "default": null,
-          "androidAbsent": true,
-          "divergence": "ppg-record-identity-ios"
+          "android": { "default": "-1" },
+          "divergence": "ppg-record-index-default"
         }
       ],
       "primaryKey": [

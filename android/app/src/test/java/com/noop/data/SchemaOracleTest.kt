@@ -247,12 +247,16 @@ class SchemaOracleTest {
         val oracle = loadOracle()
         val grdb = oracle.getJSONArray("grdbMigrations").strings()
         assertEquals("duplicate GRDB migration identifier in schema_oracle.json", grdb.size, grdb.toSet().size)
+        assertTrue("integrated deployed GRDB history is incomplete", grdb.size >= 48)
+        assertEquals("preserve both deployed feature-line identifiers",
+            listOf("v46-rr-source-index", "v47-server-score-cache", "v46-ppg-record-identity"),
+            grdb.subList(45, 48))
         grdb.forEachIndexed { i, id ->
             val n = id.removePrefix("v").takeWhile { it.isDigit() }.toIntOrNull()
+            val expected = if (i == 47) 46 else i + 1 - (if (i > 47) 1 else 0)
             assertEquals(
-                "GRDB migration '$id' claims v$n but is #${i + 1} in registration order — two migrations " +
-                    "claiming the same vN, or a gap, makes the GRDB-name <-> Room-version mapping ambiguous.",
-                i + 1,
+                "Unexpected GRDB prefix at registration #${i + 1}: '$id'. Deployed migration names must not be renumbered.",
+                expected,
                 n,
             )
         }

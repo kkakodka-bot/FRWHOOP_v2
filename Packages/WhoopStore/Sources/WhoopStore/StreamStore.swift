@@ -30,12 +30,8 @@ private struct RRBatchSecond: Hashable {
 }
 
 extension WhoopStore {
-    /// Backfill duplicate-replay skip (v45). Default OFF; `enableBackfillRangeSkip = true` enables.
-    /// Live `insert()` passes empty `postOffloadJobKinds` and never consults the frontier.
-    private static var backfillRangeSkipEnabled: Bool {
-        if UserDefaults.standard.object(forKey: "enableBackfillRangeSkip") == nil { return false }
-        return UserDefaults.standard.bool(forKey: "enableBackfillRangeSkip")
-    }
+    // A timestamp frontier cannot prove completeness, including on installations that opted in.
+    private static let backfillRangeSkipEnabled = false
 
     /// T2-3: multi-row INSERT batch size. 100 rows × 6 columns = 600 bind parameters (SQLite default 999).
     private static let streamInsertBatchSize = 100
@@ -270,6 +266,17 @@ extension WhoopStore {
         )
     }
 
+    @discardableResult
+    public func insertAndMarkJobsOwed(_ streams: Streams, deviceId: String,
+                                      postOffloadJobKinds: [String], note: String?,
+                                      captureScope: DurableIngestScope) async throws -> BackfillInsertOutcome {
+        guard captureScope.deviceID == deviceId else { throw DurableIngestError.identityConflict }
+        return try await insertAndMarkIfNeeded(streams, deviceId: deviceId,
+            postOffloadJobKinds: postOffloadJobKinds, note: note,
+            v18AuxRetentionRows: Self.v18AuxRetentionRows,
+            v18AuxPruneEveryRows: Self.v18AuxPruneEveryRows, captureScope: captureScope)
+    }
+
     /// The single write transaction behind both entry points. `postOffloadJobKinds` upserts one fresh
     /// token per kind on the first chunk that inserts a scoring row; a duplicate-only replay inserts
     /// zero rows and therefore neither refreshes nor removes the debt.
@@ -288,7 +295,8 @@ extension WhoopStore {
                                        v18AuxRetentionRows: Int,
                                        v18AuxPruneEveryRows: Int,
                                        ppgWaveformRetentionRows: Int = WhoopStore.ppgWaveformRetentionRows,
-                                       ppgWaveformPruneEveryRows: Int = WhoopStore.ppgWaveformPruneEveryRows
+                                       ppgWaveformPruneEveryRows: Int = WhoopStore.ppgWaveformPruneEveryRows,
+                                       captureScope: DurableIngestScope? = nil
     ) async throws -> BackfillInsertOutcome {
         // Banked rows, accumulated across batches so the sweep does not run on every one.
         var v18Written = 0
@@ -305,7 +313,7 @@ extension WhoopStore {
             // persisted frontier (one indexed read per stream). Live insert() passes empty job kinds.
             let useRangeSkip = Self.backfillRangeSkipEnabled && !postOffloadJobKinds.isEmpty
             var frontiers: [String: Int] = [:]
-            if useRangeSkip {
+            if !postOffloadJobKinds.isEmpty {
                 let rows = try Row.fetchAll(db, sql: """
                     SELECT stream, maxTs FROM backfillFrontier WHERE deviceId = ?
                     """, arguments: [deviceId])
@@ -317,7 +325,7 @@ extension WhoopStore {
                 return chunkMax <= frontier
             }
             func recordFrontier(_ stream: String, timestamps: [Int]) throws {
-                guard useRangeSkip, let chunkMax = timestamps.max() else { return }
+                guard !postOffloadJobKinds.isEmpty, let chunkMax = timestamps.max() else { return }
                 let newMax = max(frontiers[stream] ?? Int.min, chunkMax)
                 frontiers[stream] = newMax
                 try db.execute(sql: """
@@ -527,9 +535,17 @@ extension WhoopStore {
                     ON CONFLICT(deviceId, ts, recordIndex) DO NOTHING
                     """)
                 for s in streams.ppgWaveform {
-                    try stmt.execute(arguments: [deviceId, s.ts, WhoopStore.packPpgSamples(s.samples),
+                    let samples = WhoopStore.packPpgSamples(s.samples)
+                    try stmt.execute(arguments: [deviceId, s.ts, samples,
                                                  s.burstIndex, s.recordIndex ?? -1])
-                    ppgWaveformWritten += db.changesCount
+                    let inserted = db.changesCount
+                    ppgWaveformWritten += inserted
+                    if inserted > 0 {
+                        var bytes = Data("\(s.burstIndex.map(String.init) ?? "unknown")\n".utf8)
+                        bytes.append(samples)
+                        try Self.registerRawResource(db, scope: try captureScope ?? Self.captureScope(db, deviceID: deviceId),
+                            lane: "ppgWaveformSample", key: "\(s.ts):\(s.recordIndex ?? -1)", bytes: bytes)
+                    }
                 }
             }
             // Every remaining v18 slot (v31), one compact blob per strap-second. Persist-only, same as
@@ -545,7 +561,12 @@ extension WhoopStore {
                     let blob = V18AuxCodec.pack(s)
                     if blob.isEmpty { continue }
                     try stmt.execute(arguments: [deviceId, s.ts, blob])
-                    v18Written += db.changesCount
+                    let inserted = db.changesCount
+                    v18Written += inserted
+                    if inserted > 0 {
+                        try Self.registerRawResource(db, scope: try captureScope ?? Self.captureScope(db, deviceID: deviceId),
+                            lane: "v18AuxSample", key: String(s.ts), bytes: blob)
+                    }
                 }
                 try recordFrontier("v18Aux", timestamps: streams.v18Aux.map(\.ts))
             }
@@ -554,8 +575,12 @@ extension WhoopStore {
             // nor refresh it. Every stream that appears in the scoring fingerprint is represented here.
             let scoringInserted = hr + rr + ev + spo2 + skin + resp + grav
                 + stepsInserted + sleepStateInserted + ppgHrInserted
+            let uploadInserted = scoringInserted + bat + ppgWaveformWritten + v18Written
             var markedJobs = false
-            if scoringInserted > 0, !postOffloadJobKinds.isEmpty {
+            let owedKinds = postOffloadJobKinds.filter {
+                $0 == SyncJobKind.cloudPush.rawValue ? uploadInserted > 0 : scoringInserted > 0
+            }
+            if !owedKinds.isEmpty {
                 let now = Int(Date().timeIntervalSince1970)
                 let stmt = try db.cachedStatement(sql: """
                     INSERT INTO syncJob (kind, owedAt, token, attempts, lastNote)
@@ -566,10 +591,13 @@ extension WhoopStore {
                         attempts = 0,
                         lastNote = excluded.lastNote
                     """)
-                for kind in postOffloadJobKinds {
+                for kind in owedKinds {
                     try stmt.execute(arguments: [kind, now, UUID().uuidString, note])
                 }
                 markedJobs = true
+            }
+            if uploadInserted > 0 && !owedKinds.contains(SyncJobKind.cloudPush.rawValue) {
+                try Self.markRawUploadOwed(db)
             }
             let historicalSensorRows = hr + rr + spo2 + skin + resp + grav
                 + stepsInserted + sleepStateInserted + ppgHrInserted + ppgWaveformWritten + v18Written
@@ -595,7 +623,8 @@ extension WhoopStore {
                        DELETE FROM v18AuxSample WHERE deviceId = ? AND ts < (
                            SELECT MIN(ts) FROM (
                                SELECT ts FROM v18AuxSample WHERE deviceId = ? ORDER BY ts DESC LIMIT ?))
-                       """, arguments: [deviceId, deviceId, v18AuxRetentionRows])
+                       AND \(Self.rawReceiptPredicate(table: "v18AuxSample", keySQL: "CAST(v18AuxSample.ts AS TEXT)"))
+                       """, arguments: [deviceId, deviceId, v18AuxRetentionRows, Int(Date().timeIntervalSince1970)])
                }) != nil {
                 v18AuxRowsSincePrune[deviceId] = 0
             }
@@ -614,7 +643,8 @@ extension WhoopStore {
                        DELETE FROM ppgWaveformSample WHERE deviceId = ? AND ts < (
                            SELECT MIN(ts) FROM (
                                SELECT ts FROM ppgWaveformSample WHERE deviceId = ? ORDER BY ts DESC LIMIT ?))
-                       """, arguments: [deviceId, deviceId, ppgWaveformRetentionRows])
+                       AND \(Self.rawReceiptPredicate(table: "ppgWaveformSample", keySQL: "CAST(ppgWaveformSample.ts AS TEXT) || ':' || CAST(ppgWaveformSample.recordIndex AS TEXT)"))
+                       """, arguments: [deviceId, deviceId, ppgWaveformRetentionRows, Int(Date().timeIntervalSince1970)])
                }) != nil {
                 ppgWaveformRowsSincePrune[deviceId] = 0
             }

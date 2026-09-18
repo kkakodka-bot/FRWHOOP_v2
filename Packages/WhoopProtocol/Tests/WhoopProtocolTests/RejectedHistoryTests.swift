@@ -133,14 +133,14 @@ final class RejectedHistoryTests: XCTestCase {
                        rejectedHistoricalRecords(frames, family: .whoop5))
     }
 
-    func testParsedFrameReusePreservesV26ArchiveExceptionEvenWithBadCRC() {
+    func testParsedFrameReuseQuarantinesV26WithBadCRC() {
         let good = bytes(whoop5V26Hex)
         var bad = good
         bad[24] ^= 0xFF
         let frames = [good, bad]
         let parsed = frames.map { parseFrame($0, family: .whoop5) }
         XCTAssertEqual(parsed[1].crcOK, false)
-        XCTAssertTrue(rejectedHistoricalRecords(frames, family: .whoop5, parsedFrames: parsed).isEmpty)
+        XCTAssertEqual(rejectedHistoricalRecords(frames, family: .whoop5, parsedFrames: parsed), [bad])
     }
 
     func testIncompleteParsedCacheCannotLoseARejectedRecord() {

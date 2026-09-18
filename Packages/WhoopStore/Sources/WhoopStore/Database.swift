@@ -999,6 +999,13 @@ extension WhoopStore {
             try db.drop(table: "ppgWaveformSample")
             try db.rename(table: "ppgWaveformSample_v46", to: "ppgWaveformSample")
         }
+        ServerScoreCacheMigration.register(in: &migrator)
+        migrator.registerMigration("v49-durable-ingest-receipts") { db in
+            try WhoopStore.createDurableIngestSchema(db)
+        }
+        migrator.registerMigration("v50-account-store-owner") { db in
+            try WhoopStore.installAccountOwnershipSchema(db)
+        }
         return migrator
     }
 }

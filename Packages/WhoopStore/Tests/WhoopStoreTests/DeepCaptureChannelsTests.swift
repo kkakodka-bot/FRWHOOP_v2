@@ -8,7 +8,7 @@ import WhoopProtocol
 final class DeepCaptureChannelsTests: XCTestCase {
 
     private func store() async throws -> WhoopStore {
-        let s = try await WhoopStore.inMemory()
+        let s = try await receiptedFixtureStore()
         try await s.upsertDevice(id: "dev1", mac: nil, name: nil)
         return s
     }
