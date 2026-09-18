@@ -46,13 +46,15 @@ public struct PushPpgWaveformRecord: Sendable {
     public let rowId: Int64
     public let ts: Int64
     public let burstIndex: Int32?
+    public let recordIndex: Int64?
     public let samples: Data
 
-    public init(rowId: Int64, ts: Int64, burstIndex: Int32?, samples: Data) {
+    public init(rowId: Int64, ts: Int64, burstIndex: Int32?, samples: Data, recordIndex: Int64? = nil) {
         precondition(rowId > 0)
         self.rowId = rowId
         self.ts = ts
         self.burstIndex = burstIndex
+        self.recordIndex = recordIndex
         self.samples = samples
     }
 }
@@ -176,7 +178,7 @@ public struct PushMutableRecord: Sendable {
     }
 }
 
-public struct PushWindow: Sendable {
+public struct PushWindow: Sendable, Codable {
     public let fromDay: String
     public let toDay: String
     public let startTsInclusive: Int64
@@ -218,7 +220,7 @@ public struct PushWindow: Sendable {
     }()
 }
 
-public struct PushCursor: Sendable, Equatable {
+public struct PushCursor: Sendable, Equatable, Codable {
     public let rowId: Int64
     public let naturalKeyFingerprint: String
 
@@ -228,7 +230,7 @@ public struct PushCursor: Sendable, Equatable {
     }
 }
 
-public struct PushWindowProgress: Sendable {
+public struct PushWindowProgress: Sendable, Codable {
     public let window: PushWindow
     public let batchId: String
     public let dayHashes: [String: String]
@@ -317,7 +319,7 @@ public struct PushObjectLane: Sendable, Equatable {
 
 /// The intent body posted to the object lane. `contentSha256` is over the UNCOMPRESSED payload;
 /// the receiver decompresses the uploaded object and refuses a manifest whose digest does not match.
-public struct PushObjectManifest: Sendable, Equatable {
+public struct PushObjectManifest: Sendable, Equatable, Codable {
     public let protocolVersion: String
     public let batchId: String
     public let sourceId: String
@@ -424,25 +426,33 @@ public struct PushObjectIntent: Sendable, Equatable {
 }
 
 public struct PushObjectAck: Sendable, Equatable {
+    public let protocolVersion: String
     public let objectId: String
     public let status: String
     public let objectKey: String
     public let duplicate: Bool
+    public let durabilityReceipt: PushDurabilityReceipt?
 
-    public init(objectId: String, status: String, objectKey: String, duplicate: Bool) {
+    public init(objectId: String, status: String, objectKey: String, duplicate: Bool,
+                durabilityReceipt: PushDurabilityReceipt? = nil, protocolVersion: String = PushProtocol.objectVersion) {
+        self.protocolVersion = protocolVersion
         self.objectId = objectId
         self.status = status
         self.objectKey = objectKey
         self.duplicate = duplicate
+        self.durabilityReceipt = durabilityReceipt
     }
 
     /// Local rows are released only when the receiver has the object and its digest verified.
-    public var releasesLocalRows: Bool { status == "ready" || status == "verified" }
+    public var releasesLocalRows: Bool {
+        (status == "ready" || status == "verified") && durabilityReceipt?.isValid == true
+            && durabilityReceipt?.objectId == objectId && durabilityReceipt?.objectKey == objectKey
+    }
 }
 
 /// Bookkeeping for an interrupted object upload, persisted between intent and ack so a relaunch
 /// resumes onto the same `objectKey` instead of minting a duplicate manifest row.
-public struct PushInFlightObject: Sendable, Equatable {
+public struct PushInFlightObject: Sendable, Equatable, Codable {
     public let objectId: String
     public let objectKey: String
     public let contentSha256: String

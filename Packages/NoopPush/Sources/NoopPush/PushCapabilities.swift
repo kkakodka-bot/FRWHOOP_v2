@@ -6,7 +6,7 @@ public struct PushCapabilities: Sendable {
     public let binaryTables: Set<PushBinaryTable>
     public let protocolVersion: String
     public let receiverStateId: String
-    /// Direct-to-bucket lane advertised at protocol 1.2. `nil` disables binary upload for the run:
+    /// Direct-to-bucket lane advertised at protocol 1.2/1.3. `nil` disables binary upload for the run:
     /// raw rows stay local rather than posting inline into a `use_object_lane` refusal.
     public let objectLane: PushObjectLane?
 
@@ -61,7 +61,7 @@ public struct PushCapabilities: Sendable {
             throw PushProtocolException("unsupported capability document")
         }
         let version = obj["protocolVersion"] as? String ?? ""
-        guard version == PushProtocol.version || version == "1.1" || version == PushProtocol.objectVersion else {
+        guard version == PushProtocol.version || version == PushProtocol.binaryVersion || PushProtocol.isObjectVersion(version) else {
             throw PushProtocolException("unsupported capability document")
         }
         guard let receiverStateId = obj["receiverStateId"] as? String, isCanonicalUuid(receiverStateId) else {
@@ -92,10 +92,10 @@ public struct PushCapabilities: Sendable {
                 binary.insert(table)
             }
         }
-        // The object lane is advertised only at 1.2. A malformed block disables the lane (rows are
+        // A malformed object-lane block disables the lane (rows are
         // retained) rather than failing the whole capability negotiation.
         let objectLane: PushObjectLane?
-        if version == PushProtocol.objectVersion, let laneObject = obj["objectLane"] as? [String: Any] {
+        if PushProtocol.isObjectVersion(version), let laneObject = obj["objectLane"] as? [String: Any] {
             objectLane = parseObjectLane(laneObject, binaryByName: binaryByName)
         } else {
             objectLane = nil

@@ -10,10 +10,16 @@ public struct PushProtocolException: Error, LocalizedError, Sendable {
 public enum PushProtocol {
     public static let version = "1.0"
     public static let binaryVersion = "1.1"
-    /// Object-lane manifests are built at this version; inline binary posts stay at `binaryVersion`.
+    /// Legacy object lane; retain this version when the receiver negotiates 1.2.
     public static let objectVersion = "1.2"
+    public static let identityObjectVersion = "1.3"
+    public static func isObjectVersion(_ version: String) -> Bool {
+        version == objectVersion || version == identityObjectVersion
+    }
+    /// Receiver manifest ceiling, including the exclusive final second.
+    public static let maxObjectWindowSeconds: Int64 = 48 * 60 * 60
     /// Sender-preferred list for capability negotiation (`GET`); see PUSH_PROTOCOL.md.
-    public static let capabilitiesAcceptVersions = "1.2,1.1,1.0"
+    public static let capabilitiesAcceptVersions = "1.3,1.2,1.1,1.0"
     public static let forbiddenRemoteControlMembers: Set<String> = [
         "command", "commands", "endpoint", "url", "cadence", "schema", "fields",
     ]
@@ -251,7 +257,8 @@ public enum PushProtocol {
     public static func binaryKeyFingerprint(table: PushBinaryTable, deviceId: String, row: PushBinaryRow) throws -> String {
         let payload: String = switch (table, row) {
         case (.ppgWaveformSample, .ppgWaveform(let record)):
-            "ppgWaveformSample\n\(deviceId)\n\(record.ts)\n\(record.burstIndex.map(String.init) ?? "")"
+            record.recordIndex.map { "ppgWaveformSample-v2\n\(deviceId)\n\(record.ts)\n\($0)" }
+                ?? "ppgWaveformSample\n\(deviceId)\n\(record.ts)\n\(record.burstIndex.map(String.init) ?? "")"
         case (.v18AuxSample, .v18Aux(let record)):
             "v18AuxSample\n\(deviceId)\n\(record.ts)"
         case (.rawBatch, .rawBatch(let record)):
@@ -275,6 +282,9 @@ public enum PushProtocol {
     ) throws -> PushBinaryBatch {
         try validateUUID(sourceId, name: "sourceId")
         guard !rows.isEmpty else { throw PushProtocolException("binary object must contain a row") }
+        guard protocolVersion == binaryVersion || isObjectVersion(protocolVersion) else {
+            throw PushProtocolException("unsupported binary protocol version")
+        }
 
         let selected: [PushBinaryRow]
         switch table {
@@ -282,16 +292,18 @@ public enum PushProtocol {
             guard rows.count == 1 else { throw PushProtocolException("rawBatch upload must contain exactly one row") }
             selected = rows
         case .ppgWaveformSample, .v18AuxSample, .rawImuSession:
-            selected = try selectBinaryRows(table: table, rows: rows, decodedLimit: decodedLimit)
+            selected = try selectBinaryRows(table: table, rows: rows, decodedLimit: decodedLimit,
+                                            ppgIdentityV2: protocolVersion == identityObjectVersion)
         }
 
-        let decoded = try PushBinaryCodec.pack(table: table, rows: selected)
+        let decoded = try PushBinaryCodec.pack(table: table, rows: selected,
+                                               ppgIdentityV2: protocolVersion == identityObjectVersion)
         guard decoded.count <= decodedLimit else {
             throw PushProtocolException("binary object exceeds the decoded limit")
         }
         let contentSha256 = PushBinaryCodec.sha256Hex(decoded)
         let contentEncoding = table.contentEncoding
-        let payload = protocolVersion == objectVersion
+        let payload = isObjectVersion(protocolVersion)
             ? try PushBinaryCompression.compressObject(decoded, encoding: contentEncoding)
             : try PushBinaryCompression.compress(decoded, encoding: contentEncoding)
         let (startTs, endTs, sampleCount) = try binaryBounds(table: table, rows: selected)
@@ -343,31 +355,54 @@ public enum PushProtocol {
         UUID().uuidString.lowercased()
     }
 
-    private static func selectBinaryRows(table: PushBinaryTable, rows: [PushBinaryRow], decodedLimit: Int) throws -> [PushBinaryRow] {
+    private static func selectBinaryRows(table: PushBinaryTable, rows: [PushBinaryRow], decodedLimit: Int,
+                                         ppgIdentityV2: Bool = false) throws -> [PushBinaryRow] {
         var selected: [PushBinaryRow] = []
         var decodedBytes = PushBinaryCodec.packedHeaderSize(for: table)
-        var windowStartTs: Int64? = nil
-        for row in rows.prefix(PushProtocolLimits.maxRecords) {
-            if table == .rawImuSession {
-                guard case .rawImuSession(let record) = row else {
-                    throw PushProtocolException("binary row kind mismatch")
-                }
-                if let start = windowStartTs, record.ts - start >= PushProtocolLimits.maxImuObjectWindowSeconds {
-                    break
-                }
+        guard decodedLimit >= decodedBytes else {
+            throw PushProtocolException("first binary row exceeds the decoded batch limit")
+        }
+        var windowStartTs: Int64?
+        var windowLastTs: Int64?
+        var previousRowID: Int64?
+        let maxWindow = table == .rawImuSession
+            ? PushProtocolLimits.maxImuObjectWindowSeconds : maxObjectWindowSeconds
+        // Validate source order without sorting: the returned cursor may cover only a source prefix.
+        for row in rows {
+            let (rowID, _) = try binaryRowPosition(table: table, row: row)
+            if let previousRowID, rowID <= previousRowID {
+                throw PushProtocolException("binary records must be strictly ordered by rowid")
             }
-            let rowSize = try PushBinaryCodec.packedRowSize(row)
-            if decodedBytes + rowSize > decodedLimit { break }
+            previousRowID = rowID
+        }
+        for row in rows.prefix(PushProtocolLimits.maxRecords) {
+            let (_, ts) = try binaryRowPosition(table: table, row: row)
+            guard ts < Int64.max else { throw PushProtocolException("binary timestamp has no exclusive end") }
+            let first = min(windowStartTs ?? ts, ts)
+            let last = max(windowLastTs ?? ts, ts)
+            let (span, overflow) = last.subtractingReportingOverflow(first)
+            // Include maxTs + 1, and stop at the FIRST non-fitting row even if later rows fit.
+            if overflow || span >= maxWindow { break }
+            let rowSize = try PushBinaryCodec.packedRowSize(row, ppgIdentityV2: ppgIdentityV2)
+            if rowSize > decodedLimit - decodedBytes { break }
             selected.append(row)
             decodedBytes += rowSize
-            if table == .rawImuSession, windowStartTs == nil, case .rawImuSession(let record) = row {
-                windowStartTs = record.ts
-            }
+            windowStartTs = first
+            windowLastTs = last
         }
         guard !selected.isEmpty else {
             throw PushProtocolException("first binary row exceeds the decoded batch limit")
         }
         return selected
+    }
+
+    private static func binaryRowPosition(table: PushBinaryTable, row: PushBinaryRow) throws -> (Int64, Int64) {
+        switch (table, row) {
+        case (.ppgWaveformSample, .ppgWaveform(let record)): return (record.rowId, record.ts)
+        case (.v18AuxSample, .v18Aux(let record)): return (record.rowId, record.ts)
+        case (.rawImuSession, .rawImuSession(let record)): return (record.rowId, record.ts)
+        default: throw PushProtocolException("binary row kind mismatch")
+        }
     }
 
     private static func binaryBounds(table: PushBinaryTable, rows: [PushBinaryRow]) throws -> (Int64, Int64, Int) {
@@ -376,7 +411,17 @@ public enum PushProtocol {
             guard case .rawBatch(let record) = rows[0] else {
                 throw PushProtocolException("binary row kind mismatch")
             }
-            return (record.startTs, record.endTs, Int(record.frameCount))
+            guard record.endTs >= record.startTs, record.startTs < Int64.max else {
+                throw PushProtocolException("raw batch bounds are invalid")
+            }
+            // Legacy producers stored equal bounds for a single second or decoded-empty chunk.
+            // Normalize only the manifest; the persisted payload and its content digest stay intact.
+            let end = record.endTs == record.startTs ? record.startTs + 1 : record.endTs
+            let (span, overflow) = end.subtractingReportingOverflow(record.startTs)
+            guard !overflow, span <= maxObjectWindowSeconds else {
+                throw PushProtocolException("raw batch exceeds the object window limit")
+            }
+            return (record.startTs, end, Int(record.frameCount))
         case .ppgWaveformSample, .v18AuxSample, .rawImuSession:
             let timestamps: [Int64] = try rows.map { row in
                 switch row {

@@ -9,6 +9,11 @@ public struct PushCoordinator: Sendable {
     private let today: @Sendable () -> Date
     private let calendar: Calendar
     private let destinationStillCurrent: @Sendable () -> Bool
+    private let receiptOwner: AccountScope?
+    private let objectProtocolVersion: String
+    private let associateReceipt: (@Sendable (PushBinaryBatch, [PushBinaryRow], PushDurabilityReceipt) async throws -> Void)?
+    private let associateInlineReceipt: (@Sendable (PushBatch, PushDurabilityReceipt) async throws -> Void)?
+    private let commitSource: (@Sendable (PushSourceCommit) async throws -> Void)?
 
     public init(
         source: any PushSnapshotSource,
@@ -17,7 +22,12 @@ public struct PushCoordinator: Sendable {
         sourceId: String,
         today: @escaping @Sendable () -> Date = { Date() },
         calendar: Calendar = .current,
-        destinationStillCurrent: @escaping @Sendable () -> Bool = { true }
+        destinationStillCurrent: @escaping @Sendable () -> Bool = { true },
+        receiptOwner: AccountScope? = nil,
+        objectProtocolVersion: String = PushProtocol.objectVersion,
+        associateReceipt: (@Sendable (PushBinaryBatch, [PushBinaryRow], PushDurabilityReceipt) async throws -> Void)? = nil,
+        associateInlineReceipt: (@Sendable (PushBatch, PushDurabilityReceipt) async throws -> Void)? = nil,
+        commitSource: (@Sendable (PushSourceCommit) async throws -> Void)? = nil
     ) {
         self.source = source
         self.transport = transport
@@ -26,6 +36,11 @@ public struct PushCoordinator: Sendable {
         self.today = today
         self.calendar = calendar
         self.destinationStillCurrent = destinationStillCurrent
+        self.receiptOwner = receiptOwner
+        self.objectProtocolVersion = objectProtocolVersion
+        self.associateReceipt = associateReceipt
+        self.associateInlineReceipt = associateInlineReceipt
+        self.commitSource = commitSource
     }
 
     public func pushAppend(_ table: PushAppendTable, deviceId: String) async -> PushResult {
@@ -80,7 +95,11 @@ public struct PushCoordinator: Sendable {
             return .rejected(reason: PushFailure(code: .localData).safeCode, retryable: false, failure: PushFailure(code: .localData))
         }
         do {
-            try await progress.saveCursor(table: table, deviceId: deviceId, cursor: end)
+            guard destinationStillCurrent() else { throw CancellationError() }
+            if let commitSource {
+                try await commitSource(.init(kind: .append, table: table.wireName, deviceID: deviceId,
+                                              batchIDs: [batchId], cursor: end))
+            } else { try await progress.saveCursor(table: table, deviceId: deviceId, cursor: end) }
             return .accepted(batchId: batchId, recordCount: recordCount, hasMore: rows.count > batch.recordCount, batchCount: batchCount)
         } catch let error as PushProtocolException {
             return .rejected(reason: PushFailure(code: .localData).safeCode, retryable: false, failure: PushFailure(code: .localData))
@@ -179,11 +198,12 @@ public struct PushCoordinator: Sendable {
 
         let replacementId = batches.first?.replacementId ?? batches.first?.batchId ?? ""
         do {
-            try await progress.saveWindow(
-                table: table,
-                deviceId: deviceId,
-                progress: PushWindowProgress(window: fullWindow, batchId: replacementId, dayHashes: currentHashes)
-            )
+            guard destinationStillCurrent() else { throw CancellationError() }
+            let value = PushWindowProgress(window: fullWindow, batchId: replacementId, dayHashes: currentHashes)
+            if let commitSource {
+                try await commitSource(.init(kind: .mutable, table: table.wireName, deviceID: deviceId,
+                                              batchIDs: batches.map(\.batchId), window: value))
+            } else { try await progress.saveWindow(table: table, deviceId: deviceId, progress: value) }
             return .accepted(
                 batchId: replacementId,
                 recordCount: changedRows.count,
@@ -196,6 +216,8 @@ public struct PushCoordinator: Sendable {
     }
 
     public func pushBinary(_ table: PushBinaryTable, deviceId: String) async -> PushResult {
+        // Cloud raw streams require an object manifest and typed receipt, never inline legacy ACKs.
+        if receiptOwner != nil { return .rejected(reason: "use_object_lane", retryable: false, failure: nil) }
         let stored: PushCursor?
         do {
             stored = try await progress.binaryCursor(table: table, deviceId: deviceId)
@@ -312,7 +334,7 @@ public struct PushCoordinator: Sendable {
         do {
             batch = try PushProtocol.binaryObjectBatch(
                 table: table, sourceId: sourceId, deviceId: deviceId, startCursor: effective, rows: rows,
-                protocolVersion: PushProtocol.objectVersion,
+                protocolVersion: objectProtocolVersion,
                 decodedLimit: PushProtocolLimits.maxObjectDecodedBytes
             )
         } catch {
@@ -325,15 +347,31 @@ public struct PushCoordinator: Sendable {
             return .rejected(reason: PushFailure(code: .localData).safeCode, retryable: false, failure: PushFailure(code: .localData))
         }
 
-        let accepted = await deliverObject(batch, lane: lane)
+        let selected = rows.filter { row in
+            guard let end = batch.endCursor else { return true }
+            switch row {
+            case .ppgWaveform(let r): return r.rowId <= end.rowId
+            case .v18Aux(let r): return r.rowId <= end.rowId
+            case .rawBatch(let r): return r.rowId <= end.rowId
+            case .rawImuSession(let r): return r.rowId <= end.rowId
+            }
+        }
+        let accepted = await deliverObject(batch, rows: selected, lane: lane)
         guard case .accepted(let batchId, let recordCount, _, let batchCount) = accepted else { return accepted }
 
         do {
-            if let end = batch.endCursor {
-                try await progress.saveBinaryCursor(table: table, deviceId: deviceId, cursor: end)
+            guard destinationStillCurrent() else { throw CancellationError() }
+            if let commitSource {
+                let rawIDs = selected.compactMap { row -> String? in
+                    if case .rawBatch(let r) = row { return r.batchId }; return nil
+                }
+                try await commitSource(.init(kind: .binary, table: table.wireName, deviceID: deviceId,
+                                              batchIDs: [batchId], cursor: batch.endCursor, rawBatchIDs: rawIDs))
+            } else {
+                try await source.acknowledgeBinary(table: table, deviceId: deviceId, rows: selected)
+                if let end = batch.endCursor { try await progress.saveBinaryCursor(table: table, deviceId: deviceId, cursor: end) }
             }
-            try await source.acknowledgeBinary(table: table, deviceId: deviceId, rows: rows)
-            let hasMore = table != .rawBatch && rows.count > batch.sampleCount
+            let hasMore = table != .rawBatch && rows.count > selected.count
             return .accepted(batchId: batchId, recordCount: recordCount, hasMore: hasMore, batchCount: batchCount)
         } catch is PushProtocolException {
             return .rejected(reason: PushFailure(code: .localData).safeCode, retryable: false, failure: PushFailure(code: .localData))
@@ -503,7 +541,7 @@ public struct PushCoordinator: Sendable {
         return .accepted(batchId: batch.batchId, recordCount: batch.sampleCount, hasMore: false)
     }
 
-    private func deliverObject(_ batch: PushBinaryBatch, lane: PushObjectLane) async -> PushResult {
+    private func deliverObject(_ batch: PushBinaryBatch, rows: [PushBinaryRow], lane: PushObjectLane) async -> PushResult {
         guard destinationStillCurrent() else {
             return .rejected(reason: "cancelled", retryable: true, failure: nil)
         }
@@ -517,7 +555,8 @@ public struct PushCoordinator: Sendable {
         // matching one lets us skip straight to complete when the PUT already landed.
         do {
             if let inFlight = try await progress.inFlightObject(table: batch.table, deviceId: batch.deviceId) {
-                if inFlight.objectId == manifest.objectId && inFlight.contentSha256 == manifest.contentSha256 {
+                if inFlight.contentSha256 == manifest.contentSha256 {
+                    manifest = manifest.replacingObjectId(inFlight.objectId)
                     uploaded = inFlight.uploaded
                     expectedKey = inFlight.objectKey
                 } else {
@@ -548,12 +587,7 @@ public struct PushCoordinator: Sendable {
             guard intent.objectId == manifest.objectId else {
                 return .rejected(reason: PushFailure(code: .ackInvalid).safeCode, retryable: false, failure: PushFailure(code: .ackInvalid))
             }
-            if intent.duplicate {
-                // Already archived under this id: success without a PUT or complete.
-                try? await progress.saveInFlightObject(table: batch.table, deviceId: batch.deviceId, object: nil)
-                return .accepted(batchId: batch.batchId, recordCount: batch.sampleCount, hasMore: false)
-            }
-            if let resumedKey = expectedKey, intent.objectKey != resumedKey {
+            if !intent.duplicate, let resumedKey = expectedKey, intent.objectKey != resumedKey {
                 // The receiver moved an incomplete object to a new key; resume must not fork.
                 return .rejected(reason: PushFailure(code: .ackInvalid).safeCode, retryable: false, failure: PushFailure(code: .ackInvalid))
             }
@@ -624,13 +658,21 @@ public struct PushCoordinator: Sendable {
                 return objectLaneFailure(error)
             }
 
-            guard ack.objectId == manifest.objectId, ack.releasesLocalRows else {
+            guard destinationStillCurrent(), let receiptOwner,
+                  ack.objectId == manifest.objectId, ack.releasesLocalRows,
+                  ack.protocolVersion == manifest.protocolVersion,
+                  let receipt = ack.durabilityReceipt,
+                  receipt.matches(manifest, owner: receiptOwner,
+                                  wireSHA256: PushDurabilityReceipt.sha256(batch.payload), wireBytes: batch.payload.count) else {
                 return .rejected(reason: PushFailure(code: .ackInvalid).safeCode, retryable: false, failure: PushFailure(code: .ackInvalid))
             }
-            if let expectedKey, ack.objectKey != expectedKey {
-                return .rejected(reason: PushFailure(code: .ackInvalid).safeCode, retryable: false, failure: PushFailure(code: .ackInvalid))
+            do {
+                guard let associateReceipt else { throw PushProtocolException("missing source receipt association") }
+                try await associateReceipt(batch, rows, receipt)
+                guard destinationStillCurrent() else { throw CancellationError() }
+            } catch {
+                return .rejected(reason: PushFailure(code: .localDatabase).safeCode, retryable: true, failure: PushFailure(code: .localDatabase))
             }
-            try? await progress.saveInFlightObject(table: batch.table, deviceId: batch.deviceId, object: nil)
             return .accepted(batchId: batch.batchId, recordCount: batch.sampleCount, hasMore: false)
         }
     }
@@ -673,6 +715,17 @@ public struct PushCoordinator: Sendable {
         }
         guard ack.exactlyMatches(batch) else {
             return .rejected(reason: PushFailure(code: .ackInvalid).safeCode, retryable: false, failure: PushFailure(code: .ackInvalid))
+        }
+        if let receiptOwner, ack.durabilityReceipt?.matches(batch, owner: receiptOwner) != true {
+            return .rejected(reason: PushFailure(code: .ackInvalid).safeCode, retryable: false, failure: PushFailure(code: .ackInvalid))
+        }
+        if receiptOwner != nil {
+            do {
+                guard destinationStillCurrent(), let receipt = ack.durabilityReceipt, let associateInlineReceipt else {
+                    throw PushProtocolException("missing inline receipt association")
+                }
+                try await associateInlineReceipt(batch, receipt)
+            } catch { return .rejected(reason: PushFailure(code: .localDatabase).safeCode, retryable: true, failure: PushFailure(code: .localDatabase)) }
         }
         return .accepted(batchId: batch.batchId, recordCount: batch.recordCount, hasMore: false)
     }
