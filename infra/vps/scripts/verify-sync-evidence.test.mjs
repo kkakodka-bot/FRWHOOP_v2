@@ -1,43 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
-import crypto from 'node:crypto';
 import { verifyEvidence } from './verify-sync-evidence.mjs';
-
-function fixture(t) {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'sync-evidence-test-'));
-  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
-  const bytes = 'SYNTHETIC VALIDATOR TEST ONLY. NOT DEVICE OR DEPLOYMENT EVIDENCE.\n';
-  fs.writeFileSync(path.join(directory, 'synthetic.txt'), bytes);
-  const now = Date.now();
-  const at = new Date(now - 1000).toISOString();
-  const hash = 'a'.repeat(64);
-  const artifact = 'synthetic.txt';
-  const stages = Object.fromEntries(['committed', 'accepted', 'archiveVerified', 'indexed', 'computed', 'displayed']
-    .map(name => [name, { at, ownerNamespace: hash, recordDigest: hash, artifact }]));
-  const evidence = {
-    schemaVersion: 1, environment: 'staging', endpoint: 'https://fixture.invalid',
-    build: { commit: 'a'.repeat(40), version: 'fixture', number: '1', configuration: 'Release', xcode: 'fixture', sdk: 'fixture' },
-    server: { commit: 'b'.repeat(40), imageDigest: `sha256:${hash}`, edgeRevision: 'fixture',
-      migrations: ['20260918010000', '20260918020000', '20260918030000', '20260918040000',
-        '20260918050000', '20260918060000', '20260918070000', '20260918080000'],
-      heartbeats: [new Date(now - 20000).toISOString(), at] },
-    canary: { credentialKind: 'userJWT', ownerNamespace: hash, recordDigest: hash, stages,
-      inputRevision: 1, resultRevision: 2, displayedRevision: 2 },
-    scenarios: Object.fromEntries(['twoHourLockedReconnect', 'overnightThroughWake', 'forceQuitRecovery', 'twoAccounts', 'twoDevices', 'backlog72Hours']
-      .map(name => [name, { status: 'pass', artifact }])),
-    performance: [60, 120].map(actualRefreshHz => ({ actualRefreshHz, device: 'synthetic', os: 'synthetic', artifact,
-      physicalDevice: true, configuration: 'Release', metric: 'aggregateHitchesMsPerSecond', value: 1,
-      unresolvedMainThreadStalls250ms: 0, toolVersion: 'synthetic', denominator: 'synthetic' })),
-    latency: { warmNavigationP95Ms: 1, coldCachedDashboardP95Ms: 1, activeCommitToDisplayP95Ms: 1 },
-    energy: { matchedBaseline: true, unexplainedRetryLoop: false, sustainedSeriousThermal: false, artifact },
-    security: { userLevelRls: 'pass', crossAccountRejected: 'pass', artifact },
-    artifacts: [{ path: artifact, sha256: crypto.createHash('sha256').update(bytes).digest('hex') }],
-  };
-  return { evidence, directory, now };
-}
+import { fixture } from './sync-evidence-fixtures.mjs';
+import { SUPPORTED_LEDGER_BASENAMES } from './sync-migration-ledger.mjs';
 
 test('validates internally consistent test evidence without calling it production-ready', t => {
   const f = fixture(t);
@@ -62,6 +29,28 @@ test('migration evidence cannot be a substring, number list or duplicate ledger'
   for (const malformed of [applied.join(','), applied.map(Number), [...applied, applied[0]], null]) {
     f.evidence.server.migrations = malformed;
     assert.throws(() => verifyEvidence(f.evidence, f.directory, f.now), /distinct applied migration IDs/);
+  }
+});
+test('schema2 records raw ledger entries separately and rejects inconsistent canonical evidence', t => {
+  const f = fixture(t), ids = [...f.evidence.server.migrations];
+  const names = ids.map(id => SUPPORTED_LEDGER_BASENAMES.find(name => name.startsWith(id + '_')));
+  f.evidence.server.migrationLedgerRaw = [...names];
+  assert.equal(verifyEvidence(f.evidence, f.directory, f.now).status, 'EVIDENCE_VALIDATED');
+  assert.deepEqual(f.evidence.server.migrationLedgerRaw, names); // No in-place normalization.
+  for (const raw of [undefined, null, names.join(','), [...names, ids[0]], [...names, '20260801000000']]) {
+    f.evidence.server.migrationLedgerRaw = raw;
+    assert.throws(() => verifyEvidence(f.evidence, f.directory, f.now), /NOT_READY/);
+  }
+  f.evidence.server.migrationLedgerRaw = names;
+  f.evidence.server.migrations = names;
+  assert.throws(() => verifyEvidence(f.evidence, f.directory, f.now), /distinct applied migration IDs/);
+});
+test('container ID is explicit full lowercase hex, not a service name, short ID or image digest', t => {
+  const f = fixture(t);
+  for (const id of [undefined, null, '', 'scoring', 'synthetic-scoring-1', 'c'.repeat(12), 'C'.repeat(64),
+    'sha256:' + 'c'.repeat(64), 'c'.repeat(63), 'c'.repeat(65), 'c'.repeat(64) + '\n', true]) {
+    f.evidence.server.containerId = id;
+    assert.throws(() => verifyEvidence(f.evidence, f.directory, f.now), /container ID/);
   }
 });
 test('existing but stalled heartbeat fails', t => {
@@ -92,4 +81,109 @@ test('empty evidence and a missing manifest reference fail', t => {
   assert.throws(() => verifyEvidence({}, f.directory, f.now), /schemaVersion/);
   f.evidence.canary.stages.displayed.artifact = 'missing.trace';
   assert.throws(() => verifyEvidence(f.evidence, f.directory, f.now), /no verified artifact/);
+});
+
+for (const prepend of [false, true]) {
+  test(`all performance traces are checked, bad duplicate first=${prepend}`, t => {
+    const f = fixture(t);
+    const bad = { ...f.evidence.performance[1], value: 100, unresolvedMainThreadStalls250ms: 7 };
+    f.evidence.performance[prepend ? 'unshift' : 'push'](bad);
+    assert.throws(() => verifyEvidence(f.evidence, f.directory, f.now), /Hitches/);
+  });
+}
+test('every additional trace needs physical build, time, metric, denominator and stall checks', t => {
+  const f = fixture(t);
+  for (const [field, value] of Object.entries({ actualRefreshHz: '120', physicalDevice: false, configuration: 'Debug',
+    value: -1, unresolvedMainThreadStalls250ms: 1, toolVersion: '', denominator: '', buildCommit: 'b'.repeat(40), observedAt: '2020-01-01T00:00:00.000Z' })) {
+    const e = structuredClone(f.evidence);
+    e.performance.push({ ...e.performance[1], [field]: value });
+    assert.throws(() => verifyEvidence(e, f.directory, f.now), /NOT_READY/, field);
+  }
+  f.evidence.performance.push({ ...f.evidence.performance[0], actualRefreshHz: 90 });
+  assert.equal(verifyEvidence(f.evidence, f.directory, f.now).status, 'EVIDENCE_VALIDATED');
+});
+test('all intermediate heartbeats are valid, strictly advancing and inside the window', t => {
+  const f = fixture(t);
+  for (const middle of ['invalid', new Date(f.now - 30000).toISOString(), f.evidence.server.heartbeats[0],
+    new Date(f.now + 1).toISOString(), new Date(f.now - 366 * 86400_000).toISOString(), 123]) {
+    f.evidence.server.heartbeats = [new Date(f.now - 20000).toISOString(), middle, new Date(f.now - 1000).toISOString()];
+    assert.throws(() => verifyEvidence(f.evidence, f.directory, f.now), /heartbeat/);
+  }
+});
+test('fresh heartbeat cannot admit old canary completion', t => {
+  const f = fixture(t);
+  for (const age of [366 * 86400_000, 3600_000]) {
+    for (const stage of Object.values(f.evidence.canary.stages)) stage.at = new Date(f.now - age).toISOString();
+    assert.throws(() => verifyEvidence(f.evidence, f.directory, f.now), /window|stale/);
+  }
+});
+test('72-hour collection and old physiology day are permitted, recent completion required', t => {
+  const f = fixture(t);
+  f.evidence.canary.stages.committed.at = new Date(f.now - 3 * 86400_000).toISOString();
+  f.evidence.canary.day = '2020-01-01';
+  assert.equal(verifyEvidence(f.evidence, f.directory, f.now).status, 'EVIDENCE_VALIDATED');
+});
+test('collection window rejects reversed, unbounded, stale and future intervals', t => {
+  const f = fixture(t);
+  for (const [start, end] of [[-1, -2], [-8 * 86400_000, -1000], [-86400_000, -3600_000], [-86400_000, 61000]]) {
+    f.evidence.collection = { startedAt: new Date(f.now + start).toISOString(), completedAt: new Date(f.now + end).toISOString() };
+    assert.throws(() => verifyEvidence(f.evidence, f.directory, f.now), /collection window/);
+  }
+});
+test('canonical timestamps reject rolled-over calendar dates and numeric values', t => {
+  const f = fixture(t);
+  for (const timestamp of ['2026-02-30T00:00:00.000Z', '2026-09-18', 0, null]) {
+    f.evidence.collection.startedAt = timestamp;
+    assert.throws(() => verifyEvidence(f.evidence, f.directory, f.now), /collection window/);
+  }
+});
+test('explicit canary identity/revisions must match at every stage', t => {
+  const f = fixture(t);
+  for (const stage of Object.keys(f.evidence.canary.stages)) {
+    for (const field of ['ownerUserId', 'deviceId', 'objectId', 'inputRevision', 'resultRevision']) {
+      const e = structuredClone(f.evidence);
+      e.canary.stages[stage][field] = 'mismatch';
+      assert.throws(() => verifyEvidence(e, f.directory, f.now), /correlation/);
+    }
+  }
+});
+test('UUID, digest scope, algorithm and numeric revisions cannot be coerced', t => {
+  const f = fixture(t);
+  for (const [field, value] of [['ownerUserId', '-'.repeat(36)], ['deviceId', 'not-a-uuid'], ['objectId', null],
+    ['recordDigestScope', 'unspecified'], ['algorithmVersion', "bad'algorithm"], ['day', '2026-02-30'],
+    ...[true, '1', 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1].map(v => ['inputRevision', v])]) {
+    const e = structuredClone(f.evidence);
+    e.canary[field] = value;
+    for (const stage of Object.values(e.canary.stages)) if (field in stage) stage[field] = value;
+    assert.throws(() => verifyEvidence(e, f.directory, f.now), /NOT_READY/, field);
+  }
+});
+test('all time-bearing reports are inside the collection window', t => {
+  const f = fixture(t);
+  for (const report of [f.evidence.energy, f.evidence.security, f.evidence.latency, ...Object.values(f.evidence.scenarios)]) {
+    const at = report.observedAt;
+    report.observedAt = '2020-01-01T00:00:00.000Z';
+    assert.throws(() => verifyEvidence(f.evidence, f.directory, f.now), /window/);
+    report.observedAt = at;
+  }
+});
+test('target and HTTPS origin reject credentials, paths, shell/SSH syntax', t => {
+  const f = fixture(t);
+  for (const endpoint of ['http://fixture.invalid', 'https://u:p@fixture.invalid', 'https://fixture.invalid/a', 'https://fixture.invalid?q=x']) {
+    assert.throws(() => verifyEvidence({ ...f.evidence, endpoint }, f.directory, f.now), /HTTPS/);
+  }
+  for (const host of ['-oProxyCommand=x', 'u@host', 'host;date', 'host\nother', 'host:22']) {
+    const e = structuredClone(f.evidence); e.target.sshHost = host;
+    assert.throws(() => verifyEvidence(e, f.directory, f.now), /SSH host/);
+  }
+});
+test('artifacts reject duplicate names, directories and escape through a synthetic symlink', t => {
+  const f = fixture(t);
+  f.evidence.artifacts.push({ ...f.evidence.artifacts[0] });
+  assert.throws(() => verifyEvidence(f.evidence, f.directory, f.now), /duplicate/);
+  f.evidence.artifacts.pop();
+  const sibling = fixture(t);
+  fs.symlinkSync(path.join(sibling.directory, 'synthetic.txt'), path.join(f.directory, 'outside.txt'));
+  f.evidence.artifacts[0].path = 'outside.txt';
+  assert.throws(() => verifyEvidence(f.evidence, f.directory, f.now), /escaped/);
 });
