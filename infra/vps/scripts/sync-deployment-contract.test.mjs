@@ -18,6 +18,7 @@ function replies(f, ledger = [...REQUIRED_MIGRATIONS]) {
   return [
     { workItems: true, heartbeats: true, ingest: true }, ledger,
     { containerId: f.evidence.server.containerId, running: true, imageId: f.evidence.server.dockerImageId,
+      imageReference: f.imageFixture.release.image.reference,
       revision: f.evidence.server.commit, ports: {}, networkMode: 'synthetic-internal' },
     [`synthetic.invalid/scorer@${f.evidence.server.imageDigest}`],
     { lastPollAtMs: f.now - 20000, serverNowMs: f.now },
@@ -26,6 +27,7 @@ function replies(f, ledger = [...REQUIRED_MIGRATIONS]) {
       day: c.day, algorithmVersion: c.algorithmVersion, objectId: c.objectId, recordDigest: c.recordDigest,
       receiptState: 'verified_indexed', receiptOwner: c.ownerUserId, receiptDevice: c.deviceId,
       receiptObject: c.objectId, indexedBeforeComputed: true },
+    f.imageFixture.inspection,
   ];
 }
 
@@ -37,7 +39,7 @@ test('control: native IDs and coherent replies pass only narrow read-only checks
   assert.equal(result.status, 'READ_ONLY_CHECKS_PASSED');
   assert.match(result.productionReadiness, /^NOT_READY:/);
   assert.deepEqual(result.migrationLedger.observedRaw, REQUIRED_MIGRATIONS);
-  assert.equal(calls.length, 7);
+  assert.equal(calls.length, 8);
   assert.match(calls[1].command, /json_agg\(version order by version\)/);
   assert.match(calls[6].command, /s\.input_revision=1 and s\.result_revision=2/);
 });
@@ -63,7 +65,7 @@ test('P1-1 closure: complete runner ledger reaches all checks and remains unchan
   const result = checkLive(f.evidence, f.directory, candidateSelector(f.evidence), (command, label) => {
     calls.push({ command, label }); return JSON.stringify(responses.shift());
   }, () => {}, () => f.now);
-  assert.equal(result.status, 'READ_ONLY_CHECKS_PASSED'); assert.equal(calls.length, 7);
+  assert.equal(result.status, 'READ_ONLY_CHECKS_PASSED'); assert.equal(calls.length, 8);
   assert.deepEqual(result.migrationLedger.observedRaw, raw);
   assert.deepEqual(result.migrationLedger.recordedRaw, raw);
   assert.deepEqual(result.migrationLedger.canonicalIDs, f.evidence.server.migrations);
@@ -92,7 +94,7 @@ test('P1-2 closure: Compose-generated instance is inspected by the independently
     }
     return JSON.stringify(responses.shift());
   }, () => {}, () => f.now);
-  assert.equal(result.containerId, f.evidence.server.containerId); assert.equal(calls.length, 7);
+  assert.equal(result.containerId, f.evidence.server.containerId); assert.equal(calls.length, 8);
 });
 
 test('control: each required omission in either format and canonical duplicates remain NOT_READY', () => {

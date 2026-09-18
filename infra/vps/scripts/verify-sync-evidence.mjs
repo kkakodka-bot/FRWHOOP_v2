@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { CANARY_STAGES, SCENARIOS, requireThat, instant, nonempty, sha, uuid, readJSON, reportError } from './sync-evidence-contract.mjs';
 import { validateMigrationEvidence } from './sync-migration-ledger.mjs';
+import { packetRelease } from './scorer-image-release.mjs';
 
 // Validates collected evidence; it neither generates a canary nor certifies artifact authenticity.
 export function verifyEvidence(e, directory, now = Date.now()) {
@@ -114,8 +115,9 @@ export function verifyEvidence(e, directory, now = Date.now()) {
   }
   const references = [...stages.map(stage => e.canary.stages[stage].artifact),
     ...Object.values(e.scenarios).map(gate => gate.artifact), ...e.performance.map(p => p.artifact), e.energy.artifact, e.security.artifact,
-    e.latency.artifact, e.target.bindingArtifact, e.canary.inputBindingArtifact];
+    e.latency.artifact, e.target.bindingArtifact, e.canary.inputBindingArtifact, e.server.imageProvenanceArtifact];
   requireThat(references.every(reference => names.has(reference)), 'an evidence reference has no verified artifact');
+  packetRelease(e, directory);
   return { status: 'EVIDENCE_VALIDATED', artifacts: names.size, productionReadiness: 'requires exact candidate review' };
 }
 

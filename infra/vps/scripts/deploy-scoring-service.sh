@@ -9,6 +9,17 @@ SSH_KEY="${ROOT}/infra/vps/keys/frwhoop_deploy"
 REMOTE_BUILD="/opt/frwhoop/build/frwhoop-scoring"
 COMPOSE_DIR="/opt/frwhoop/supabase-docker/docker"
 
+if [[ $# -gt 0 ]]; then
+  [[ $# -eq 2 && "$1" == --image-manifest ]] || { echo "Usage: $0 [--image-manifest file]" >&2; exit 2; }
+  node "${ROOT}/infra/vps/scripts/scorer-image-release.mjs" validate --manifest "$2"
+  # Only an explicitly requested deployment loads this legacy host selector, after offline validation.
+  source "$DROPLET_ENV"
+  : "${DROPLET_IP:?}" "${SCORER_KNOWN_HOSTS:?Explicit verified known-hosts path required}"
+  exec node "${ROOT}/infra/vps/scripts/scorer-image-release.mjs" deploy-pinned \
+    --manifest "$2" --host "$DROPLET_IP" --key "$SSH_KEY" --known-hosts "$SCORER_KNOWN_HOSTS"
+fi
+
+echo "Legacy mutable-image deployment: NOT_READY for production-sync image provenance." >&2
 source "$DROPLET_ENV"
 : "${DROPLET_IP:?}"
 

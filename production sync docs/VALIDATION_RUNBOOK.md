@@ -173,6 +173,38 @@ unavailable RepoDigests are blockers, not inferred equivalence. No deployment ch
 to manufacture these fields. Live heartbeat samples must advance and be recent with a bounded
 server-clock difference. No raw payload or container environment is fetched or printed.
 
+#### Required immutable scorer provenance (stricter schema 2)
+
+Schema 2 now also requires `server.imageProvenanceArtifact`, a relative JSON artifact listed in the
+packet's existing SHA-verified `artifacts`. Old packets lacking it are **NOT_READY**, not implicitly
+upgraded. The file is a `scorer-image-release` schema-1 bundle manifest produced by the explicit
+image helper; all its referenced regular files must remain alongside it and match their hashes.
+Its source commit, registry digest and Docker config ID must equal `server.commit`, `imageDigest`
+and `dockerImageId`, respectively. The independently reviewed selector keeps its existing exact
+fields. Do not generate that selector from whichever container a deployment happened to create.
+
+The bundle binds exported committed Android/JVM inputs and Dockerfile bytes, separate native-input
+and report byte identity, pinned base references, explicit platform, builder metadata, exact registry
+descriptor bytes and sanitized image inspection. Native report hashes do not prove test coverage or
+successful execution; reviewers must inspect the actual results. OCI labels and internal artifact
+consistency do not authenticate a builder. Dependency reproducibility/signing and registry access
+are separate, unproven gates. See `scoring-service/README.md` for the input schema and operation modes.
+
+Live acceptance additionally requires the container's configured image reference to equal the
+reviewed digest pin, then inspects the immutable image by the container's exact config ID. The image's
+own revision label, OS/architecture and exact repository@digest membership must match. A correct
+container label cannot substitute for a missing/wrong image label. The registry/index digest,
+selected platform-manifest digest, config ID and full container ID remain distinct. Sanitized
+observed image facts and source/native-input hashes are returned in `imageProvenance`; preserve them.
+
+The existing Compose template and no-argument deployment stay compatible, but mutable legacy images
+remain unqualified. The explicit pinned deployment skips source synchronization/building and refuses
+fallback to latest. It requires an already configured deployment, retains the override/manifest,
+and never starts or recreates dependencies. It returns a selected container, not acceptance approval.
+No registry, SSH, Docker or publish/deploy command may run as an offline test. Local preparation
+cannot fetch missing Git objects and does not access deployment environment/credential files.
+The phase3 shell, its documented `--local` command and its exit-3 NOT_READY result are unchanged.
+
 The canary read verifies the exact snapshot owner/device/input/result/day/algorithm and raw object's
 ready/server-verified receipt, including owner/device/object/content digest and indexing before
 computation. **The schema has no per-result list of contributing raw object IDs.** These matching
@@ -202,6 +234,19 @@ The deployment-contract tests are closure versions of the independent filename-l
 Compose-name defect controls: those legitimate cases must now pass, while malformed/missing/
 duplicate canonical ledger entries and wrong/missing container IDs remain NOT_READY. The earlier
 independent diagnostic artifact is retained unchanged as pre-repair evidence, not relabelled a pass.
+
+Additional image-provenance regression (offline synthetic fixtures/mocked Docker and SSH only):
+
+```sh
+node --test infra/vps/scripts/scorer-image-release.test.mjs
+node --check infra/vps/scripts/scorer-image-release.mjs
+bash -n infra/vps/scripts/deploy-scoring-service.sh
+```
+
+Set `TMPDIR` to the external evidence volume. These tests use local disposable Git repositories,
+preserve binary bytes, reject unavailable/promisor objects and mismatched native evidence, and
+exercise descriptor/config/label binding and the pinned deployment boundary through mocks. They
+do not perform a real image build/push/pull, remote read/write, login, signing or deployment.
 
 ## Rollback and recovery
 

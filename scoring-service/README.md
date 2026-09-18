@@ -111,3 +111,76 @@ Build Docker from the repository root so the kernel can sync its Android twin:
 ```sh
 docker build -t frwhoop/scoring-service:latest -f scoring-service/Dockerfile .
 ```
+
+That legacy developer command and the no-argument VPS deploy script remain available, but are
+**NOT_READY for immutable production-sync image acceptance**. They do not establish an exact
+committed source export or registry provenance. A mutable-image failure is never a fallback from
+the explicit pinned path below. The final-stage OCI revision label is empty unless `VCS_REF` is
+supplied; a label alone is not authenticated provenance or evidence that tests ran.
+
+### Explicit immutable image path
+
+`infra/vps/scripts/scorer-image-release.mjs` separates offline preparation/validation from
+publish/deploy operations. Nothing here authorizes registry access, Docker execution or deployment.
+Root reserves the native workspace and runs the existing phase3 `--local` command unchanged.
+
+Offline preparation requires a full local commit, explicit `linux/amd64` or `linux/arm64` platform,
+digest-qualified JDK/JRE references and a separately recorded native-evidence JSON. Output must be
+a new directory on the external artifact volume, not an existing worktree. For example, with all
+`SCORER_*` values explicitly selected by the operator:
+
+```sh
+node infra/vps/scripts/scorer-image-release.mjs prepare \
+  --repo "$PWD" --commit "$SCORER_COMMIT" --output "$SCORER_PREPARED_DIR" \
+  --platform "$SCORER_PLATFORM" --build-image "$SCORER_BUILD_BASE" \
+  --runtime-image "$SCORER_RUNTIME_BASE" --native-evidence "$SCORER_NATIVE_EVIDENCE"
+```
+
+Preparation reads local Git objects only, never fetches, and rejects partial/promisor/alternate
+object stores and included Git configuration. It exports an allowlisted tracked source inventory,
+not dirty/untracked files, caches, build products, `.env`, keys or local configuration. Symlinks
+are rejected. Limits are 4 MiB per source blob and 256 MiB aggregate. Binary wrapper bytes and
+tracked executable modes are retained. Missing required source roots/wrapper files fail closed.
+
+The native JSON has `schemaVersion:1`, `inputFiles:[{path,sha256}]` and nonempty
+`reports:[{path,sha256}]`. `inputFiles` must match **all exported inputs except the Dockerfile**;
+reports are relative, bounded regular files alongside that JSON. This is byte-identity binding,
+not a test-result generator: the operator/reviewer must establish what actually ran, against which
+fixtures and with what result. A Git commit label cannot replace this independent record. Source
+identity includes a separate `nativeInputSha256`; changing only packaging need not relabel tests.
+
+Only after separate build/publish approval:
+
+```sh
+node infra/vps/scripts/scorer-image-release.mjs publish \
+  --prepared "$SCORER_PREPARED_DIR/prepared.json" --output "$SCORER_RELEASE_DIR" \
+  --repository "$SCORER_REPOSITORY"
+```
+
+This operation invokes Docker/registry commands; it is **not** an offline check. It builds a private
+validated context snapshot once using pinned bases and revision, pushes a unique transport tag,
+then resolves by digest. A registry/index digest, selected platform-manifest digest and Docker
+config ID are recorded separately. Indexes must have exactly one matching OS/architecture child
+without a variant; unsupported/ambiguous descriptors fail. Digest verification tolerates only a
+single CLI-framing LF whose removal produces the declared digest, never JSON reserialization.
+The pulled image's own label/config/platform/RepoDigest must match. Only then is `release.json`
+published atomically without overwriting an existing release; partial diagnostics stay unqualified.
+No registry login is performed by the helper. Builder/registry compatibility and credentials must
+be qualified separately; offline mocks do not establish a real build or authenticated provenance.
+
+Validate an existing release bundle offline with `validate --manifest <release.json>`. The output
+means internal consistency, not reviewer approval, reproducibility, deployment or release readiness.
+Retain the complete bundle, including descriptor bytes, source/native inventories and report bytes.
+The build-context and raw builder metadata directories are local diagnostics, not acceptance inputs.
+
+After separate deployment approval, `deploy-scoring-service.sh --image-manifest <release.json>`
+validates offline before loading the existing host selector. Supply `SCORER_KNOWN_HOSTS` explicitly.
+It requires the existing configured Compose deployment and running `db`/`rest`; it does not provision
+them or rewrite secrets. It pulls/verifies the pin, retains a non-secret digest override and manifest,
+then uses `up -d --no-build --no-deps --pull never scoring`. No source rsync/rebuild/latest fallback.
+It verifies the selected full container ID and image association but does not auto-authorize that
+ID for acceptance. Retain/review a fresh independent selector. Use the same retained override file
+set for later pinned operations; rollback requires separate approval and a previous retained bundle.
+
+See the [validation runbook](../production%20sync%20docs/VALIDATION_RUNBOOK.md) for the stricter schema-2
+`server.imageProvenanceArtifact` requirement and the separate offline test command.

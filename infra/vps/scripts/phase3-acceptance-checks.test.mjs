@@ -14,7 +14,7 @@ function subprocessFixture(t) {
   const f = fixture(t), root = path.join(f.directory, 'fake-repo'), bin = path.join(f.directory, 'bin');
   const scriptDir = path.join(root, 'infra/vps/scripts');
   sourceFixture(root); fs.mkdirSync(scriptDir, { recursive: true }); fs.mkdirSync(bin);
-  for (const name of ['phase3-acceptance-checks.sh', 'verify-sync-evidence.mjs', 'sync-evidence-contract.mjs', 'sync-migration-ledger.mjs', 'check-sync-sources.mjs', 'check-sync-live.mjs']) {
+  for (const name of ['phase3-acceptance-checks.sh', 'verify-sync-evidence.mjs', 'sync-evidence-contract.mjs', 'sync-migration-ledger.mjs', 'check-sync-sources.mjs', 'check-sync-live.mjs', 'scorer-image-release.mjs']) {
     fs.copyFileSync(path.join(scripts, name), path.join(scriptDir, name));
   }
   // PATH has NO system directory and thus no real SSH/Gradle fallback.
@@ -52,12 +52,14 @@ function subprocessFixture(t) {
   const c = f.evidence.canary;
   const replies = [
     { workItems: true, heartbeats: true, ingest: true }, [...REQUIRED_MIGRATIONS],
-    { containerId: f.evidence.server.containerId, running: true, imageId: f.evidence.server.dockerImageId, revision: f.evidence.server.commit, ports: {}, networkMode: 'synthetic-internal' },
+    { containerId: f.evidence.server.containerId, running: true, imageId: f.evidence.server.dockerImageId,
+      imageReference: f.imageFixture.release.image.reference, revision: f.evidence.server.commit, ports: {}, networkMode: 'synthetic-internal' },
     [`fixture.invalid/scorer@${f.evidence.server.imageDigest}`],
     { lastPollAtMs: f.now - 20000, serverNowMs: f.now }, { lastPollAtMs: f.now - 1000, serverNowMs: f.now },
     { ownerUserId: c.ownerUserId, deviceId: c.deviceId, inputRevision: c.inputRevision, resultRevision: c.resultRevision,
       day: c.day, algorithmVersion: c.algorithmVersion, objectId: c.objectId, recordDigest: c.recordDigest,
       receiptState: 'verified_indexed', receiptOwner: c.ownerUserId, receiptDevice: c.deviceId, receiptObject: c.objectId, indexedBeforeComputed: true },
+    f.imageFixture.inspection,
   ].map(value => ({ value }));
   const manifest = path.join(f.directory, 'evidence.json'), selector = path.join(f.directory, 'selector.json'), responses = path.join(f.directory, 'responses.json');
   const expected = candidateSelector(f.evidence);
@@ -116,14 +118,14 @@ test('source policy failure stops shell and never reaches SSH', t => {
 test('remote success binds reviewed selector, strict SSH identity, image and exact SQL revisions', t => {
   const f = subprocessFixture(t); const r = f.run('--remote');
   assert.equal(r.status, 0, r.output); assert.match(r.output, /READ_ONLY_CHECKS_PASSED/); assert.match(r.output, /NOT_READY/);
-  const ssh = r.calls.filter(call => call.program === 'ssh'); assert.equal(ssh.length, 7);
+  const ssh = r.calls.filter(call => call.program === 'ssh'); assert.equal(ssh.length, 8);
   for (const call of ssh) {
     assert.ok(call.args.includes('StrictHostKeyChecking=yes')); assert.ok(call.args.includes('/dev/null'));
     assert.ok(call.args.includes('deploy@synthetic.invalid')); assert.doesNotMatch(call.args.at(-1), /\|\| true|\.Config.Env/);
     if (call.args.at(-1).includes('psql')) assert.match(call.args.at(-1), /-X -v ON_ERROR_STOP=1/);
     if (call.args.at(-1).includes('psql')) assert.match(call.args.at(-1), /default_transaction_read_only=on -c statement_timeout=10000/);
   }
-  const query = ssh.at(-1).args.at(-1);
+  const query = ssh[6].args.at(-1);
   for (const text of ['s.input_revision=1', 's.result_revision=2', f.evidence.canary.ownerUserId, f.evidence.canary.deviceId, f.evidence.canary.objectId]) assert.ok(query.includes(text));
   assert.ok(ssh[2].args.at(-1).endsWith(` '${f.evidence.server.containerId}'`));
   assert.ok(ssh[2].args.at(-1).includes('{{json .Id}}'));
@@ -208,7 +210,7 @@ test('missing explicit selector or SSH files abort before remote access', t => {
 });
 test('empty or malformed Docker/canary output is not a successful inspection', t => {
   const f = subprocessFixture(t);
-  for (const index of [2, 3, 6]) {
+  for (const index of [2, 3, 6, 7]) {
     const reply = f.replies[index];
     for (const raw of ['', '{}\n{}', 'null', 'unexpected']) {
       f.replies[index] = { raw };
@@ -225,7 +227,7 @@ test('every independently selected target field mismatch aborts before SSH', t =
     assert.ok(r.calls.every(call => call.program !== 'ssh'), key); f.expected[key] = value;
   }
 });
-for (let position = 0; position < 7; position++) {
+for (let position = 0; position < 8; position++) {
   test(`failed SSH/psql/Docker inspection ${position + 1} stops even with successful-looking output`, t => {
     const f = subprocessFixture(t); f.replies[position].exit = position === 0 ? 255 : 1;
     const r = f.run('--remote'); assert.equal(r.status, 3); assert.match(r.output, /command failed/);
@@ -263,6 +265,19 @@ test('all live canary fields reject mismatches without revision/owner coercion',
     const r = f.run('--remote'); assert.equal(r.status, 3, key); assert.match(r.output, /live canary receipt\/snapshot differs/);
   }
   f.replies[6] = { raw: '' }; assert.equal(f.run('--remote').status, 3);
+});
+test('immutable image metadata and configured digest pin remain mandatory even with correct container labels', t => {
+  const f = subprocessFixture(t);
+  f.replies[2].value.imageReference = 'fixture.invalid/scorer:latest';
+  let r = f.run('--remote'); assert.equal(r.status, 3); assert.match(r.output, /reviewed image pin/);
+  f.replies[2].value.imageReference = f.imageFixture.release.image.reference;
+  const original = structuredClone(f.replies[7].value);
+  for (const override of [{ revision: null }, { revision: 'd'.repeat(40) }, { architecture: 'arm64' },
+    { id: f.evidence.server.imageDigest }, { repoDigests: [] }, { repoDigests: ['another.invalid/scorer@' + f.evidence.server.imageDigest] }]) {
+    f.replies[7].value = { ...original, ...override };
+    r = f.run('--remote'); assert.equal(r.status, 3); assert.doesNotMatch(r.output, /READ_ONLY_CHECKS_PASSED/);
+    assert.equal(r.calls.filter(c => c.program === 'ssh').length, 8);
+  }
 });
 test('stale, nonadvancing, malformed or wrong-clock live heartbeats cannot pass', t => {
   const f = subprocessFixture(t), original = structuredClone(f.replies[5].value);

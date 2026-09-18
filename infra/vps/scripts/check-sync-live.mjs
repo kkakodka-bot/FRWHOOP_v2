@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url';
 import { verifyEvidence } from './verify-sync-evidence.mjs';
 import { readJSON, requireThat, reportError } from './sync-evidence-contract.mjs';
 import { canonicalMigrationLedger } from './sync-migration-ledger.mjs';
+import { packetRelease, verifyImage, IMAGE_FORMAT } from './scorer-image-release.mjs';
 
 // Independently reviewed selector: values, never executable shell configuration.
 export function candidateSelector(e) {
@@ -33,6 +34,7 @@ function command(program, args, label) {
 export function checkLive(e, directory, selector, ssh, pause = () => command('sleep', ['15'], 'heartbeat wait'), now = () => Date.now()) {
   verifyEvidence(e, directory, now());
   sameFields(selector, candidateSelector(e), 'operator target');
+  const release = packetRelease(e, directory);
   const json = (remote, label) => {
     let value;
     try { value = JSON.parse(ssh(remote, label)); } catch (error) {
@@ -50,11 +52,12 @@ export function checkLive(e, directory, selector, ssh, pause = () => command('sl
   const ledger = sql('select coalesce(json_agg(version order by version),\'[]\'::json) from supabase_migrations.schema_migrations', 'migration ledger');
   const canonicalLedger = canonicalMigrationLedger(ledger);
   requireThat(JSON.stringify(canonicalLedger) === JSON.stringify([...e.server.migrations].sort()), 'live migration ledger differs from evidence');
-  const format = '{"containerId":{{json .Id}},"running":{{json .State.Running}},"imageId":{{json .Image}},"revision":{{json (index .Config.Labels "org.opencontainers.image.revision")}},"ports":{{json .NetworkSettings.Ports}},"networkMode":{{json .HostConfig.NetworkMode}}}';
+  const format = '{"containerId":{{json .Id}},"running":{{json .State.Running}},"imageId":{{json .Image}},"imageReference":{{json .Config.Image}},"revision":{{json (index .Config.Labels "org.opencontainers.image.revision")}},"ports":{{json .NetworkSettings.Ports}},"networkMode":{{json .HostConfig.NetworkMode}}}';
   const container = json(`docker inspect --type container --format ${quote(format)} ${quote(e.server.containerId)}`, 'scorer inspection');
   requireThat(container?.containerId === e.server.containerId, 'inspected scorer container ID differs from candidate');
   requireThat(container?.running === true && container.imageId === e.server.dockerImageId && container.revision === e.server.commit,
     'running scorer image ID or revision differs from candidate');
+  requireThat(container.imageReference === release.image.reference, 'running scorer was not configured with reviewed image pin');
   requireThat(container.ports && typeof container.ports === 'object' && !Array.isArray(container.ports) &&
     Object.values(container.ports).every(bindings => bindings === null || (Array.isArray(bindings) && bindings.length === 0)), 'scorer published ports or unverifiable port inspection');
   requireThat(typeof container.networkMode === 'string' && container.networkMode.length > 0 && container.networkMode !== 'host' &&
@@ -90,8 +93,13 @@ export function checkLive(e, directory, selector, ssh, pause = () => command('sl
     day: c.day, algorithmVersion: c.algorithmVersion, objectId: c.objectId, recordDigest: c.recordDigest,
     receiptState: 'verified_indexed', receiptOwner: c.ownerUserId, receiptDevice: c.deviceId, receiptObject: c.objectId, indexedBeforeComputed: true,
   }, 'live canary receipt/snapshot');
+  const image = json(`docker image inspect --format ${quote(IMAGE_FORMAT)} ${quote(e.server.dockerImageId)}`, 'immutable image metadata');
+  verifyImage(image, release.image);
   verifyEvidence(e, directory, now()); // Reject packets that expired during a build/inspection.
   return { status: 'READ_ONLY_CHECKS_PASSED', containerId: container.containerId,
+    imageProvenance: { imageReference: container.imageReference, image, registryDigest: release.image.registryDigest,
+      platformManifestDigest: release.image.platformManifestDigest, sourceCommit: release.source.commit,
+      contextSha256: release.source.contextSha256, nativeInputSha256: release.source.nativeInputSha256 },
     migrationLedger: { observedRaw: [...ledger], canonicalIDs: canonicalLedger, recordedRaw: [...e.server.migrationLedgerRaw] },
     productionReadiness: 'NOT_READY: independent review, whole-day parity and physical/deployment acceptance remain separate' };
 }
