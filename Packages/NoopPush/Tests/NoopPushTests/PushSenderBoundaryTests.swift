@@ -34,7 +34,7 @@ final class PushSenderBoundaryTests: XCTestCase {
     }
 
     func testNegotiatedIdentityVersionAndLegacyFallback() throws {
-        XCTAssertEqual(PushProtocol.capabilitiesAcceptVersions, "1.3,1.2,1.1,1.0")
+        XCTAssertEqual(PushProtocol.capabilitiesAcceptVersions, "1.4,1.3,1.2,1.1,1.0")
         XCTAssertEqual(PushProtocol.objectVersion, "1.2")
         XCTAssertEqual(PushProtocol.identityObjectVersion, "1.3")
         let upgraded = try capabilities("1.3")
@@ -55,7 +55,8 @@ final class PushSenderBoundaryTests: XCTestCase {
         XCTAssertEqual(v1.contentSha256, PushBinaryCodec.sha256Hex(
             try PushBinaryCodec.pack(table: .ppgWaveformSample, rows: unknown)))
         XCTAssertNil(try capabilities("1.3", validLane: false).objectLane)
-        XCTAssertThrowsError(try capabilities("1.4"))
+        XCTAssertEqual(try capabilities("1.4").protocolVersion, "1.4")
+        XCTAssertThrowsError(try capabilities("1.5"))
     }
 
     func testExactFortyEightHourHalfOpenBoundaryForPpgAndAux() throws {

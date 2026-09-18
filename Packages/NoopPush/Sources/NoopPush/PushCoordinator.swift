@@ -43,7 +43,8 @@ public struct PushCoordinator: Sendable {
         self.commitSource = commitSource
     }
 
-    public func pushAppend(_ table: PushAppendTable, deviceId: String) async -> PushResult {
+    public func pushAppend(_ table: PushAppendTable, deviceId: String,
+                           protocolVersion: String = PushProtocol.version) async -> PushResult {
         let stored: PushCursor?
         do {
             stored = try await progress.cursor(table: table, deviceId: deviceId)
@@ -84,7 +85,8 @@ public struct PushCoordinator: Sendable {
 
         let batch: PushBatch
         do {
-            batch = try PushProtocol.appendBatch(table: table, sourceId: sourceId, deviceId: deviceId, startCursor: effective, records: rows)
+            batch = try PushProtocol.appendBatch(table: table, sourceId: sourceId, deviceId: deviceId,
+                startCursor: effective, records: rows, protocolVersion: protocolVersion)
         } catch {
             return .rejected(reason: PushFailure(code: .localData).safeCode, retryable: false, failure: PushFailure(code: .localData))
         }
@@ -302,7 +304,8 @@ public struct PushCoordinator: Sendable {
         } else if let stored, stored.rowId > 0 {
             do {
                 let atCursor = try await source.binaryRecordAt(table: table, deviceId: deviceId, rowId: stored.rowId)
-                let fingerprint = atCursor.flatMap { try? PushProtocol.binaryKeyFingerprint(table: table, deviceId: deviceId, row: $0) }
+                let fingerprint = atCursor.flatMap { try? PushProtocol.binaryKeyFingerprint(table: table, deviceId: deviceId,
+                    row: $0, v18IdentityV2: objectProtocolVersion == PushProtocol.auxiliaryIdentityVersion) }
                 effective = fingerprint == stored.naturalKeyFingerprint ? stored : nil
             } catch is PushProtocolException {
                 return .rejected(reason: PushFailure(code: .localData).safeCode, retryable: false, failure: PushFailure(code: .localData))
@@ -313,7 +316,7 @@ public struct PushCoordinator: Sendable {
             effective = nil
         }
 
-        let limit = table == .rawBatch ? 1 : PushProtocolLimits.maxRecords + 1
+        let limit = table == .rawBatch ? 2 : PushProtocolLimits.maxRecords + 1
         let rows: [PushBinaryRow]
         do {
             rows = try await source.binaryRows(
@@ -333,7 +336,8 @@ public struct PushCoordinator: Sendable {
         let batch: PushBinaryBatch
         do {
             batch = try PushProtocol.binaryObjectBatch(
-                table: table, sourceId: sourceId, deviceId: deviceId, startCursor: effective, rows: rows,
+                table: table, sourceId: sourceId, deviceId: deviceId, startCursor: effective,
+                rows: table == .rawBatch ? Array(rows.prefix(1)) : rows,
                 protocolVersion: objectProtocolVersion,
                 decodedLimit: PushProtocolLimits.maxObjectDecodedBytes
             )
@@ -347,7 +351,7 @@ public struct PushCoordinator: Sendable {
             return .rejected(reason: PushFailure(code: .localData).safeCode, retryable: false, failure: PushFailure(code: .localData))
         }
 
-        let selected = rows.filter { row in
+        let selected = table == .rawBatch ? Array(rows.prefix(1)) : rows.filter { row in
             guard let end = batch.endCursor else { return true }
             switch row {
             case .ppgWaveform(let r): return r.rowId <= end.rowId
@@ -371,7 +375,7 @@ public struct PushCoordinator: Sendable {
                 try await source.acknowledgeBinary(table: table, deviceId: deviceId, rows: selected)
                 if let end = batch.endCursor { try await progress.saveBinaryCursor(table: table, deviceId: deviceId, cursor: end) }
             }
-            let hasMore = table != .rawBatch && rows.count > selected.count
+            let hasMore = rows.count > selected.count
             return .accepted(batchId: batchId, recordCount: recordCount, hasMore: hasMore, batchCount: batchCount)
         } catch is PushProtocolException {
             return .rejected(reason: PushFailure(code: .localData).safeCode, retryable: false, failure: PushFailure(code: .localData))
@@ -432,7 +436,7 @@ public struct PushCoordinator: Sendable {
         let mutableOrder: [PushMutableTable] = [.dailyMetric, .sleepSession, .workout, .journal]
         let appendOrder: [PushAppendTable] = [
             .event, .battery, .hrSample, .spo2Sample, .skinTempSample,
-            .respSample, .gravitySample, .rrInterval,
+            .respSample, .gravitySample, .stepSample, .sleepStateSample, .ppgHrSample, .rrInterval,
         ]
 
         for deviceId in selectedDevices {
@@ -453,7 +457,7 @@ public struct PushCoordinator: Sendable {
                     }
                 }
                 for table in appendOrder where capabilities.appendTables.contains(table) {
-                    switch await pushAppend(table, deviceId: deviceId) {
+                    switch await pushAppend(table, deviceId: deviceId, protocolVersion: capabilities.protocolVersion) {
                     case .accepted(_, let records, let hasMore, let batchCount):
                         accepted += batchCount
                         acceptedRecords += records

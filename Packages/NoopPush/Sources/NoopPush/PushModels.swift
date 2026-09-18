@@ -13,8 +13,12 @@ public enum PushAppendTable: String, CaseIterable, PushTable, Sendable {
     case skinTempSample
     case respSample
     case gravitySample
+    case stepSample
+    case sleepStateSample
+    case ppgHrSample
 
     public var wireName: String { rawValue }
+    public var isScalarExtension: Bool { [.stepSample, .sleepStateSample, .ppgHrSample].contains(self) }
 }
 
 public enum PushMutableTable: String, CaseIterable, PushTable, Sendable {
@@ -63,12 +67,17 @@ public struct PushV18AuxRecord: Sendable {
     public let rowId: Int64
     public let ts: Int64
     public let fields: Data
+    public let recordIndex: Int64?
+    /// Capture-time local receipt key, never encoded as a wire identity.
+    public let resourceKey: String?
 
-    public init(rowId: Int64, ts: Int64, fields: Data) {
+    public init(rowId: Int64, ts: Int64, fields: Data, recordIndex: Int64? = nil, resourceKey: String? = nil) {
         precondition(rowId > 0)
         self.rowId = rowId
         self.ts = ts
         self.fields = fields
+        self.recordIndex = recordIndex
+        self.resourceKey = resourceKey
     }
 }
 

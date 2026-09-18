@@ -6,7 +6,7 @@ public struct PushCapabilities: Sendable {
     public let binaryTables: Set<PushBinaryTable>
     public let protocolVersion: String
     public let receiverStateId: String
-    /// Direct-to-bucket lane advertised at protocol 1.2/1.3. `nil` disables binary upload for the run:
+    /// Direct-to-bucket lane advertised at protocol 1.2 and later. `nil` disables binary upload:
     /// raw rows stay local rather than posting inline into a `use_object_lane` refusal.
     public let objectLane: PushObjectLane?
 
@@ -21,7 +21,7 @@ public struct PushCapabilities: Sendable {
     public static let unscopedReceiverStateId = "00000000-0000-4000-8000-000000000000"
 
     public static let all = PushCapabilities(
-        appendTables: Set(PushAppendTable.allCases),
+        appendTables: Set(PushAppendTable.allCases.filter { !$0.isScalarExtension }),
         mutableTables: Set(PushMutableTable.allCases),
         binaryTables: Set(PushBinaryTable.allCases)
     )
@@ -85,7 +85,7 @@ public struct PushCapabilities: Sendable {
                 throw PushProtocolException("duplicate capability stream")
             }
             if let table = appendByName[name] {
-                append.insert(table)
+                if !table.isScalarExtension || version != PushProtocol.version { append.insert(table) }
             } else if let table = mutableByName[name] {
                 mutable.insert(table)
             } else if let table = binaryByName[name] {

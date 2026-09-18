@@ -39,7 +39,7 @@ public struct PushDurabilityReceipt: Codable, Equatable, Sendable {
             && deviceId == Self.canonicalDevice(owner: owner.userID, device: manifest.deviceId)
             && objectId == manifest.objectId && batchId == manifest.batchId && sourceId == manifest.sourceId
             && stream == manifest.stream
-            && schemaVersion == (manifest.stream == "ppgWaveformSample" && manifest.protocolVersion == "1.3" ? 2 : 1)
+            && schemaVersion == PushProtocol.schemaVersion(stream: manifest.stream, protocolVersion: manifest.protocolVersion)
             && contentSha256 == manifest.contentSha256 && wireSha256 == wireSHA256
             && compressedBytes == manifest.compressedBytes && compressedBytes == Int64(wireBytes)
             && uncompressedBytes == manifest.uncompressedBytes
@@ -51,7 +51,8 @@ public struct PushDurabilityReceipt: Codable, Equatable, Sendable {
         isValid && ownerUserId == owner.userID
             && deviceId == Self.canonicalDevice(owner: owner.userID, device: batch.deviceId)
             && objectId == batch.batchId && batchId == batch.batchId && sourceId == batch.sourceId
-            && stream == batch.table.wireName && schemaVersion == 1
+            && stream == batch.table.wireName
+            && schemaVersion == PushProtocol.schemaVersion(stream: batch.table.wireName, protocolVersion: batch.protocolVersion)
             && contentSha256 == Self.sha256(batch.body) && uncompressedBytes == Int64(batch.body.count)
     }
 
