@@ -48,6 +48,7 @@
     "v44-sync-jobs",
     "v45-backfill-frontier",
     "v46-rr-source-index",
+    "v47-server-score-cache",
     "v46-ppg-record-identity"
   ],
   "divergenceReasons": {
@@ -62,6 +63,57 @@
     "ppg-record-identity-ios": "iOS v46 preserves the wire record index, including databases already upgraded by research v45-v26-record-index. Android still keys PPG waveforms by device and second; its absent recordIndex is also absent from its primary key. This iOS compatibility repair does not migrate the Android production database."
   },
   "tables": {
+    "serverScoreCache": {
+      "platform": "ios_only",
+      "columns": [
+        {
+          "name": "day",
+          "affinity": "TEXT",
+          "notNull": false,
+          "default": null
+        },
+        {
+          "name": "algorithmVersion",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "dailyJson",
+          "affinity": "TEXT",
+          "notNull": false,
+          "default": null
+        },
+        {
+          "name": "nightsJson",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "computedAt",
+          "affinity": "TEXT",
+          "notNull": false,
+          "default": null
+        },
+        {
+          "name": "stale",
+          "affinity": "NUMERIC",
+          "notNull": true,
+          "default": "1"
+        },
+        {
+          "name": "fetchedAt",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": null
+        }
+      ],
+      "primaryKey": [
+        "day"
+      ],
+      "indices": []
+    },
     "appleDaily": {
       "platform": "both",
       "columns": [

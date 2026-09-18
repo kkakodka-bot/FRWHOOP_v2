@@ -200,7 +200,8 @@ final class SchemaOracleTests: XCTestCase {
     /// becomes ambiguous. Worse, an exactly-duplicated identifier makes GRDB skip the second body
     /// entirely, because the first already recorded that name in `grdb_migrations`.
     ///
-    /// So: identifiers unique, and their `vN` prefixes exactly 1...N with no gaps and no repeats.
+    /// Preserve the deployed PR15 identifier at its integrated position. All other identifiers
+    /// retain sequential prefixes; future migrations start at v48. Full names remain unique.
     func testGrdbMigrationIdentifiersAreUniqueAndSequential() throws {
         let ids = WhoopStore.makeMigrator().migrations
         XCTAssertEqual(Set(ids).count, ids.count,
@@ -214,10 +215,15 @@ final class SchemaOracleTests: XCTestCase {
             }
             numbers.append(n)
         }
-        for (offset, n) in numbers.enumerated() where n != offset + 1 {
-            return XCTFail("GRDB migration '\(ids[offset])' claims v\(n) but is #\(offset + 1) in "
-                           + "registration order — two migrations claiming the same vN, or a gap, makes the "
-                           + "GRDB-name <-> Room-version mapping ambiguous. Renumber before merging.")
+        guard ids.count >= 48 else {
+            return XCTFail("Integrated migration history is incomplete: \(ids.count) identifiers")
+        }
+        XCTAssertEqual(Array(ids[45..<48]),
+                       ["v46-rr-source-index", "v47-server-score-cache", "v46-ppg-record-identity"],
+                       "Both deployed feature lines must retain their original migration identifiers")
+        for (offset, n) in numbers.enumerated() {
+            let expected = offset == 47 ? 46 : offset + 1 - (offset > 47 ? 1 : 0)
+            XCTAssertEqual(n, expected, "Unexpected migration prefix at position \(offset + 1)")
         }
     }
 
