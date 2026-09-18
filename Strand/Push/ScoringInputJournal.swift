@@ -74,11 +74,27 @@ struct ScoringInputHead: Codable, Sendable, Equatable {
 
 private final class ScoringInputCommitFence: TransactionObserver {
     let fence: StoreWriteFence
-    init(_ fence: StoreWriteFence) { self.fence = fence }
+    let current: @Sendable () -> Bool
+    init(_ fence: StoreWriteFence, current: @escaping @Sendable () -> Bool) { self.fence = fence; self.current = current }
     func observes(eventsOfKind eventKind: DatabaseEventKind) -> Bool { false }
     func databaseDidChange(with event: DatabaseEvent) {}
     func databaseWillCommit() throws {
         do { try fence.check() } catch { throw ScoringInputJournal.Failure.retired }
+        guard current() else { throw ScoringInputJournal.Failure.retired }
+    }
+    func databaseDidCommit(_ db: Database) {}
+    func databaseDidRollback(_ db: Database) {}
+}
+
+private final class ScoringPreferenceCommitPermit: TransactionObserver {
+    let allowing: @Sendable () -> Bool
+    init(allowing: @escaping @Sendable () -> Bool) { self.allowing = allowing }
+    func observes(eventsOfKind eventKind: DatabaseEventKind) -> Bool { false }
+    func databaseDidChange(with event: DatabaseEvent) {}
+    func databaseWillCommit() throws {
+        try Task.checkCancellation()
+        guard allowing() else { throw ScoringInputJournal.Failure.held }
+        try Task.checkCancellation()
     }
     func databaseDidCommit(_ db: Database) {}
     func databaseDidRollback(_ db: Database) {}
@@ -87,7 +103,7 @@ private final class ScoringInputCommitFence: TransactionObserver {
 /// A small, independent account journal; it is not part of the physiological GRDB/Room schema.
 /// The expected server revision commits BEFORE the request, so a lost response repeats exact input.
 actor ScoringInputJournal {
-    enum Failure: Error, Equatable { case invalidInput, wrongOwner, retired, storageLimit, invalidReceipt, headRequired, staleReview, held, relayCapacity, retiredOrigin }
+    enum Failure: Error, Equatable { case invalidInput, wrongOwner, retired, storageLimit, invalidReceipt, headRequired, staleReview, held, relayCapacity, retiredOrigin, stalePreferenceIntent }
     /// Consent's durable AUTOINCREMENT position, not the input journal's client revision.
     /// The high-water mark rejects replay after an acknowledged origin has been compacted.
     struct OriginPosition: Sendable, Equatable {
@@ -121,19 +137,29 @@ actor ScoringInputJournal {
     nonisolated let writeFence: StoreWriteFence
     private var active = true
     private var closed = false
+    private let preferenceContext: AccountSessionContext?
+    private let isPreferenceContextCurrent: @Sendable (AccountSessionContext) -> Bool
 
     /// Construct on the storage worker, never a SwiftUI/main-actor initializer.
-    init(layout: AccountStorageLayout, fence: StoreWriteFence = StoreWriteFence()) throws {
+    init(layout: AccountStorageLayout, fence: StoreWriteFence = StoreWriteFence(),
+         preferenceContext: AccountSessionContext? = nil,
+         isPreferenceContextCurrent: @escaping @Sendable (AccountSessionContext) -> Bool = { _ in false }) throws {
         guard let scope = layout.scope else { throw Failure.wrongOwner }
+        guard preferenceContext == nil || preferenceContext?.scope == scope else { throw Failure.wrongOwner }
         guard fence.isValid else { throw Failure.retired }
+        guard preferenceContext.map(isPreferenceContextCurrent) ?? true else { throw Failure.retired }
         self.scope = scope
         self.writeFence = fence
+        self.preferenceContext = preferenceContext
+        self.isPreferenceContextCurrent = isPreferenceContextCurrent
         try layout.prepare()
         let path = layout.directory.appendingPathComponent("history-inputs.sqlite")
         var configuration = Configuration()
         configuration.busyMode = .timeout(5)
         db = try DatabaseQueue(path: path.path, configuration: configuration)
-        db.add(transactionObserver: ScoringInputCommitFence(fence), extent: .databaseLifetime)
+        db.add(transactionObserver: ScoringInputCommitFence(fence, current: {
+            preferenceContext.map(isPreferenceContextCurrent) ?? true
+        }), extent: .databaseLifetime)
         try db.writeWithoutTransaction { database in
             try database.execute(sql: "PRAGMA journal_mode = WAL")
             try database.execute(sql: "PRAGMA synchronous = FULL")
@@ -141,7 +167,12 @@ actor ScoringInputJournal {
         }
         clientID = try db.write { database in
             let tables = try String.fetchAll(database, sql: "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
-            guard tables.isEmpty || tables.contains("input_owner") else { throw Failure.wrongOwner }
+            let knownTables: Set<String> = ["input_owner", "input_head", "input_change", "input_resolution", "input_origin", "input_relay", "input_control",
+                "preference_state", "preference_intent", "preference_projection"]
+            guard Set(tables).isSubset(of: knownTables), tables.isEmpty || tables.contains("input_owner") else { throw Failure.wrongOwner }
+            // A partial or newer preference schema is not an invitation to silently repair/rebind it.
+            let preferenceTables = Set(tables).filter { $0.hasPrefix("preference_") }
+            guard preferenceTables.isEmpty || preferenceTables.count == 3 else { throw Failure.invalidInput }
             try database.execute(sql: """
                 CREATE TABLE IF NOT EXISTS input_owner(singleton INTEGER PRIMARY KEY CHECK(singleton=1), project TEXT NOT NULL, user TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS input_head(device TEXT NOT NULL, kind TEXT NOT NULL, entity TEXT NOT NULL,
@@ -155,9 +186,10 @@ actor ScoringInputJournal {
             if let owner = try Row.fetchOne(database, sql: "SELECT project,user FROM input_owner WHERE singleton=1") {
                 guard owner["project"] as String == scope.projectURL, owner["user"] as String == scope.userID else { throw Failure.wrongOwner }
             } else {
+                guard tables.isEmpty else { throw Failure.wrongOwner }
                 guard try Int.fetchOne(database, sql: "SELECT COUNT(*) FROM input_change") == 0,
                       try Int.fetchOne(database, sql: "SELECT COUNT(*) FROM input_head") == 0 else { throw Failure.wrongOwner }
-                for table in ["input_origin", "input_resolution", "input_relay", "input_control"] where tables.contains(table) {
+                for table in knownTables.subtracting(["input_owner", "input_head", "input_change"]) where tables.contains(table) {
                     guard try Int.fetchOne(database, sql: "SELECT COUNT(*) FROM \(table)") == 0 else { throw Failure.wrongOwner }
                 }
                 try database.execute(sql: "INSERT INTO input_owner(singleton,project,user) VALUES(1,?,?)", arguments: [scope.projectURL, scope.userID])
@@ -192,6 +224,7 @@ actor ScoringInputJournal {
             if try !database.columns(in: "input_origin").contains(where: { $0.name == "source_sequence" }) {
                 try database.execute(sql: "ALTER TABLE input_origin ADD COLUMN source_sequence INTEGER")
             }
+            try Self.preparePreferenceSchema(database)
             if let saved = try String.fetchOne(database, sql: "SELECT client_id FROM input_owner WHERE singleton=1") {
                 guard let id = UUID(uuidString: saved) else { throw Failure.invalidInput }
                 return id
@@ -215,6 +248,216 @@ actor ScoringInputJournal {
         guard !closed else { return }
         try db.close()
         closed = true
+    }
+
+    private static func preparePreferenceSchema(_ database: Database) throws {
+        try database.execute(sql: """
+            CREATE TABLE IF NOT EXISTS preference_state(singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+                version INTEGER NOT NULL,sequence INTEGER NOT NULL CHECK(sequence>=0),last_id TEXT);
+            CREATE TABLE IF NOT EXISTS preference_intent(sequence INTEGER PRIMARY KEY,id TEXT NOT NULL UNIQUE,
+                digest TEXT NOT NULL,body BLOB NOT NULL,profile_id TEXT UNIQUE,config_id TEXT UNIQUE,
+                profile_sequence INTEGER,config_sequence INTEGER,
+                profile_settled INTEGER NOT NULL DEFAULT 0,config_settled INTEGER NOT NULL DEFAULT 0,
+                byte_count INTEGER NOT NULL CHECK(byte_count>=0));
+            CREATE TABLE IF NOT EXISTS preference_projection(key TEXT PRIMARY KEY,value BLOB NOT NULL,
+                sequence INTEGER NOT NULL,intent_id TEXT NOT NULL,generation TEXT NOT NULL,disposition TEXT NOT NULL);
+            """)
+        let expected: [String: Set<String>] = [
+            "preference_state": ["singleton", "version", "sequence", "last_id"],
+            "preference_intent": ["sequence", "id", "digest", "body", "profile_id", "config_id", "profile_sequence", "config_sequence",
+                                  "profile_settled", "config_settled", "byte_count"],
+            "preference_projection": ["key", "value", "sequence", "intent_id", "generation", "disposition"]
+        ]
+        for (table, columns) in expected {
+            let actual = try database.columns(in: table)
+            let integers: Set<String> = ["singleton", "version", "sequence", "profile_sequence", "config_sequence", "profile_settled", "config_settled", "byte_count"]
+            let blobs: Set<String> = ["body", "value"]
+            let primary = table == "preference_state" ? "singleton" : table == "preference_intent" ? "sequence" : "key"
+            guard Set(actual.map(\.name)) == columns,
+                  actual.allSatisfy({ $0.type.uppercased() == (integers.contains($0.name) ? "INTEGER" : blobs.contains($0.name) ? "BLOB" : "TEXT") }),
+                  actual.filter({ $0.primaryKeyIndex > 0 }).map(\.name) == [primary] else { throw Failure.invalidInput }
+        }
+        guard try Int.fetchOne(database, sql: """
+            SELECT COUNT(*) FROM preference_state WHERE typeof(singleton)<>'integer' OR typeof(version)<>'integer'
+                OR typeof(sequence)<>'integer' OR (last_id IS NOT NULL AND typeof(last_id)<>'text')
+            """) == 0 else { throw Failure.invalidInput }
+        let states = try Row.fetchAll(database, sql: "SELECT * FROM preference_state")
+        if states.isEmpty {
+            guard try Int.fetchOne(database, sql: "SELECT COUNT(*) FROM preference_intent") == 0,
+                  try Int.fetchOne(database, sql: "SELECT COUNT(*) FROM preference_projection") == 0 else { throw Failure.invalidInput }
+            try database.execute(sql: "INSERT INTO preference_state VALUES(1,1,0,NULL)")
+        } else {
+            guard states.count == 1, states[0]["singleton"] as Int == 1, states[0]["version"] as Int == 1 else { throw Failure.invalidInput }
+            _ = try preferencePosition(database)
+        }
+        guard try Int.fetchOne(database, sql: "SELECT COUNT(*) FROM preference_intent") ?? 0 <= 4096,
+              try Int.fetchOne(database, sql: "SELECT COUNT(*) FROM preference_projection") ?? 0 <= ScoringPreferenceKey.allCases.count else {
+            throw Failure.storageLimit
+        }
+    }
+
+    private static func preferencePosition(_ database: Database) throws -> ScoringPreferencePosition {
+        guard let row = try Row.fetchOne(database, sql: "SELECT sequence,last_id FROM preference_state WHERE singleton=1") else { throw Failure.invalidInput }
+        let rawID: String? = row["last_id"]
+        let id = rawID.flatMap(UUID.init(uuidString:))
+        let position = ScoringPreferencePosition(sequence: row["sequence"], id: id)
+        guard position.isValid, rawID == nil || id != nil else { throw Failure.invalidInput }
+        return position
+    }
+
+    private func checkPreferenceContext(_ expected: AccountSessionContext? = nil) throws {
+        guard active, writeFence.isValid, let context = preferenceContext,
+              expected == nil || expected == context, isPreferenceContextCurrent(context) else { throw Failure.retired }
+        guard context.scope == scope else { throw Failure.wrongOwner }
+    }
+
+    func preferencePosition() throws -> ScoringPreferencePosition {
+        try checkPreferenceContext()
+        return try db.read { try Self.preferencePosition($0) }
+    }
+
+    enum PreferenceCommitPoint: Sendable { case intentInserted, firstChildInserted, projectionWritten, beforeCommit, afterCommit }
+
+    private func writePreferenceTransaction<T>(allowing: @Sendable () -> Bool,
+                                               _ updates: (Database) throws -> T) throws -> T {
+        try withoutActuallyEscaping(allowing) { permit in
+            let observer = ScoringPreferenceCommitPermit(allowing: permit)
+            // Register after the lifetime owner/generation fence. The same permit is checked at
+            // SQLite's commit hook, then removed on both commit and rollback before it can escape.
+            db.add(transactionObserver: observer, extent: .observerLifetime)
+            defer { db.remove(transactionObserver: observer) }
+            return try db.write(updates)
+        }
+    }
+
+    /// The sole local acceptance point is this FULL-synchronous transaction. Hooks are deterministic
+    /// crash/fault seams; an afterCommit interruption must recover the same immutable receipt.
+    func admitPreferenceIntent(_ intent: ScoringPreferenceIntent,
+                               allowing: @Sendable () -> Bool,
+                               at: (@Sendable (PreferenceCommitPoint) -> Void)? = nil) throws -> ScoringPreferenceAdmission {
+        guard intent.context.scope == scope else { throw Failure.wrongOwner }
+        try checkPreferenceContext(intent.context)
+        let body = try intent.encoded()
+        guard body.count <= 192 * 1024 else { throw Failure.invalidInput }
+        let digest = SHA256.hash(data: body).map { String(format: "%02x", $0) }.joined()
+        let result = try writePreferenceTransaction(allowing: allowing) { database in
+            try Task.checkCancellation()
+            try checkPreferenceContext(intent.context)
+            guard allowing() else { throw Failure.held }
+            let current = try Self.preferencePosition(database)
+            if intent.position.sequence <= current.sequence {
+                guard let existing = try Row.fetchOne(database, sql: "SELECT * FROM preference_intent WHERE sequence=?", arguments: [intent.position.sequence]) else {
+                    throw Failure.stalePreferenceIntent
+                }
+                guard existing["id"] as String == intent.id.uuidString.lowercased(), existing["digest"] as String == digest,
+                      existing["body"] as Data == body else { throw Failure.stalePreferenceIntent }
+                return try preferenceAdmission(existing)
+            }
+            guard intent.predecessor == current else { throw Failure.stalePreferenceIntent }
+            guard try Int.fetchOne(database, sql: "SELECT COUNT(*) FROM preference_intent") ?? 0 < 4096 else { throw Failure.storageLimit }
+            let childBytes = (intent.profile?.payload.count ?? 0) + (intent.config?.payload.count ?? 0)
+            // Reserve another child-payload copy for conflict archival. Settlement/compaction can
+            // release this conservative charge; moving a child to input_resolution cannot evade it.
+            let metadataBytes = body.count + childBytes + 1024
+            guard try ordinaryPendingFits(childBytes + metadataBytes,
+                additionalCount: intent.disposition == .serverCoupled ? 2 : 0,
+                includingPreferenceProjection: true, database: database) else { throw Failure.storageLimit }
+            let id = intent.id.uuidString.lowercased()
+            let profileID = intent.profileMutationID?.uuidString.lowercased()
+            let configID = intent.configMutationID?.uuidString.lowercased()
+            try database.execute(sql: """
+                INSERT INTO preference_intent(sequence,id,digest,body,profile_id,config_id,byte_count)
+                VALUES(?,?,?,?,?,?,?)
+                """, arguments: [intent.position.sequence, id, digest, body, profileID, configID, metadataBytes])
+            at?(.intentInserted)
+            var revisions: [Int64] = []
+            for (index, member) in [(intent.profile, profileID), (intent.config, configID)].enumerated() {
+                guard let change = member.0, let mutationID = member.1 else { continue }
+                // Never rewrite/relabel a caller-supplied mutation identity or coalesce away a child.
+                guard try Int.fetchOne(database, sql: "SELECT COUNT(*) FROM input_change WHERE id=?", arguments: [mutationID]) == 0,
+                      try Int.fetchOne(database, sql: "SELECT COUNT(*) FROM input_resolution WHERE id=? OR replacement_id=?", arguments: [mutationID, mutationID]) == 0,
+                      try Int.fetchOne(database, sql: "SELECT COUNT(*) FROM input_origin WHERE mutation_id=?", arguments: [mutationID]) == 0 else { throw Failure.invalidInput }
+                try database.execute(sql: """
+                    INSERT INTO input_change(id,device,kind,entity,day,payload,deleted,digest) VALUES(?,?,?,?,?,?,0,?)
+                    """, arguments: [mutationID, change.device, change.kind.rawValue, change.entity, change.effectiveDay, change.payload, change.digest])
+                revisions.append(database.lastInsertedRowID)
+                if index == 0 { at?(.firstChildInserted) }
+            }
+            let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+            for item in intent.patch {
+                let value = try encoder.encode(item.value)
+                guard value.count <= 1024 else { throw Failure.storageLimit }
+                try database.execute(sql: """
+                    INSERT INTO preference_projection(key,value,sequence,intent_id,generation,disposition) VALUES(?,?,?,?,?,?)
+                    ON CONFLICT(key) DO UPDATE SET value=excluded.value,sequence=excluded.sequence,
+                        intent_id=excluded.intent_id,generation=excluded.generation,disposition=excluded.disposition
+                    """, arguments: [item.key.rawValue, value, intent.position.sequence, id,
+                        intent.context.generation.uuidString.lowercased(), intent.disposition.rawValue])
+            }
+            let profileRevision = revisions.first
+            let configRevision = revisions.count == 2 ? revisions[1] : nil
+            try database.execute(sql: "UPDATE preference_intent SET profile_sequence=?,config_sequence=? WHERE sequence=?",
+                arguments: [profileRevision, configRevision, intent.position.sequence])
+            try database.execute(sql: "UPDATE preference_state SET sequence=?,last_id=? WHERE singleton=1", arguments: [intent.position.sequence, id])
+            at?(.projectionWritten)
+            at?(.beforeCommit)
+            try Task.checkCancellation()
+            try checkPreferenceContext(intent.context)
+            guard allowing() else { throw Failure.held }
+            return ScoringPreferenceAdmission(position: intent.position, profileMutationID: intent.profileMutationID,
+                configMutationID: intent.configMutationID, profileClientRevision: profileRevision, configClientRevision: configRevision)
+        }
+        at?(.afterCommit)
+        return result
+    }
+
+    private func preferenceAdmission(_ row: Row) throws -> ScoringPreferenceAdmission {
+        let intent = try ScoringPreferenceIntent(encoded: row["body"])
+        guard intent.context.scope == scope, intent.position.sequence == (row["sequence"] as Int64),
+              intent.id.uuidString.lowercased() == (row["id"] as String) else { throw Failure.invalidInput }
+        return .init(position: intent.position, profileMutationID: intent.profileMutationID, configMutationID: intent.configMutationID,
+            profileClientRevision: row["profile_sequence"], configClientRevision: row["config_sequence"])
+    }
+
+    func committedPreferenceProjection() throws -> ScoringPreferenceProjection {
+        try checkPreferenceContext()
+        return try db.read { database in
+            let position = try Self.preferencePosition(database)
+            let rows = try Row.fetchAll(database, sql: "SELECT * FROM preference_projection ORDER BY key")
+            guard rows.count <= ScoringPreferenceKey.allCases.count else { throw Failure.storageLimit }
+            let entries = try rows.map { row -> ScoringPreferenceProjection.Entry in
+                guard let key = ScoringPreferenceKey(rawValue: row["key"]),
+                      let id = UUID(uuidString: row["intent_id"]), let generation = UUID(uuidString: row["generation"]),
+                      let disposition = ScoringPreferenceIntent.Disposition(rawValue: row["disposition"]) else { throw Failure.invalidInput }
+                let sequence: Int64 = row["sequence"]
+                let bytes: Data = row["value"]
+                guard sequence > 0, sequence <= position.sequence, bytes.count <= 1024,
+                      sequence != position.sequence || id == position.id else { throw Failure.invalidInput }
+                let value = try JSONDecoder().decode(ScoringPreferenceValue.self, from: bytes)
+                try value.validate(for: key)
+                return .init(key: key, value: value, position: .init(sequence: sequence, id: id), originGeneration: generation, disposition: disposition)
+            }
+            return .init(scope: scope, position: position, entries: entries)
+        }
+    }
+
+    /// Only terminal children (exact settlement or explicitly resolved and settled) permit removal.
+    /// preference_state never moves backwards; a removed old position is permanently non-admissible.
+    @discardableResult
+    func compactPreferenceIntents(limit: Int = 128) throws -> Int {
+        try checkPreferenceContext()
+        return try db.write { database in
+            let rows = try Row.fetchAll(database, sql: """
+                SELECT sequence FROM preference_intent p WHERE
+                  (profile_id IS NULL OR profile_settled=1 OR EXISTS(SELECT 1 FROM input_resolution r WHERE r.id=p.profile_id AND r.settled_revision IS NOT NULL))
+                  AND (config_id IS NULL OR config_settled=1 OR EXISTS(SELECT 1 FROM input_resolution r WHERE r.id=p.config_id AND r.settled_revision IS NOT NULL))
+                  AND NOT EXISTS(SELECT 1 FROM input_change c WHERE c.id=p.profile_id OR c.id=p.config_id)
+                ORDER BY sequence LIMIT ?
+                """, arguments: [max(1, min(128, limit))])
+            for row in rows { try database.execute(sql: "DELETE FROM preference_intent WHERE sequence=?", arguments: [row["sequence"] as Int64]) }
+            try checkPreferenceContext()
+            return rows.count
+        }
     }
 
     /// The durable origin is committed with its mutation. Retrying a cross-journal relay cannot
@@ -367,12 +610,21 @@ actor ScoringInputJournal {
 
     /// The four immutable overflow denials have their own count and payload budget. Keeping
     /// their allocation through origin retirement also bounds accepted/resolved control debt.
-    private func ordinaryPendingFits(_ additionalBytes: Int, database: Database) throws -> Bool {
+    // Reserved within the ordinary 16 MiB ceiling, including after intent compaction. Value bytes
+    // are capped at 1024/key; 256/key plus 128 covers fixed projection/head metadata.
+    static let preferenceProjectionBudget = ScoringPreferenceKey.allCases.count * (1024 + 256) + 128
+
+    private func ordinaryPendingFits(_ additionalBytes: Int, additionalCount: Int = 1,
+                                     includingPreferenceProjection: Bool = false, database: Database) throws -> Bool {
         let usage = try Row.fetchOne(database, sql: """
             SELECT COUNT(*) AS count,COALESCE(SUM(length(payload)),0) AS bytes FROM input_change p
             WHERE NOT EXISTS(SELECT 1 FROM input_control c WHERE c.origin_id=p.id)
             """)!
-        return (usage["count"] as Int) < 4096 && (usage["bytes"] as Int) + additionalBytes <= 16 * 1_048_576
+        let preferenceBytes = try Int.fetchOne(database, sql: "SELECT COALESCE(SUM(byte_count),0) FROM preference_intent") ?? 0
+        let hasProjection = try Self.preferencePosition(database).sequence > 0
+        let projectionBytes = includingPreferenceProjection || hasProjection ? Self.preferenceProjectionBudget : 0
+        return additionalBytes >= 0 && additionalCount >= 0 && (usage["count"] as Int) + additionalCount <= 4096
+            && (usage["bytes"] as Int) + preferenceBytes + projectionBytes + additionalBytes <= 16 * 1_048_576
     }
 
     private func preservingSleepDay(_ change: ScoringInputChange, database: Database) throws -> ScoringInputChange {
@@ -483,6 +735,8 @@ actor ScoringInputJournal {
                 arguments: [receipt.revision, pending.id])
             try database.execute(sql: "UPDATE input_origin SET receipt=? WHERE mutation_id=?",
                 arguments: [try JSONEncoder().encode(receipt), pending.id])
+            try database.execute(sql: "UPDATE preference_intent SET profile_settled=1 WHERE profile_id=?", arguments: [pending.id])
+            try database.execute(sql: "UPDATE preference_intent SET config_settled=1 WHERE config_id=?", arguments: [pending.id])
             try database.execute(sql: "DELETE FROM input_change WHERE sequence=?", arguments: [pending.sequence])
             beforeCommit?()
         }
