@@ -1689,6 +1689,7 @@ final class AppModel: ObservableObject {
     }
 
     private func handleWristChange(_ worn: Bool) {
+        ble.wristStateDidChange()
         if worn {
             if !behavior.wristOnShortcut.isEmpty { MacActions.runShortcut(behavior.wristOnShortcut) }
         } else {
