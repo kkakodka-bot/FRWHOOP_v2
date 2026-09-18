@@ -5,6 +5,7 @@ import com.frwhoop.scoring.db.EngineIngestWriter
 import com.frwhoop.scoring.db.LeaseHeartbeat
 import com.frwhoop.scoring.db.ScoreInputProvider
 import com.frwhoop.scoring.db.ScoringWorkQueue
+import com.frwhoop.scoring.db.HistoryCheckpointReader
 import com.frwhoop.scoring.derived.SnapshotArchiveWorker
 import com.frwhoop.scoring.health.HeartbeatReporter
 import org.slf4j.LoggerFactory
@@ -50,9 +51,12 @@ class ScoringPoller(
         val started = System.nanoTime()
         try {
             LeaseHeartbeat(queue.claimLease) { queue.renew(item) }.use { lease ->
-                val data = inputs.loadDay(item.userId, item.day, item.deviceId)
+                val data = (if(item.historyGeneration == null) inputs.loadDay(item.userId, item.day, item.deviceId)
+                    else inputs.loadHistoricalDay(item.userId,item.day,item.deviceId))
                     ?: error("device_or_profile_missing")
-                val bundle = scorer.score(data, item.algorithmVersion)
+                val history = if(item.historyGeneration == null) null else
+                    HistoricalStateMachine.prepare(data,HistoryCheckpointReader(queue.db).load(item))
+                val bundle = scorer.score(data, item.algorithmVersion,history)
                 lease.requireValid()
                 val revision = writer.write(item, bundle, (System.nanoTime()-started)/1_000_000)
                 if (revision == null) queue.markFailed(item, "input_revision_changed")

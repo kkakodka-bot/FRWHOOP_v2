@@ -4,6 +4,7 @@ import com.frwhoop.scoring.db.EngineIngestWriter
 import com.frwhoop.scoring.db.PostgresClient
 import com.frwhoop.scoring.db.ScoringWorkQueue
 import com.frwhoop.scoring.db.SignalSampleReader
+import com.frwhoop.scoring.db.AuxiliaryObjectReader
 import com.frwhoop.scoring.derived.SnapshotArchiveWorker
 import com.frwhoop.scoring.b2.B2ObjectStore
 import com.frwhoop.scoring.health.HeartbeatReporter
@@ -17,15 +18,17 @@ private val log = LoggerFactory.getLogger("ScoringApplication")
 fun main(args: Array<String>) {
     val config = ScoringConfig.fromEnv()
     val db = PostgresClient(config.databaseUrl)
-    val reader = SignalSampleReader(db)
+    val objectStore = config.b2Config?.let(::B2ObjectStore)
+    val reader = SignalSampleReader(db,AuxiliaryObjectReader(objectStore?.let { store ->
+        B2ObjectStore.ReadClient { bucket,key,maxBytes -> store.readObject(bucket,key,maxBytes) }
+    }))
     val queue = ScoringWorkQueue(db, config.algorithmVersion)
     val scorer = DayScorer()
     val writer = EngineIngestWriter(queue)
     val derivedWriter = config.b2Config?.let {
-        val objectStore = B2ObjectStore(it)
         SnapshotArchiveWorker(db, object : B2ObjectStore.PutClient {
             override fun putObject(key: String, body: ByteArray, contentType: String) =
-                objectStore.putObject(key, body, contentType)
+                requireNotNull(objectStore).putObject(key, body, contentType)
         }, it.bucket, it.derivedRetentionDays)
     }
     if (derivedWriter == null) {

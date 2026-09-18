@@ -2,6 +2,8 @@ package com.frwhoop.scoring
 
 import com.frwhoop.scoring.db.EngineIngestWriter
 import com.frwhoop.scoring.scoring.ServerScoreBundle
+import com.frwhoop.scoring.scoring.SleepBounds
+import com.frwhoop.scoring.scoring.SleepIdentity
 import com.noop.analytics.DayResult
 import com.noop.analytics.DetectedSleep
 import com.noop.analytics.StageSegment
@@ -13,6 +15,33 @@ import org.junit.Test
 import java.util.UUID
 
 class EngineIngestWriterTest {
+    @Test fun repeatedBoundsEditsKeepOriginalIdentityAcrossWakeDayAndAlgorithmChanges() {
+        val start = java.time.Instant.parse("2026-09-15T00:00:00Z").epochSecond
+        val user = UUID.randomUUID()
+        val identity = SleepIdentity.detected(user, "device", start, start + 8 * 3600)
+        fun snapshot(adjustment: Long, day: String, algorithm: String): org.json.JSONObject {
+            val s = DetectedSleep(start + adjustment, start + 8 * 3600 + adjustment, 0.9, emptyList(), null, null)
+            val result = DayResult(DailyMetric(deviceId="device",day=day), listOf(s), emptyList(), null, null)
+            val bundle = ServerScoreBundle(user, day, "device", algorithm, result,
+                dataThrough=s.end, sleepIdentities=mapOf(SleepBounds(s.start,s.end) to identity))
+            return EngineIngestWriter.buildSnapshot(bundle).getJSONArray("sleep").getJSONObject(0)
+        }
+        val original = snapshot(0,"2026-09-15","version-a")
+        val first = snapshot(1800,"2026-09-15","version-a")
+        val second = snapshot(86400,"2026-09-16","version-b")
+        for (s in listOf(original, first, second)) {
+            assertEquals(identity.id, s.getString("id"))
+            assertEquals(identity.editEntity, s.getString("editEntity"))
+            assertEquals(start, s.getLong("originalStart"))
+            assertEquals(start+8*3600, s.getLong("originalEnd"))
+        }
+        assertFalse(first.getString("start_at") == second.getString("start_at"))
+        assertFalse(identity.id == SleepIdentity.detected(UUID.randomUUID(),"device",start,start+8*3600).id)
+        assertFalse(identity.id == SleepIdentity.detected(user,"another-device",start,start+8*3600).id)
+        // A re-detected end moving does not redefine the original-start key.
+        assertEquals(identity.id, SleepIdentity.detected(user,"device",start,start+9*3600).id)
+    }
+
     @Test fun snapshotHasStableSessionIdentityAndCompleteNonnegativeStageAccounting() {
         val start=java.time.Instant.parse("2026-09-15T00:00:00Z").epochSecond
         val result=DayResult(
