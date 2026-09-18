@@ -60,7 +60,7 @@ final class WholeDaySwiftParityExporterTests: XCTestCase {
             try writeCorpus(corpus, target: target)
         } else {
             let directory = repository.appendingPathComponent("Tests/Fixtures/w4-whole-day-swift-v1")
-            let manifest = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: directory.appendingPathComponent("manifest.json"))) as? [String: Any])
+            let manifest = try WholeDaySwiftHistoricalProvenance.verify(.v1, repository: repository)
             let entries = try XCTUnwrap(manifest["cases"] as? [[String: Any]])
             XCTAssertEqual(entries.compactMap { $0["id"] as? String }, corpus.map(\.0))
             for (id, actual) in corpus {
@@ -69,10 +69,6 @@ final class WholeDaySwiftParityExporterTests: XCTestCase {
                 let expected = try Data(contentsOf: directory.appendingPathComponent("\(id).json"))
                 XCTAssertEqual(Exporter.digest(expected), entry["sha256"] as? String, id)
                 XCTAssertEqual(actual, expected, "actual Swift output drift: \(id)")
-            }
-            let hashes = try XCTUnwrap(manifest["sourceHashes"] as? [String: String])
-            for (path, hash) in hashes {
-                XCTAssertEqual(Exporter.digest(try Data(contentsOf: repository.appendingPathComponent(path))), hash, "source drift: \(path)")
             }
         }
     }
@@ -116,6 +112,14 @@ final class WholeDaySwiftParityExporterTests: XCTestCase {
         XCTAssertEqual(after, ["rr-1", "rr-2"])
     }
 
+    func testWriterRefusesAnExistingHistoricalCorpusWithoutChangingManifest() throws {
+        let output = repository.appendingPathComponent("Tests/Fixtures/w4-whole-day-swift-v1")
+        let manifest = output.appendingPathComponent("manifest.json")
+        let before = try Data(contentsOf: manifest)
+        XCTAssertThrowsError(try writeCorpus([], target: output.path))
+        XCTAssertEqual(try Data(contentsOf: manifest), before)
+    }
+
     private var repository: URL {
         var root = URL(fileURLWithPath: #filePath)
         for _ in 0..<5 { root.deleteLastPathComponent() }
@@ -125,7 +129,8 @@ final class WholeDaySwiftParityExporterTests: XCTestCase {
     private func writeCorpus(_ corpus: [(String, Data)], target: String) throws {
         typealias Exporter = WholeDaySwiftParityExporter
         let output = URL(fileURLWithPath: target, isDirectory: true).standardizedFileURL
-        guard output.lastPathComponent == "w4-whole-day-swift-v1" else { throw Exporter.Failure.unsafeOutput }
+        guard output.lastPathComponent == "w4-whole-day-swift-v1",
+              !FileManager.default.fileExists(atPath: output.path) else { throw Exporter.Failure.unsafeOutput }
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
         guard output.resolvingSymlinksInPath() == output,
               try output.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink != true,
@@ -158,13 +163,13 @@ final class WholeDaySwiftParityExporterTests: XCTestCase {
         for (id, data) in corpus {
             let file = output.appendingPathComponent("\(id).json")
             guard (try? file.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) != true else { throw Exporter.Failure.unsafeOutput }
-            try data.write(to: file, options: .atomic)
+            try data.write(to: file, options: .withoutOverwriting)
             cases.append(["id": id, "file": file.lastPathComponent, "sha256": Exporter.digest(data), "mode": "kernel_calendar"])
         }
         let manifest: [String: Any] = ["schemaVersion": 1, "producer": "actual-swift", "recipe": "w4-whole-day-v1",
             "sourceRevision": revision, "sourceHashes": hashes, "cases": cases]
         let manifestURL = output.appendingPathComponent("manifest.json")
         guard (try? manifestURL.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) != true else { throw Exporter.Failure.unsafeOutput }
-        try Exporter.bytes(manifest).write(to: manifestURL, options: .atomic)
+        try Exporter.bytes(manifest).write(to: manifestURL, options: .withoutOverwriting)
     }
 }

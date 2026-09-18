@@ -86,11 +86,10 @@ final class WholeDaySwiftV2CorpusTests: XCTestCase {
         if let target = ProcessInfo.processInfo.environment["W4_SWIFT_V2_EXPORT_DIR"] {
             try Corpus.write(cases, target: target, sourceHashes: sourceHashes)
         } else {
-            let manifest = try object(Data(contentsOf: Corpus.directory.appendingPathComponent("manifest.json")))
+            let manifest = try WholeDaySwiftHistoricalProvenance.verify(.v2, repository: Corpus.repository)
             XCTAssertEqual(manifest["schemaVersion"] as? Int, 1)
             XCTAssertEqual(manifest["recipe"] as? String, "w4-whole-day-v1")
             XCTAssertEqual(manifest["producer"] as? String, "actual-swift")
-            XCTAssertEqual(manifest["sourceHashes"] as? [String: String], sourceHashes)
             let entries = try XCTUnwrap(manifest["cases"] as? [[String: Any]])
             XCTAssertEqual(entries.compactMap { $0["id"] as? String }, cases.map(\.0))
             for (id, bytes) in cases {
