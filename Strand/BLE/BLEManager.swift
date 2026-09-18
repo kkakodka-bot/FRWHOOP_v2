@@ -1023,6 +1023,14 @@ public final class BLEManager: NSObject, ObservableObject {
     /// Multi-WHOOP Add-a-WHOOP wizard surface: straps seen while `isPresentingScan` is true, WITHOUT
     /// auto-connecting. Cleared at the start of each `scanForWhoops()`. Empty/unused on the default path.
     @Published public private(set) var discoveredWhoops: [(uuid: String, name: String, rssi: Int)] = []
+    let onboardingSetup = WhoopOnboardingSetup()
+    @Published private(set) var onboardingScanIssue: String?
+    private var onboardingDiscoveryRequested = false
+    private var onboardingTimer: Timer?
+    private var onboardingDeadline = Date.distantPast
+    private var onboardingEraseWritePending = false
+    private var onboardingVerification: EmptyHistoryVerification?
+    private var onboardingVerificationRequested = false
     /// Peripheral captured during `willRestoreState`; cleared in `didConnect`.
     /// Non-nil signals that `centralManagerDidUpdateState` should reconnect this
     /// specific peripheral rather than starting a fresh scan.
@@ -1838,6 +1846,10 @@ public final class BLEManager: NSObject, ObservableObject {
     }
 
     private func connectCore(model: WhoopModel) {
+        guard onboardingSetup.mayConnect else { return }
+        if onboardingSetup.required, let id = onboardingSetup.selectedID {
+            setPreferredPeripheral(id)
+        }
         intentionalDisconnect = false
         // Connection test mode: stamp when this connect attempt began so didConnect can report the connect
         // latency. A plain Date() assignment, no behaviour change; only read behind the .connection gate.
@@ -2140,6 +2152,8 @@ public final class BLEManager: NSObject, ObservableObject {
     /// string clears the pin rather than wedging the scan. Only `didDiscover` reads it; setting it
     /// does NOT start/stop/redirect an in-flight connection on its own.
     public func setPreferredPeripheral(_ uuidString: String?) {
+        if onboardingSetup.required, let selected = onboardingSetup.selectedID,
+           onboardingSetup.phase != .chooseDevice, uuidString != selected { return }
         let resolved = uuidString.flatMap { UUID(uuidString: $0) }   // nil for unparseable → clears the pin
         // A genuinely NEW pin starts the #52 refusal streak clean — the old streak belonged to the strap we
         // were pinned to before, not this one. Re-applying the SAME pin (the common no-op when the active
@@ -2252,6 +2266,7 @@ public final class BLEManager: NSObject, ObservableObject {
     /// says which path tried. Logged only on the transition into blocking, so a rotation timer cannot
     /// flood the log.
     private func whoopConnectAllowed(_ reason: String) -> Bool {
+        guard onboardingSetup.mayConnect else { return false }
         if whoopIsActiveDevice { return true }
         // The flag is a CACHE of a registry fact, and the registry is the authority. Re-validate before
         // refusing, so the gate can never latch: it is set from the coordinator's stop/start closures and
@@ -2326,10 +2341,167 @@ public final class BLEManager: NSObject, ObservableObject {
     /// End the Add-a-WHOOP present-scan: stop scanning and clear `isPresentingScan` so `didDiscover`
     /// returns to its normal auto-connect behaviour. Safe to call when not presenting (idempotent).
     public func stopWhoopScan() {
+        onboardingDiscoveryRequested = false
         guard isPresentingScan else { return }
         isPresentingScan = false
         central.stopScan()
         log("Add-a-WHOOP scan: stopped")
+    }
+
+    /// First-run discovery never calls connect(), even briefly: the user must pick
+    /// a strap and confirm its printed serial before the encrypted pairing starts.
+    @discardableResult
+    func scanForOnboarding(model: WhoopModel) -> Bool {
+        guard onboardingSetup.required, !onboardingSetup.busy else { return false }
+        disconnect()
+        selectedModel = model
+        UserDefaults.standard.set(model.rawValue, forKey: "selectedWhoopModel")
+        onboardingSetup.chooseAnotherDevice()
+        onboardingDiscoveryRequested = true
+        onboardingScanIssue = onboardingBluetoothIssue
+        guard central.state == .poweredOn else { return false }
+        scanForWhoops()
+        return true
+    }
+
+    private var onboardingBluetoothIssue: String? {
+        switch central.state {
+        case .poweredOn: return nil
+        case .poweredOff: return "Bluetooth is off. Turn it on to find your WHOOP."
+        case .unauthorized: return "Allow Bluetooth for NARA in Settings so it can find your WHOOP."
+        case .unsupported: return "Bluetooth Low Energy is unavailable on this device."
+        default: return "Waiting for Bluetooth to become available…"
+        }
+    }
+
+    func pairForOnboarding(id: String, name: String, serialConfirmed: Bool) {
+        guard onboardingSetup.select(id: id, name: name, serialConfirmed: serialConfirmed) else { return }
+        startOnboardingConnection()
+    }
+
+    func retryOnboarding(eraseAgain: Bool = false) {
+        onboardingSetup.retry(eraseAgain: eraseAgain)
+        guard onboardingSetup.phase == .pairing else { return }
+        startOnboardingConnection()
+    }
+
+    private func startOnboardingConnection() {
+        stopWhoopScan()
+        onboardingVerification = nil
+        onboardingVerificationRequested = false
+        onboardingEraseWritePending = false
+        onboardingDeadline = Date().addingTimeInterval(90)
+        onboardingTimer?.invalidate()
+        onboardingTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.advanceOnboardingConnection() }
+        }
+        connect(model: .persisted)
+    }
+
+    private func advanceOnboardingConnection() {
+        guard onboardingSetup.busy else { onboardingTimer?.invalidate(); return }
+        guard Date() < onboardingDeadline else {
+            failOnboarding("Setup timed out. Keep your WHOOP charged and close by. If it has not paired, tap the top repeatedly until the side light flashes blue, then retry and tap Pair on your phone.")
+            return
+        }
+        guard let p = peripheral, p.identifier.uuidString == onboardingSetup.selectedID,
+              p.state == .connected, state.connected, state.encryptedBond, didBond,
+              connectHandshakeDone, commandChannelReady,
+              confirmedCommandWritesOutstanding == 0 else { return }
+        let notificationsReady = selectedModel.deviceFamily == .whoop5
+            ? Self.whoop5NotifyChars.prefix(3).allSatisfy { uuid in
+                whoop5NotifyCharacteristics.contains { $0.uuid == uuid && $0.isNotifying }
+            }
+            : cmdNotifyConfirmedActive && dataNotifyCharacteristic?.isNotifying == true
+                && eventNotifyCharacteristic?.isNotifying == true
+        guard notificationsReady else { return }
+        if let action = onboardingSetup.secureLinkReady(peripheralID: p.identifier.uuidString,
+                                                       encrypted: state.encryptedBond) {
+            onboardingDeadline = Date().addingTimeInterval(45)
+            switch action {
+            case .erase:
+                // Documented FORCE_TRIM whole-history sentinel, docs/PROTOCOL.md §6.
+                // Deliberately absent from WhoopCommand and its generic command menu.
+                onboardingEraseWritePending = true
+                writeOnboardingCommand(25, payload: Array(repeating: 0xFE, count: 8), confirmed: true)
+            case .verify:
+                requestOnboardingVerification()
+            }
+        }
+        if onboardingSetup.phase == .verifying, !onboardingVerificationRequested {
+            requestOnboardingVerification()
+        }
+    }
+
+    private func requestOnboardingVerification() {
+        guard !onboardingVerificationRequested, onboardingSetup.phase == .verifying else { return }
+        onboardingVerification = EmptyHistoryVerification()
+        onboardingVerificationRequested = true
+        onboardingDeadline = Date().addingTimeInterval(45)
+        writeOnboardingCommand(22, payload: [0], confirmed: false)
+    }
+
+    private func writeOnboardingCommand(_ opcode: UInt8, payload: [UInt8], confirmed: Bool) {
+        guard onboardingSetup.permitsWrite(opcode: opcode, payload: payload),
+              let p = peripheral, p.identifier.uuidString == onboardingSetup.selectedID,
+              p.state == .connected, state.encryptedBond, let ch = cmdCharacteristic else {
+            failOnboarding("The paired connection was lost. Retry setup with your WHOOP nearby.")
+            return
+        }
+        seq &+= 1
+        let frame: [UInt8]
+        if selectedModel.deviceFamily == .whoop5 {
+            frame = puffinCommandFrame(cmd: opcode, seq: seq, payload: payload)
+        } else {
+            var harvard = frameFromPayload(payload, type: 35, seq: seq, cmd: opcode)
+            harvard[3] = crc8(Array(harvard[1...2]))
+            frame = harvard
+        }
+        p.writeValue(Data(frame), for: ch, type: confirmed ? .withResponse : .withoutResponse)
+    }
+
+    private func failOnboarding(_ message: String) {
+        onboardingSetup.fail(message)
+        onboardingTimer?.invalidate()
+        onboardingEraseWritePending = false
+        onboardingVerification = nil
+        onboardingVerificationRequested = false
+        // Cancelling the link also stops an unsuccessful verification offload. No
+        // history chunk is acknowledged after failure and no reconnect erases again.
+        disconnect()
+    }
+
+    /// Intercepts bytes before wire journals, raw exports, live parsing, or history
+    /// persistence. This also covers data arriving before a user has selected a strap.
+    private func consumeOnboardingValue(_ bytes: [UInt8], characteristic: CBCharacteristic,
+                                        peripheral: CBPeripheral) -> Bool {
+        guard !onboardingSetup.mayIngest(from: peripheral.identifier.uuidString) else { return false }
+        lastDataAt = Date()
+        let isProtocol = [Self.dataNotifyChar, Self.cmdNotifyChar, Self.eventNotifyChar]
+            .contains(characteristic.uuid) || Self.whoop5NotifyChars.contains(characteristic.uuid)
+        guard isProtocol else { return true }
+        guard onboardingSetup.phase == .verifying, onboardingVerificationRequested,
+              peripheral.identifier.uuidString == onboardingSetup.selectedID else { return true }
+        let outcomes = onboardingVerification?.receiveNotification(bytes,
+            characteristic: characteristic.uuid.uuidString, family: selectedModel.deviceFamily) ?? []
+        for outcome in outcomes {
+            switch outcome {
+            case .acknowledge(let payload):
+                writeOnboardingCommand(23, payload: payload, confirmed: false)
+            case .empty:
+                onboardingSetup.verifiedEmpty(peripheralID: peripheral.identifier.uuidString)
+                onboardingTimer?.invalidate()
+                onboardingVerification = nil
+                if onboardingSetup.phase == .ready {
+                    log("Onboarding: paired strap returned a verified empty history session")
+                    requestSync(.manual)
+                }
+            case .rejected:
+                failOnboarding("NARA could not confirm that storage is empty. No readings have been saved. Keep the WHOOP off your wrist, then tap Clear storage and retry.")
+            case .waiting: break
+            }
+        }
+        return true
     }
 
     /// Apply the raw-outbox retention policy (24h synced window / 50MB unsynced cap).
@@ -2969,6 +3141,13 @@ public final class BLEManager: NSObject, ObservableObject {
     @discardableResult
     public func send(_ command: WhoopCommand, payload: [UInt8] = [0x00],
                      writeType: CBCharacteristicWriteType = .withoutResponse) -> Bool {
+        // The reset owns the command lane. Normal reconnects, alarms, experimental
+        // sensors and history retries cannot race its verification request.
+        if onboardingSetup.required {
+            if onboardingSetup.phase == .resetting || onboardingSetup.phase == .verifying { return false }
+            if onboardingSetup.blocksData,
+               command == .sendHistoricalData || command == .historicalDataResult { return false }
+        }
         // #314 parity: CoreBluetooth already covers both Android defects here — this `p.state == .connected`
         // guard makes a write a no-op once the radio powers off (no DeadObjectException to crash on), and
         // centralManagerDidUpdateState publishes state.connected = false on .poweredOff, so the iOS/macOS UI
@@ -3288,6 +3467,7 @@ public final class BLEManager: NSObject, ObservableObject {
     private func beginBackfill(sessionID: UUID) async -> Bool {
         guard backfillStartingSessionID == sessionID,
               state.connected, state.bonded, !intentionalDisconnect else { return false }
+        guard !onboardingSetup.blocksData else { return false }
         guard sensorAcquisition.permitsHistoryStart else {
             log("Backfill: deferred while verified sensor capture or cleanup owns the command lane")
             return false
@@ -5623,6 +5803,7 @@ public final class BLEManager: NSObject, ObservableObject {
     func requestSync(_ trigger: BackfillTrigger) {
         guard backfillStartingSessionID == nil, backfillEndingSessionID == nil,
               !intentionalDisconnect else { return }
+        guard !onboardingSetup.blocksData else { return }
         guard BLEManager.shouldRunPeriodicBackfill(
             connected: state.connected, bonded: state.bonded, backfilling: backfilling) else { return }
         let now = Date().timeIntervalSince1970
@@ -6466,6 +6647,10 @@ extension BLEManager: @preconcurrency CBCentralManagerDelegate {
     }
 
     public func centralManagerDidUpdateState(_ central: CBCentralManager) {
+        if onboardingDiscoveryRequested {
+            onboardingScanIssue = onboardingBluetoothIssue
+            if central.state != .poweredOn { discoveredWhoops = [] }
+        }
         log("Central state: \(central.state.rawValue) (5 = poweredOn)")
         // #391: ANY state update means the cold-start settling window moved on — a pending
         // unauthorized-settle escalation is obsolete whether the new state is good news (poweredOn)
@@ -6527,6 +6712,10 @@ extension BLEManager: @preconcurrency CBCentralManagerDelegate {
         }
         // Bootstrap the async store once on first poweredOn (idempotent if already set).
         Task { @MainActor in await bootstrapStore() }
+        if onboardingDiscoveryRequested, onboardingSetup.phase == .chooseDevice {
+            scanForWhoops()
+            return
+        }
         if let p = restoredPeripheral {
             log("poweredOn with restored peripheral — reconnecting \(p.identifier)")
             if p.state != .connected {
@@ -6614,6 +6803,9 @@ extension BLEManager: @preconcurrency CBCentralManagerDelegate {
             }
             return
         }
+        // A discovery callback already queued before stopScan must not connect
+        // after the setup screen has returned to device selection.
+        guard onboardingSetup.mayConnect else { return }
         // Multi-WHOOP preferred-peripheral filter: when the app has pinned a specific strap, ignore any
         // OTHER discovered WHOOP and keep scanning. When `preferredPeripheralUUID == nil` (the single-
         // WHOOP default) this guard is skipped and the original "connect to the first discovered" path
@@ -6633,6 +6825,11 @@ extension BLEManager: @preconcurrency CBCentralManagerDelegate {
     }
 
     public func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
+        if onboardingSetup.required,
+           (!onboardingSetup.mayConnect || onboardingSetup.selectedID != peripheral.identifier.uuidString) {
+            central.cancelPeripheralConnection(peripheral)
+            return
+        }
         cancelScanFallback()
         cancelPendingConnectProbe()   // #730: the connect resolved; no pending-connect log needed
         failedConnectAttempts = 0   // a successful connect clears the reconnect backoff (#414)
@@ -6765,6 +6962,9 @@ extension BLEManager: @preconcurrency CBCentralManagerDelegate {
                                error: Error?) {
         invalidateBackfillDelivery()
         confirmedCommandWriteQueue.removeAll()
+        if onboardingSetup.busy, peripheral.identifier.uuidString == onboardingSetup.selectedID {
+            failOnboarding("The connection was interrupted. Keep your WHOOP nearby and retry to finish setup.")
+        }
         Task { @MainActor in await collector?.flush() }
         // Reboot trail: if a user reboot is in flight, this drop is the strap acting on it. Log how long
         // the link stayed up (a real reboot drops within ~1-2 s) and cancel the no-disconnect watchdog. The
@@ -7138,10 +7338,22 @@ extension BLEManager: @preconcurrency CBCentralManagerDelegate {
     /// notifications are re-routed without user interaction.
     public func centralManager(_ central: CBCentralManager,
                                willRestoreState dict: [String: Any]) {
+        if onboardingSetup.required, onboardingSetup.phase != .ready {
+            // A restored peripheral is not fresh evidence that the user approved
+            // pairing. Resume only through the setup screen's explicit retry.
+            for p in dict[CBCentralManagerRestoredStatePeripheralsKey] as? [CBPeripheral] ?? [] {
+                central.cancelPeripheralConnection(p)
+            }
+            return
+        }
         launchedViaStateRestoration = true
         guard let peripherals = dict[CBCentralManagerRestoredStatePeripheralsKey] as? [CBPeripheral],
               let p = peripherals.first else {
             log("Restore: no peripherals in state dict")
+            return
+        }
+        if onboardingSetup.required, onboardingSetup.selectedID != p.identifier.uuidString {
+            central.cancelPeripheralConnection(p)
             return
         }
         self.peripheral = p
@@ -7224,6 +7436,7 @@ extension BLEManager: @preconcurrency CBPeripheralDelegate {
     }
 
     public func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
+        guard peripheral.identifier == self.peripheral?.identifier else { return }
         if let error {
             log("Service discovery failed: \(error.localizedDescription)")
             return
@@ -7273,6 +7486,7 @@ extension BLEManager: @preconcurrency CBPeripheralDelegate {
     public func peripheral(_ peripheral: CBPeripheral,
                            didDiscoverCharacteristicsFor service: CBService,
                            error: Error?) {
+        guard peripheral.identifier == self.peripheral?.identifier else { return }
         if let error {
             log("Characteristic discovery failed for \(service.uuid): \(error.localizedDescription)")
             return
@@ -7410,7 +7624,20 @@ extension BLEManager: @preconcurrency CBPeripheralDelegate {
     public func peripheral(_ peripheral: CBPeripheral,
                            didWriteValueFor characteristic: CBCharacteristic,
                            error: Error?) {
-        guard peripheral === self.peripheral, characteristic === cmdCharacteristic else { return }
+        guard peripheral.identifier == self.peripheral?.identifier else { return }
+        if onboardingEraseWritePending, peripheral.identifier.uuidString == onboardingSetup.selectedID,
+           characteristic.uuid == cmdCharacteristic?.uuid {
+            onboardingEraseWritePending = false
+            if error != nil {
+                failOnboarding("Your WHOOP did not accept the reset. Keep it nearby and tap Clear storage and retry.")
+            } else {
+                onboardingSetup.eraseAcknowledged()
+                // Only the subsequent empty history session can confirm the erase.
+                requestOnboardingVerification()
+            }
+            return
+        }
+        guard characteristic.uuid == cmdCharacteristic?.uuid else { return }
         let completedWrite = confirmedCommandWriteQueue.isEmpty ? nil : confirmedCommandWriteQueue.removeFirst()
         if let completedWrite, completedWrite.sessionID != nil {
             if confirmedCommandWritesOutstanding > 0 { confirmedCommandWritesOutstanding -= 1 }
@@ -7899,6 +8126,8 @@ extension BLEManager: @preconcurrency CBPeripheralDelegate {
         }
         guard let data = characteristic.value else { return }
         let bytes = [UInt8](data)
+        guard peripheral.identifier == self.peripheral?.identifier else { return }
+        if consumeOnboardingValue(bytes, characteristic: characteristic, peripheral: peripheral) { return }
         // Level A is authoritative: persist the exact notification value before routing,
         // reassembly, packet classification, or any semantic decoder can touch it.
         guard captureSensorWireEvidence(bytes, characteristic: characteristic) else { return }
@@ -8185,6 +8414,15 @@ extension BLEManager: @preconcurrency CBPeripheralDelegate {
     public func peripheral(_ peripheral: CBPeripheral,
                            didUpdateNotificationStateFor characteristic: CBCharacteristic,
                            error: Error?) {
+        guard peripheral.identifier == self.peripheral?.identifier else { return }
+        if onboardingSetup.phase == .resetting || onboardingSetup.phase == .verifying {
+            let historyChannel = [Self.cmdNotifyChar, Self.eventNotifyChar, Self.dataNotifyChar]
+                .contains(characteristic.uuid) || Self.whoop5NotifyChars.prefix(3).contains(characteristic.uuid)
+            if historyChannel, error != nil || !characteristic.isNotifying {
+                failOnboarding("The history connection was interrupted. Keep your WHOOP nearby and retry the storage check.")
+                return
+            }
+        }
         if let error = error {
             log("Notify enable failed for \(characteristic.uuid): \(error.localizedDescription)")
         } else {
