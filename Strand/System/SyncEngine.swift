@@ -112,6 +112,7 @@ final class SyncEngine {
             durationMs: durationMs,
             note: note
         )
+        host.live.syncStatusRevision &+= 1
     }
 
     // MARK: - Stage runners
@@ -163,10 +164,20 @@ final class SyncEngine {
             }
         }
 
-        guard !RescoreBackgroundScheduler.isRescoreOwed else { return false }
         // A productive chunk can re-mark rescore while this pass is running. Compare-token settle then
         // fails and blocks exports, leaving the newer generation for the trailing/next wake.
-        return await settle(.rescore, token: token)
+        return await Self.settleRescoreWhenReady(intelligence: host.intelligence) {
+            await self.settle(.rescore, token: token)
+        }
+    }
+
+    /// Admission starts before a pass has read its fingerprint or stamped legacy debt. A busy caller
+    /// and a queued forced handoff must retain the SQLite job even while that legacy mark is absent.
+    static func settleRescoreWhenReady(intelligence: IntelligenceEngine,
+                                      settle: @MainActor () async -> Bool) async -> Bool {
+        guard !intelligence.rescoreInProgress,
+              !RescoreBackgroundScheduler.isRescoreOwed else { return false }
+        return await settle()
     }
 
     private func runCloudPush(token: String, host: AppModel) async -> Bool {
