@@ -72,6 +72,7 @@ enum CloudPushWorker {
                 }
             )
             accountTransport = try CloudAccountPushTransport(endpoint: endpoint, authorization: authorization)
+            accountTransport.base.requirePreparedSelections()
             transport = AccountFencedTransport(
                 transport: accountTransport,
                 admission: admission
@@ -115,8 +116,8 @@ enum CloudPushWorker {
                                              receiverStateID: capabilities.receiverStateId)
         let capturedSnapshot = CloudPushSnapshot(db: db, imuPushSource: binding.imuSource)
         let snapshot = AccountFencedSnapshot(source: capturedSnapshot, admission: admission)
-        let durableProgress: CloudPushProgressStore
-        let committer: CloudPushSourceCommitter
+        let coordinator: PushCoordinator
+        let preparedBlocked: Bool
         do {
             let runtime = try CloudPushBackgroundRuntime.current(for: initial)
             let makeCommitter: (CloudPushProgressStore) -> CloudPushSourceCommitter = { progress in
@@ -124,40 +125,58 @@ enum CloudPushWorker {
                     acknowledge: { try await capturedSnapshot.acknowledgeCommitted($0, scope: initial.scope) },
                     cleanup: { try await accountTransport.base.sourceCommitted(batchID: $0) },
                     didApply: { try admission.check(); try capturedSnapshot.sourceProgressApplied($0, scope: initial.scope) },
-                    didCleanup: { try admission.check(); try capturedSnapshot.sourceCleanupCompleted($0, scope: initial.scope) })
+                    didCleanup: { try admission.check(); try capturedSnapshot.sourceCleanupCompleted($0, scope: initial.scope) },
+                    cleanupPrepared: { try admission.check(); try await accountTransport.base.preparedSourceCommitted($0) },
+                    retirePrepared: { try admission.check(); try await accountTransport.base.retireSelection($0) })
             }
-            durableProgress = try await CloudPushProgressRecovery.recover(admission: admission,
+            let makeCoordinator: (CloudPushProgressStore, String) -> PushCoordinator = { durable, version in
+                let committer = makeCommitter(durable)
+                return PushCoordinator(source: snapshot, transport: transport,
+                    progress: AccountFencedProgress(progress: durable, admission: admission), sourceId: binding.sourceID,
+                    destinationStillCurrent: { (try? admission.check()) != nil }, receiptOwner: initial.scope,
+                    objectProtocolVersion: PushProtocol.isObjectVersion(version) ? version : PushProtocol.objectVersion,
+                    associateReceipt: { batch, rows, receipt in
+                        try admission.check()
+                        let id = try await accountTransport.base.preparedSelectionID(batchID: batch.batchId, sourceID: binding.sourceID)
+                        let saved = try await runtime.queue.preparedSelection(id, captured: initial)
+                        try await capturedSnapshot.associateReceipt(batch: batch, rows: rows, receipt: receipt, scope: initial.scope)
+                        try admission.check()
+                        try await durable.associate(batch: batch, rows: rows, receipt: receipt, prepared: saved)
+                    },
+                    associateInlineReceipt: { batch, receipt in
+                        try admission.check()
+                        let id = try await accountTransport.base.preparedSelectionID(batchID: batch.batchId, sourceID: binding.sourceID)
+                        let saved = try await runtime.queue.preparedSelection(id, captured: initial)
+                        try await durable.associateInline(batch: batch, receipt: receipt, prepared: saved)
+                    },
+                    commitSource: { value in
+                        try admission.check()
+                        guard let batchID = value.batchIDs.first else { throw CloudUploadError.invalidReceipt }
+                        let id = try await accountTransport.base.preparedSelectionID(batchID: batchID, sourceID: binding.sourceID)
+                        try await committer.commit(value, preparedSelectionID: id)
+                    },
+                    prepareSelection: { try admission.check(); try await accountTransport.base.prepareSelection($0, progressVersion: version) })
+            }
+            _ = try await CloudPushProgressRecovery.recover(admission: admission,
                 endpoint: endpoint.url, receiverStateID: capabilities.receiverStateId,
                 currentVersion: capabilities.protocolVersion, directory: runtime.progressDirectory,
                 committer: makeCommitter)
-            committer = makeCommitter(durableProgress)
+            preparedBlocked = try await CloudPushPreparedRecovery.recover(queue: runtime.queue, context: initial,
+                sourceID: binding.sourceID, endpoint: endpoint.url, receiverStateID: capabilities.receiverStateId,
+                directory: runtime.progressDirectory, coordinator: makeCoordinator)
+            // Recovery may have changed the current namespace through a separately opened actor.
+            // Reopen it before fresh selection rather than retaining a stale in-memory cursor.
+            let refreshed = try CloudPushProgressStore(namespace: namespace, directory: runtime.progressDirectory,
+                auxiliaryIdentityV2: capabilities.protocolVersion == PushProtocol.auxiliaryIdentityVersion)
+            coordinator = makeCoordinator(refreshed, capabilities.protocolVersion)
         } catch { traceOutcome = .failed; return .deferred }
-        let progress = AccountFencedProgress(progress: durableProgress, admission: admission)
-        let coordinator = PushCoordinator(
-            source: snapshot, transport: transport, progress: progress, sourceId: binding.sourceID,
-            destinationStillCurrent: { (try? admission.check()) != nil },
-            receiptOwner: initial.scope,
-            objectProtocolVersion: PushProtocol.isObjectVersion(capabilities.protocolVersion)
-                ? capabilities.protocolVersion : PushProtocol.objectVersion,
-            associateReceipt: { batch, rows, receipt in
-                try admission.check()
-                try await capturedSnapshot.associateReceipt(batch: batch, rows: rows, receipt: receipt, scope: initial.scope)
-                try admission.check()
-                try await durableProgress.associate(batch: batch, rows: rows, receipt: receipt)
-            },
-            associateInlineReceipt: { batch, receipt in
-                try admission.check()
-                try await durableProgress.associateInline(batch: batch, receipt: receipt)
-            },
-            commitSource: { try await committer.commit($0) }
-        )
         let run = await coordinator.pushKnownDevices(
             startDeviceIndex: CloudPushSettings.nextDeviceIndex(namespace: namespace),
             maxDevices: maxDevicesPerRun, capabilities: capabilities,
             binaryEnabled: CloudPushSettings.binaryObjectsEnabled
         )
         guard (try? admission.check()) != nil else { traceOutcome = .cancelled; return .deferred }
-        if !run.hasRetryableFailure {
+        if !run.hasRetryableFailure && !preparedBlocked {
             CloudPushSettings.saveNextDeviceIndex(namespace: namespace, index: run.nextDeviceIndex)
         }
         let more = CloudPushSettings.cycleNeedsAnotherPass(namespace: namespace) ||
@@ -165,7 +184,7 @@ enum CloudPushWorker {
         let cycleCompleted = run.nextDeviceIndex == 0
         CloudPushSettings.saveCycleNeedsAnotherPass(namespace: namespace, needed: cycleCompleted ? false : more)
 
-        if run.hasRetryableFailure {
+        if run.hasRetryableFailure || preparedBlocked {
             traceOutcome = .failed
             CloudPushSettings.recordScopedRun(context: initial, state: .retrying,
                 message: "Upload will retry.", batches: run.acceptedBatches, records: run.acceptedRecords)

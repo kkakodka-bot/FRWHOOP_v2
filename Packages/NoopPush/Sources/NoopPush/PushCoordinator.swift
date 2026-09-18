@@ -14,6 +14,7 @@ public struct PushCoordinator: Sendable {
     private let associateReceipt: (@Sendable (PushBinaryBatch, [PushBinaryRow], PushDurabilityReceipt) async throws -> Void)?
     private let associateInlineReceipt: (@Sendable (PushBatch, PushDurabilityReceipt) async throws -> Void)?
     private let commitSource: (@Sendable (PushSourceCommit) async throws -> Void)?
+    private let prepareSelection: (@Sendable (PushPreparedSelection) async throws -> Void)?
 
     public init(
         source: any PushSnapshotSource,
@@ -27,7 +28,8 @@ public struct PushCoordinator: Sendable {
         objectProtocolVersion: String = PushProtocol.objectVersion,
         associateReceipt: (@Sendable (PushBinaryBatch, [PushBinaryRow], PushDurabilityReceipt) async throws -> Void)? = nil,
         associateInlineReceipt: (@Sendable (PushBatch, PushDurabilityReceipt) async throws -> Void)? = nil,
-        commitSource: (@Sendable (PushSourceCommit) async throws -> Void)? = nil
+        commitSource: (@Sendable (PushSourceCommit) async throws -> Void)? = nil,
+        prepareSelection: (@Sendable (PushPreparedSelection) async throws -> Void)? = nil
     ) {
         self.source = source
         self.transport = transport
@@ -41,6 +43,7 @@ public struct PushCoordinator: Sendable {
         self.associateReceipt = associateReceipt
         self.associateInlineReceipt = associateInlineReceipt
         self.commitSource = commitSource
+        self.prepareSelection = prepareSelection
     }
 
     public func pushAppend(_ table: PushAppendTable, deviceId: String,
@@ -91,6 +94,13 @@ public struct PushCoordinator: Sendable {
             return .rejected(reason: PushFailure(code: .localData).safeCode, retryable: false, failure: PushFailure(code: .localData))
         }
 
+        if let prepareSelection {
+            do {
+                guard destinationStillCurrent() else { throw CancellationError() }
+                try await prepareSelection(.init(inline: [batch], commit: .init(kind: .append,
+                    table: table.wireName, deviceID: deviceId, batchIDs: [batch.batchId], cursor: batch.endCursor)))
+            } catch { return preparationFailure() }
+        }
         let accepted = await deliver(batch)
         guard case .accepted(let batchId, let recordCount, _, let batchCount) = accepted else { return accepted }
         guard let end = batch.endCursor else {
@@ -193,18 +203,25 @@ public struct PushCoordinator: Sendable {
             return .rejected(reason: PushFailure(code: .localData).safeCode, retryable: false, failure: PushFailure(code: .localData))
         }
 
+        let replacementId = batches.first?.replacementId ?? batches.first?.batchId ?? ""
+        let value = PushWindowProgress(window: fullWindow, batchId: replacementId, dayHashes: currentHashes)
+        let sourceCommit = PushSourceCommit(kind: .mutable, table: table.wireName, deviceID: deviceId,
+            batchIDs: batches.map(\.batchId), window: value)
+        if let prepareSelection {
+            do {
+                guard destinationStillCurrent() else { throw CancellationError() }
+                try await prepareSelection(.init(inline: batches, commit: sourceCommit))
+            } catch { return preparationFailure() }
+        }
         for batch in batches {
             let accepted = await deliver(batch)
             guard case .accepted = accepted else { return accepted }
         }
 
-        let replacementId = batches.first?.replacementId ?? batches.first?.batchId ?? ""
         do {
             guard destinationStillCurrent() else { throw CancellationError() }
-            let value = PushWindowProgress(window: fullWindow, batchId: replacementId, dayHashes: currentHashes)
             if let commitSource {
-                try await commitSource(.init(kind: .mutable, table: table.wireName, deviceID: deviceId,
-                                              batchIDs: batches.map(\.batchId), window: value))
+                try await commitSource(sourceCommit)
             } else { try await progress.saveWindow(table: table, deviceId: deviceId, progress: value) }
             return .accepted(
                 batchId: replacementId,
@@ -545,12 +562,43 @@ public struct PushCoordinator: Sendable {
         return .accepted(batchId: batch.batchId, recordCount: batch.sampleCount, hasMore: false)
     }
 
-    private func deliverObject(_ batch: PushBinaryBatch, rows: [PushBinaryRow], lane: PushObjectLane) async -> PushResult {
+    /// Replays the saved operation without consulting the current snapshot, calendar or compressor.
+    /// The application must use the selection's original progress namespace and hold its lane.
+    public func resumePrepared(_ selection: PushPreparedSelection, manifestOverride: PushObjectManifest? = nil) async -> PushResult {
+        guard destinationStillCurrent(), selection.sourceID == sourceId, let commitSource else { return preparationFailure() }
+        do {
+            var records = 0
+            if let object = try selection.restoredObject() {
+                let manifest = manifestOverride ?? object.manifest
+                guard manifest == object.manifest.replacingObjectId(manifest.objectId) else { return preparationFailure() }
+                let result = await deliverObject(object.batch, rows: object.rows, lane: object.lane, restoredManifest: manifest)
+                guard case .accepted = result else { return result }
+                records = object.batch.sampleCount
+            } else {
+                for batch in try selection.restoredInlineBatches() {
+                    let result = await deliver(batch)
+                    guard case .accepted = result else { return result }
+                    records += batch.recordCount
+                }
+            }
+            guard destinationStillCurrent() else { throw CancellationError() }
+            try await commitSource(selection.commit)
+            return .accepted(batchId: selection.commit.window?.batchId ?? selection.batchIDs[0],
+                recordCount: records, hasMore: false, batchCount: selection.batchIDs.count)
+        } catch { return preparationFailure() }
+    }
+
+    private func preparationFailure() -> PushResult {
+        .rejected(reason: PushFailure(code: .localDatabase).safeCode, retryable: true, failure: PushFailure(code: .localDatabase))
+    }
+
+    private func deliverObject(_ batch: PushBinaryBatch, rows: [PushBinaryRow], lane: PushObjectLane,
+                               restoredManifest: PushObjectManifest? = nil) async -> PushResult {
         guard destinationStillCurrent() else {
             return .rejected(reason: "cancelled", retryable: true, failure: nil)
         }
 
-        var manifest = PushObjectManifest(batch: batch)
+        var manifest = restoredManifest ?? PushObjectManifest(batch: batch)
         var uploaded = false
         var expectedKey: String? = nil
 
@@ -558,7 +606,7 @@ public struct PushCoordinator: Sendable {
         // longer matches the rebuilt object is stale (local data changed) and is dropped; a
         // matching one lets us skip straight to complete when the PUT already landed.
         do {
-            if let inFlight = try await progress.inFlightObject(table: batch.table, deviceId: batch.deviceId) {
+            if restoredManifest == nil, let inFlight = try await progress.inFlightObject(table: batch.table, deviceId: batch.deviceId) {
                 if inFlight.contentSha256 == manifest.contentSha256 {
                     manifest = manifest.replacingObjectId(inFlight.objectId)
                     uploaded = inFlight.uploaded
@@ -569,6 +617,16 @@ public struct PushCoordinator: Sendable {
             }
         } catch {
             return .rejected(reason: PushFailure(code: .localDatabase).safeCode, retryable: true, failure: PushFailure(code: .localDatabase))
+        }
+
+        if restoredManifest == nil, let prepareSelection {
+            let rawIDs = rows.compactMap { row -> String? in if case .rawBatch(let r) = row { return r.batchId }; return nil }
+            do {
+                guard destinationStillCurrent() else { throw CancellationError() }
+                try await prepareSelection(.init(binary: batch, rows: rows, manifest: manifest, lane: lane,
+                    commit: .init(kind: .binary, table: batch.wireName, deviceID: batch.deviceId,
+                        batchIDs: [batch.batchId], cursor: batch.endCursor, rawBatchIDs: rawIDs)))
+            } catch { return preparationFailure() }
         }
 
         if !uploaded {
@@ -763,10 +821,10 @@ public struct PushCoordinator: Sendable {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyy-MM-dd"
-        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.timeZone = calendar.timeZone
         while current <= end {
             days.append(formatter.string(from: current))
-            guard let next = Calendar(identifier: .gregorian).date(byAdding: .day, value: 1, to: current) else { break }
+            guard let next = calendar.date(byAdding: .day, value: 1, to: current) else { break }
             current = next
         }
         return days
@@ -776,8 +834,10 @@ public struct PushCoordinator: Sendable {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyy-MM-dd"
-        formatter.timeZone = TimeZone(secondsFromGMT: 0)
-        return formatter.date(from: day)
+        formatter.timeZone = calendar.timeZone
+        formatter.isLenient = false
+        guard let date = formatter.date(from: day), formatter.string(from: date) == day else { return nil }
+        return date
     }
 }
 

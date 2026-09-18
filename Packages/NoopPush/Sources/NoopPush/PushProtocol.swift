@@ -697,7 +697,9 @@ public enum PushProtocol {
         formatter.dateFormat = "yyyy-MM-dd"
         formatter.timeZone = TimeZone(secondsFromGMT: 0)
         guard let date = formatter.date(from: day) else { return nil }
-        guard let next = Calendar(identifier: .gregorian).date(byAdding: .day, value: 1, to: date) else { return nil }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        guard let next = calendar.date(byAdding: .day, value: 1, to: date) else { return nil }
         return formatter.string(from: next)
     }
 

@@ -13,6 +13,7 @@ struct CloudAccountPushTransport: PushTransport {
     init(endpoint: PushValidEndpoint, authorization: AuthorizedCloudSession) throws {
         try self.init(endpoint: endpoint, context: authorization.context, accessToken: authorization.accessToken,
                       session: CloudPushTransport.makeSession(), isCurrent: { CloudAuthClient.isCurrent($0) })
+        base.requirePreparedSelections()
     }
 
     init(endpoint: PushValidEndpoint, context: AccountSessionContext, accessToken: String,

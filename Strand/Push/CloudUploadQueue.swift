@@ -43,7 +43,8 @@ actor CloudUploadQueue {
          adapter: any CloudUploadSessionAdapter, authorize: @escaping Authorize,
          isCurrent: @escaping Current, policy: @escaping @Sendable () -> CloudUploadPolicy,
          control: @escaping @Sendable (URLRequest) async throws -> PushTransportResponse,
-         maximumBytes: Int = 1_073_741_824, now: @escaping @Sendable () -> Date = { Date() }) throws {
+         maximumBytes: Int = 1_073_741_824, now: @escaping @Sendable () -> Date = { Date() },
+         journalWriteObserver: (@Sendable (URL) throws -> Void)? = nil) throws {
         guard layout.scope == context.scope else { throw CloudUploadError.staleOwner }
         self.context = context
         self.adapter = adapter
@@ -52,9 +53,18 @@ actor CloudUploadQueue {
         self.policy = policy
         self.control = control
         self.now = now
-        journal = try CloudUploadJournal(directory: layout.uploadDirectory, maximumBytes: maximumBytes)
+        journal = try CloudUploadJournal(directory: layout.uploadDirectory, maximumBytes: maximumBytes, afterWrite: journalWriteObserver)
+        try journal.loadSelections(owner: context.scope)
         jobs = try journal.load()
         guard jobs.values.allSatisfy({ $0.owner == context.scope }) else { throw CloudUploadError.staleOwner }
+        for job in jobs.values {
+            if let id = job.preparedSelectionID {
+                guard let selection = journal.selections[id], let state = journal.continuations[id],
+                      try selection.jobIDs(state).contains(job.id), !job.acknowledged || state.sourceCommitted else {
+                    throw CloudUploadError.corruptJournal
+                }
+            }
+        }
     }
 
     private func check(_ captured: AccountSessionContext) throws {
@@ -65,17 +75,247 @@ actor CloudUploadQueue {
         AccountScope.digest("object-v1\u{0}\(endpoint)\u{0}\(receiverStateID)\u{0}\(objectID)")
     }
 
+    func prepareSelection(_ value: CloudPushPreparedSelection, captured: AccountSessionContext) throws {
+        try check(captured)
+        guard value.owner == context.scope else { throw CloudUploadError.staleOwner }
+        try journal.reserve(value, legacyJobs: jobs.values.filter { $0.preparedSelectionID == nil }.count)
+        guard let saved = journal.selections[value.id], var state = journal.continuations[value.id], !state.sourceCommitted else {
+            throw CloudUploadError.corruptJournal
+        }
+        if state.published {
+            // A conflict successor ID is durable before its body/metadata publication. Only that
+            // explicit second attempt can fill a missing job; missing original jobs stay retained.
+            if let object = try saved.selection.restoredObject(), state.objectIDs.count == 2,
+               let last = state.objectIDs.last,
+               jobs[saved.jobID(batchID: object.batch.batchId, representation: "object", objectID: last)] == nil {
+                try admitPreparedIntent(object.manifest.replacingObjectId(last), endpoint: saved.endpoint,
+                    receiverStateID: saved.receiverStateID, captured: captured)
+            }
+            try verifyPublished(saved, state: state); return
+        }
+        if let object = try saved.selection.restoredObject() {
+            for objectID in state.objectIDs {
+                let id = saved.jobID(batchID: object.batch.batchId, representation: "object", objectID: objectID)
+                var job = jobs[id] ?? preparedJob(saved, id: id, operation: .objectPut, headers: [:])
+                job.manifest = objectID == object.manifest.objectId ? saved.selection.objectIntentBytes
+                    : try object.manifest.replacingObjectId(objectID).encode()
+                job.objectID = objectID; job.batchID = object.batch.batchId; job.lanePath = object.lane.endpoint
+                try prepare(object.batch.payload, job: &job); try commit(job)
+            }
+        } else {
+            for (index, batch) in try saved.selection.restoredInlineBatches().enumerated() {
+                for representation in ["gzip", "identity"] {
+                    let id = saved.jobID(batchID: batch.batchId, representation: representation)
+                    var headers = ["Content-Type": "application/x-ndjson; charset=utf-8"]
+                    if representation == "gzip" { headers["Content-Encoding"] = "gzip" }
+                    var job = jobs[id] ?? preparedJob(saved, id: id, operation: .request, headers: headers)
+                    job.batchID = batch.batchId
+                    try prepare(representation == "gzip" ? saved.inlineGzip[index] : batch.body, job: &job)
+                    try commit(job)
+                }
+            }
+        }
+        state.published = true
+        try journal.saveContinuation(state)
+    }
+
+    private func verifyPublished(_ saved: CloudPushPreparedSelection, state: CloudPreparedContinuation) throws {
+        func verify(_ id: String, _ bytes: Data) throws {
+            guard let job = jobs[id], job.preparedSelectionID == saved.id, job.owner == saved.owner,
+                  job.endpoint == saved.endpoint, job.receiverStateID == saved.receiverStateID,
+                  job.payloadBytes == bytes.count, job.payloadSHA256 == CloudUploadJournal.digest(bytes) else { throw CloudUploadError.changedPayload }
+            try journal.verifyBody(job)
+        }
+        if let object = try saved.selection.restoredObject() {
+            for objectID in state.objectIDs { try verify(saved.jobID(batchID: object.batch.batchId, representation: "object", objectID: objectID), object.batch.payload) }
+        } else {
+            for (index, batch) in try saved.selection.restoredInlineBatches().enumerated() {
+                try verify(saved.jobID(batchID: batch.batchId, representation: "gzip"), saved.inlineGzip[index])
+                try verify(saved.jobID(batchID: batch.batchId, representation: "identity"), batch.body)
+            }
+        }
+    }
+
+    private func preparedJob(_ value: CloudPushPreparedSelection, id: String,
+                             operation: CloudUploadJob.Operation, headers: [String: String]) -> CloudUploadJob {
+        var job = CloudUploadJob(id: id, owner: context.scope, generation: context.generation,
+            endpoint: value.endpoint, deviceID: value.selection.deviceID, createdAt: now(), operation: operation,
+            method: operation == .objectPut ? "PUT" : "POST", headers: headers)
+        job.preparedSelectionID = value.id; job.deliveryAdmitted = false
+        job.localVersion = 2
+        job.receiverStateID = value.receiverStateID; job.correlation = value.correlation
+        return job
+    }
+
+    func preparedSelections(sourceID: String, endpoint: String, receiverStateID: String,
+                            captured: AccountSessionContext) throws -> [CloudPushPreparedSelection] {
+        try check(captured)
+        return journal.selections.values.filter { $0.matches(owner: context.scope, sourceID: sourceID,
+            endpoint: endpoint, receiverStateID: receiverStateID) }.sorted { $0.id < $1.id }
+    }
+
+    func selectionID(batchID: String, sourceID: String, endpoint: String, receiverStateID: String,
+                     captured: AccountSessionContext) throws -> String {
+        let candidates = try preparedSelections(sourceID: sourceID, endpoint: endpoint, receiverStateID: receiverStateID, captured: captured)
+            .filter { $0.commit.batchIDs.contains(batchID) }
+        guard candidates.count == 1 else { throw CloudUploadError.invalidRequest }
+        return candidates[0].id
+    }
+
+    func preparedInline(_ batch: PushBatch, endpoint: String, receiverStateID: String,
+                        captured: AccountSessionContext) throws -> (selectionID: String, gzip: Data) {
+        let id = try selectionID(batchID: batch.batchId, sourceID: batch.sourceId, endpoint: endpoint,
+            receiverStateID: receiverStateID, captured: captured)
+        guard let saved = journal.selections[id], journal.continuations[id]?.published == true,
+              let index = saved.commit.batchIDs.firstIndex(of: batch.batchId),
+              try saved.selection.restoredInlineBatches()[index].body == batch.body else { throw CloudUploadError.changedPayload }
+        return (id, saved.inlineGzip[index])
+    }
+
+    /// Runs before an intent request, including the one explicitly permitted conflict successor.
+    func admitPreparedIntent(_ manifest: PushObjectManifest, endpoint: String, receiverStateID: String,
+                             captured: AccountSessionContext) throws {
+        let id = try selectionID(batchID: manifest.batchId, sourceID: manifest.sourceId, endpoint: endpoint,
+            receiverStateID: receiverStateID, captured: captured)
+        guard let saved = journal.selections[id], var state = journal.continuations[id], state.published,
+              !state.sourceCommitted, let object = try saved.selection.restoredObject(),
+              object.manifest.replacingObjectId(manifest.objectId) == manifest else { throw CloudUploadError.changedPayload }
+        if !state.objectIDs.contains(manifest.objectId) {
+            guard state.objectIDs.count == 1, state.conflictedObjectIDs.contains(state.objectIDs[0]) else { throw CloudUploadError.invalidRequest }
+            state.objectIDs.append(manifest.objectId)
+            try journal.saveContinuation(state) // ID is burned locally before any request can use it.
+        }
+        guard state.objectIDs.last == manifest.objectId, !state.conflictedObjectIDs.contains(manifest.objectId) else { throw CloudUploadError.retryScheduled }
+        let jobID = saved.jobID(batchID: manifest.batchId, representation: "object", objectID: manifest.objectId)
+        if jobs[jobID] == nil {
+            var job = preparedJob(saved, id: jobID, operation: .objectPut, headers: [:])
+            job.manifest = try manifest.encode(); job.objectID = manifest.objectId
+            job.batchID = manifest.batchId; job.lanePath = object.lane.endpoint
+            try prepare(object.batch.payload, job: &job); try commit(job)
+        }
+    }
+
+    func recordPreparedConflict(_ manifest: PushObjectManifest, endpoint: String, receiverStateID: String,
+                                captured: AccountSessionContext) throws {
+        let id = try selectionID(batchID: manifest.batchId, sourceID: manifest.sourceId, endpoint: endpoint,
+            receiverStateID: receiverStateID, captured: captured)
+        guard var state = journal.continuations[id], state.objectIDs.last == manifest.objectId else { throw CloudUploadError.invalidRequest }
+        state.conflictedObjectIDs.insert(manifest.objectId)
+        try journal.saveContinuation(state)
+    }
+
+    func resumeManifest(selectionID: String, captured: AccountSessionContext) throws -> PushObjectManifest? {
+        try check(captured)
+        guard let saved = journal.selections[selectionID], let state = journal.continuations[selectionID] else { throw CloudUploadError.corruptJournal }
+        guard let object = try saved.selection.restoredObject() else { return nil }
+        guard let last = state.objectIDs.last else { throw CloudUploadError.corruptJournal }
+        if state.conflictedObjectIDs.contains(last) {
+            guard state.objectIDs.count == 1 else { throw CloudUploadError.invalidRequest }
+            let manifest = object.manifest.replacingObjectId(PushProtocol.freshObjectId())
+            try admitPreparedIntent(manifest, endpoint: saved.endpoint, receiverStateID: saved.receiverStateID, captured: captured)
+            return manifest
+        }
+        return object.manifest.replacingObjectId(last)
+    }
+
+    func savedPreparedIntent(_ manifest: PushObjectManifest, endpoint: String, receiverStateID: String,
+                             captured: AccountSessionContext) throws -> PushObjectIntent? {
+        try check(captured)
+        let id = try objectID(endpoint: endpoint, objectID: manifest.objectId, receiverStateID: receiverStateID)
+        guard let job = jobs[id], job.preparedSelectionID != nil, let bytes = job.manifest,
+              try JSONDecoder().decode(PushObjectManifest.self, from: bytes) == manifest else { return nil }
+        if let ack = try savedReceipt(job) {
+            return .init(objectId: ack.objectId, objectKey: ack.objectKey, uploadUrl: nil,
+                requiredHeaders: [:], expiresAt: nil, duplicate: true)
+        }
+        if job.phase == .uploaded || job.operation == .objectComplete {
+            guard let key = job.objectKey else { throw CloudUploadError.corruptJournal }
+            return .init(objectId: manifest.objectId, objectKey: key, uploadUrl: nil,
+                requiredHeaders: [:], expiresAt: nil, duplicate: true)
+        }
+        return nil
+    }
+
+    private func objectID(endpoint: String, objectID: String, receiverStateID: String) throws -> String {
+        let matches = jobs.values.filter { $0.endpoint == endpoint && $0.objectID == objectID && $0.receiverStateID == receiverStateID && $0.preparedSelectionID != nil }
+        guard matches.count <= 1 else { throw CloudUploadError.corruptJournal }
+        return matches.first?.id ?? Self.objectJobID(endpoint: endpoint, objectID: objectID, receiverStateID: receiverStateID)
+    }
+
+    func preparedSelection(_ id: String, captured: AccountSessionContext) throws -> CloudPushPreparedSelection {
+        try check(captured)
+        guard let value = journal.selections[id] else { throw CloudUploadError.corruptJournal }
+        return value
+    }
+
+    func checkIntentAdmission(captured: AccountSessionContext) throws {
+        try check(captured)
+        guard policy().concurrency > 0 else { throw CloudUploadError.retryScheduled }
+    }
+
+    func preparedIntentBody(_ manifest: PushObjectManifest, endpoint: String, receiverStateID: String,
+                            captured: AccountSessionContext) throws -> Data {
+        try check(captured)
+        let id = try objectID(endpoint: endpoint, objectID: manifest.objectId, receiverStateID: receiverStateID)
+        guard let job = jobs[id], job.preparedSelectionID != nil, let body = job.manifest,
+              try JSONDecoder().decode(PushObjectManifest.self, from: body) == manifest else { throw CloudUploadError.changedPayload }
+        return body
+    }
+
+    private func mayDeliver(_ job: CloudUploadJob) -> Bool {
+        guard let id = job.preparedSelectionID else { return true }
+        guard job.deliveryAdmitted == true, let saved = journal.selections[id], let state = journal.continuations[id],
+              state.published, !state.sourceCommitted else { return false }
+        if let objectID = job.objectID { return state.objectIDs.last == objectID && !state.conflictedObjectIDs.contains(objectID) }
+        guard let batchID = job.batchID, let index = saved.commit.batchIDs.firstIndex(of: batchID) else { return false }
+        for prior in saved.commit.batchIDs.prefix(index) {
+            let ids = ["gzip", "identity"].map { saved.jobID(batchID: prior, representation: $0) }
+            guard ids.contains(where: { jobs[$0].map(hasCleanupReceipt) == true }) else { return false }
+        }
+        if job.headers["Content-Encoding"] != "gzip" {
+            let gzip = jobs[saved.jobID(batchID: batchID, representation: "gzip")]
+            return gzip?.phase == .responseSaved && gzip?.responseStatus == 415
+        }
+        return true
+    }
+
+    /// Authority is the exact selection reference atomically staged with the full-group commit.
+    func preparedSourceCommitted(selectionID: String, captured: AccountSessionContext) throws {
+        try check(captured)
+        guard let saved = journal.selections[selectionID], var state = journal.continuations[selectionID] else {
+            // Retirement may have completed before the progress-store debt was settled.
+            return
+        }
+        let ids = try saved.jobIDs(state)
+        guard !ids.contains(where: { jobs[$0]?.phase == .transferring }) else { throw CloudUploadError.retryScheduled }
+        state.sourceCommitted = true
+        try journal.saveContinuation(state) // Group marker precedes EVERY unlink.
+        for id in ids {
+            if var job = jobs[id] {
+                guard job.preparedSelectionID == selectionID else { throw CloudUploadError.corruptJournal }
+                job.acknowledged = true; try commit(job); try journal.removeCommitted(job); jobs[id] = nil
+            }
+        }
+    }
+
+    func retireSelection(_ id: String, captured: AccountSessionContext) throws {
+        try check(captured)
+        guard !jobs.values.contains(where: { $0.preparedSelectionID == id }) else { throw CloudUploadError.invalidReceipt }
+        try journal.retireSelection(id)
+    }
+
     func recordIntent(_ manifest: PushObjectManifest, lane: PushObjectLane, intent: PushObjectIntent,
                       endpoint: String, captured: AccountSessionContext, receiverStateID: String = "") throws {
         try check(captured)
         try validateEndpoint(endpoint)
         guard intent.objectId == manifest.objectId else { throw CloudUploadError.invalidReceipt }
-        let id = Self.objectJobID(endpoint: endpoint, objectID: intent.objectId, receiverStateID: receiverStateID)
-        let encoded = try manifest.encode()
+        let id = try objectID(endpoint: endpoint, objectID: intent.objectId, receiverStateID: receiverStateID)
+        let encoded = try jobs[id]?.manifest ?? manifest.encode()
+        guard try JSONDecoder().decode(PushObjectManifest.self, from: encoded) == manifest else { throw CloudUploadError.changedPayload }
         var job = jobs[id] ?? CloudUploadJob(id: id, owner: context.scope, generation: context.generation,
             endpoint: endpoint, deviceID: "", createdAt: now(), operation: .objectPut, method: "PUT", headers: [:])
         if let prior = job.manifest {
-            guard prior == encoded, intent.duplicate || job.objectKey == intent.objectKey else { throw CloudUploadError.changedPayload }
+            guard prior == encoded, intent.duplicate || job.objectKey == nil || job.objectKey == intent.objectKey else { throw CloudUploadError.changedPayload }
         }
         // Replaying an intent must not erase an in-flight attempt or a durable receipt.
         guard job.phase != .receiptSaved, job.phase != .transferring else { return }
@@ -91,6 +331,7 @@ actor CloudUploadQueue {
         job.signedHeaders = intent.requiredHeaders
         job.signedExpiry = Self.expiry(intent.expiresAt)
         job.needsNewIntent = false
+        job.deliveryAdmitted = true
         if intent.duplicate { job.phase = .uploaded; job.operation = .objectComplete }
         try commit(job)
     }
@@ -98,7 +339,7 @@ actor CloudUploadQueue {
     func uploadObject(endpoint: String, objectID: String, body: Data,
                       captured: AccountSessionContext, receiverStateID: String = "") async throws {
         try check(captured)
-        let id = Self.objectJobID(endpoint: endpoint, objectID: objectID, receiverStateID: receiverStateID)
+        let id = try self.objectID(endpoint: endpoint, objectID: objectID, receiverStateID: receiverStateID)
         guard var job = jobs[id] else { throw CloudUploadError.invalidRequest }
         try prepare(body, job: &job)
         try commit(job)
@@ -109,7 +350,7 @@ actor CloudUploadQueue {
     func completeObject(endpoint: String, objectID: String,
                         captured: AccountSessionContext, receiverStateID: String = "") async throws -> PushObjectAck {
         try check(captured)
-        let id = Self.objectJobID(endpoint: endpoint, objectID: objectID, receiverStateID: receiverStateID)
+        let id = try self.objectID(endpoint: endpoint, objectID: objectID, receiverStateID: receiverStateID)
         guard let job = jobs[id] else { throw CloudUploadError.invalidRequest }
         if let ack = try savedReceipt(job) { return ack }
         guard job.phase == .uploaded || job.operation == .objectComplete else { throw CloudUploadError.retryScheduled }
@@ -120,18 +361,29 @@ actor CloudUploadQueue {
     }
 
     func request(endpoint: String, body: Data, headers: [String: String],
-                 captured: AccountSessionContext, receiverStateID: String = "", batchID: String? = nil) async throws -> PushTransportResponse {
+                 captured: AccountSessionContext, receiverStateID: String = "", batchID: String? = nil,
+                 selectionID: String? = nil) async throws -> PushTransportResponse {
         try check(captured)
         try validateEndpoint(endpoint)
         guard !headers.keys.contains(where: { ["authorization", "cookie"].contains($0.lowercased()) }) else {
             throw CloudUploadError.invalidRequest
         }
         let headerData = try JSONSerialization.data(withJSONObject: headers, options: [.sortedKeys])
-        let id = AccountScope.digest("request-v1\u{0}\(endpoint)\u{0}\(receiverStateID)\u{0}\(CloudUploadJournal.digest(body))\u{0}\(CloudUploadJournal.digest(headerData))")
+        let id: String
+        if let selectionID {
+            guard let saved = journal.selections[selectionID], saved.endpoint == endpoint, saved.receiverStateID == receiverStateID,
+                  let batchID, saved.commit.batchIDs.contains(batchID), journal.continuations[selectionID]?.published == true else { throw CloudUploadError.invalidRequest }
+            id = saved.jobID(batchID: batchID, representation: headers["Content-Encoding"] == "gzip" ? "gzip" : "identity")
+            guard jobs[id]?.headers == headers else { throw CloudUploadError.changedPayload }
+        } else {
+            id = AccountScope.digest("request-v1\u{0}\(endpoint)\u{0}\(receiverStateID)\u{0}\(CloudUploadJournal.digest(body))\u{0}\(CloudUploadJournal.digest(headerData))")
+        }
         var job = jobs[id] ?? CloudUploadJob(id: id, owner: context.scope, generation: context.generation,
             endpoint: endpoint, deviceID: "", createdAt: now(), operation: .request, method: "POST", headers: headers)
         job.receiverStateID = receiverStateID
         job.batchID = batchID
+        job.deliveryAdmitted = true
+        guard mayDeliver(job) else { throw CloudUploadError.retryScheduled }
         try prepare(body, job: &job)
         try commit(job)
         if job.phase == .responseSaved, let response = job.response { return response }
@@ -142,7 +394,7 @@ actor CloudUploadQueue {
     /// replacement-window commit. HTTP acceptance alone is not authorization to invoke this.
     func sourceCommitted(batchID: String, receiverStateID: String, captured: AccountSessionContext) throws {
         try check(captured)
-        let matching = jobs.values.filter { $0.batchID == batchID && $0.receiverStateID == receiverStateID }
+        let matching = jobs.values.filter { $0.preparedSelectionID == nil && $0.batchID == batchID && $0.receiverStateID == receiverStateID }
         // Replay includes a crash after all exact-batch unlinks but before debt settlement.
         if matching.isEmpty { return }
         guard matching.contains(where: { hasCleanupReceipt($0) }) else {
@@ -168,11 +420,11 @@ actor CloudUploadQueue {
 
     private func recoverCleanupMarkers() throws {
         let committed = Set(jobs.values.compactMap { job -> CleanupBatch? in
-            guard job.acknowledged, let batchID = job.batchID else { return nil }
+            guard job.preparedSelectionID == nil, job.acknowledged, let batchID = job.batchID else { return nil }
             return CleanupBatch(receiverStateID: job.receiverStateID, batchID: batchID)
         })
         for batch in committed {
-            try markCleanup(jobs.values.filter { $0.batchID == batch.batchID && $0.receiverStateID == batch.receiverStateID })
+            try markCleanup(jobs.values.filter { $0.preparedSelectionID == nil && $0.batchID == batch.batchID && $0.receiverStateID == batch.receiverStateID })
         }
     }
 
@@ -189,10 +441,10 @@ actor CloudUploadQueue {
     /// The caller has matched the full ACK and decoded batch. Save this before cursor progression.
     /// An invalid cached 2xx is made retryable instead of replaying forever.
     func validateResponse(batch: PushBatch, response: PushTransportResponse, captured: AccountSessionContext,
-                          receiverStateID: String) throws {
+                          receiverStateID: String, selectionID: String? = nil) throws {
         try check(captured)
         let matching = jobs.values.filter { $0.batchID == batch.batchId && $0.receiverStateID == receiverStateID
-            && $0.operation == .request && $0.responseBody == response.body && $0.responseStatus == response.statusCode }
+            && $0.preparedSelectionID == selectionID && $0.operation == .request && $0.responseBody == response.body && $0.responseStatus == response.statusCode }
         let ack = try? PushAck.parse(response.body)
         let valid = (200...299).contains(response.statusCode) && ack?.exactlyMatches(batch) == true
             && ack?.durabilityReceipt?.matches(batch, owner: context.scope) == true
@@ -248,7 +500,7 @@ actor CloudUploadQueue {
                 let matching = tasks.filter { $0.description == job.taskDescription }
                 let networkAllowed = (admission.allowsCellular || job.allowsCellular == false) &&
                     (admission.allowsConstrained || job.allowsConstrained == false)
-                if let task = matching.first, claimed.count < limit, networkAllowed,
+                if let task = matching.first, claimed.count < limit, networkAllowed, mayDeliver(job),
                    !cancellingTasks.contains(task.identifier) {
                     job.taskIdentifier = task.identifier
                     claimed.insert(task.identifier)
@@ -388,6 +640,7 @@ actor CloudUploadQueue {
             guard active < limit else { break }
             guard var job = jobs[id], job.phase == .prepared || job.phase == .retryPending || job.phase == .uploaded ||
                     (job.phase == .responseSaved && job.operation == .objectComplete) else { continue }
+            guard mayDeliver(job) else { continue }
             guard job.nextAttemptAt.map({ $0 <= now() }) ?? true else {
                 resolve(id, result: .failure(CloudUploadError.retryScheduled)); continue
             }

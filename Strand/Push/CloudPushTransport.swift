@@ -49,13 +49,15 @@ struct CloudPushTransport: PushTransport {
     }
 
     func post(_ batch: PushBatch) async throws -> PushTransportResponse {
-        let compressed = try Self.gzip(batch.body)
-        let compressedResponse = try await execute(body: compressed, batchID: batch.batchId, contentEncoding: "gzip", contentType: "application/x-ndjson; charset=utf-8")
-        let response = compressedResponse.statusCode == 415
-            ? try await execute(body: batch.body, batchID: batch.batchId, contentEncoding: nil, contentType: "application/x-ndjson; charset=utf-8")
-            : compressedResponse
         let (queue, captured, state) = try durableQueue()
-        try await queue.validateResponse(batch: batch, response: response, captured: captured, receiverStateID: state)
+        let saved = destination.requiresPrepared ? try await queue.preparedInline(batch, endpoint: endpoint.url,
+            receiverStateID: state, captured: captured) : nil
+        let compressed = try saved?.gzip ?? Self.gzip(batch.body)
+        let compressedResponse = try await execute(body: compressed, batchID: batch.batchId, contentEncoding: "gzip", contentType: "application/x-ndjson; charset=utf-8", selectionID: saved?.selectionID)
+        let response = compressedResponse.statusCode == 415
+            ? try await execute(body: batch.body, batchID: batch.batchId, contentEncoding: nil, contentType: "application/x-ndjson; charset=utf-8", selectionID: saved?.selectionID)
+            : compressedResponse
+        try await queue.validateResponse(batch: batch, response: response, captured: captured, receiverStateID: state, selectionID: saved?.selectionID)
         return response
     }
 
@@ -75,7 +77,14 @@ struct CloudPushTransport: PushTransport {
 
     func createObjectIntent(_ manifest: PushObjectManifest, lane: PushObjectLane) async throws -> PushObjectIntent {
         let (queue, captured, state) = try durableQueue()
-        let body = try manifest.encode()
+        if destination.requiresPrepared {
+            try await queue.admitPreparedIntent(manifest, endpoint: endpoint.url, receiverStateID: state, captured: captured)
+            if let saved = try await queue.savedPreparedIntent(manifest, endpoint: endpoint.url, receiverStateID: state, captured: captured) { return saved }
+            try await queue.checkIntentAdmission(captured: captured)
+        }
+        let body = destination.requiresPrepared
+            ? try await queue.preparedIntentBody(manifest, endpoint: endpoint.url, receiverStateID: state, captured: captured)
+            : try manifest.encode()
         guard body.count <= 8 * 1024 else {
             throw PushTransportException(PushFailure(code: .localData))
         }
@@ -88,6 +97,9 @@ struct CloudPushTransport: PushTransport {
         let (data, response) = try await session.data(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard status >= 200, status <= 299 else {
+            if destination.requiresPrepared, PushError.parseCode(data, expectedVersion: manifest.protocolVersion) == "object_id_conflict" {
+                try await queue.recordPreparedConflict(manifest, endpoint: endpoint.url, receiverStateID: state, captured: captured)
+            }
             throw PushTransportException(PushFailure.http(
                 status: status,
                 receiverCode: PushError.parseCode(data, expectedVersion: manifest.protocolVersion)
@@ -135,7 +147,8 @@ struct CloudPushTransport: PushTransport {
         contentEncoding: String?,
         contentType: String,
         binaryObject: Bool = false,
-        manifestHeader: String? = nil
+        manifestHeader: String? = nil,
+        selectionID: String? = nil
     ) async throws -> PushTransportResponse {
         let (queue, captured, state) = try durableQueue()
         var headers = ["Content-Type": contentType]
@@ -146,7 +159,35 @@ struct CloudPushTransport: PushTransport {
             headers["NOOP-Push-Manifest"] = manifestHeader
         }
         if let contentEncoding { headers["Content-Encoding"] = contentEncoding }
-        return try await queue.request(endpoint: endpoint.url, body: body, headers: headers, captured: captured, receiverStateID: state, batchID: batchID)
+        return try await queue.request(endpoint: endpoint.url, body: body, headers: headers, captured: captured, receiverStateID: state, batchID: batchID, selectionID: selectionID)
+    }
+
+    /// The production worker opts in before creating a coordinator. Legacy recovery/tests do not
+    /// retroactively acquire source intent merely because a receipt shares a batch identifier.
+    func requirePreparedSelections() { destination.requirePrepared() }
+
+    func prepareSelection(_ selection: PushPreparedSelection, progressVersion: String) async throws {
+        requirePreparedSelections()
+        let (queue, captured, state) = try durableQueue()
+        let value = try CloudPushPreparedSelection(context: captured, endpoint: endpoint.url,
+            receiverStateID: state, progressVersion: progressVersion, selection: selection,
+            inlineGzip: selection.restoredInlineBatches().map { try Self.gzip($0.body) })
+        try await queue.prepareSelection(value, captured: captured)
+    }
+
+    func preparedSelectionID(batchID: String, sourceID: String) async throws -> String {
+        let (queue, captured, state) = try durableQueue()
+        return try await queue.selectionID(batchID: batchID, sourceID: sourceID, endpoint: endpoint.url,
+            receiverStateID: state, captured: captured)
+    }
+
+    func preparedSourceCommitted(_ id: String) async throws {
+        let (queue, captured, _) = try durableQueue()
+        try await queue.preparedSourceCommitted(selectionID: id, captured: captured)
+    }
+    func retireSelection(_ id: String) async throws {
+        let (queue, captured, _) = try durableQueue()
+        try await queue.retireSelection(id, captured: captured)
     }
 
     /// The account capability wrapper calls this after authenticated capability parsing.
@@ -209,6 +250,9 @@ struct CloudPushTransport: PushTransport {
 private final class CloudPushReceiverBinding: @unchecked Sendable {
     private let lock = NSLock()
     private var state: String?
+    private var prepared = false
+    var requiresPrepared: Bool { lock.lock(); defer { lock.unlock() }; return prepared }
+    func requirePrepared() { lock.lock(); defer { lock.unlock() }; prepared = true }
     func bind(_ value: String) throws {
         lock.lock(); defer { lock.unlock() }
         guard !value.isEmpty, state == nil || state == value else { throw CloudUploadError.invalidReceipt }
