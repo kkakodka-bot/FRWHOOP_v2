@@ -87,13 +87,17 @@ public func isPlausibleHistoricalUnix(_ ts: Int, wallNow: Int,
 ///
 /// Used by the Backfiller/BLEManager to archive undecodable history BEFORE acking the trim. Mirrors
 /// the Android rejectedHistoricalRecords so one mapping toolchain re-ingests both archives.
-public func rejectedHistoricalRecords(_ rawFrames: [[UInt8]], family: DeviceFamily) -> [[UInt8]] {
+/// `parsedFrames`, when supplied, must come from these exact frames in the same order and family.
+/// A count mismatch falls back to parsing so an incomplete cache cannot omit a record from archival.
+public func rejectedHistoricalRecords(_ rawFrames: [[UInt8]], family: DeviceFamily,
+                                      parsedFrames: [ParsedFrame]? = nil) -> [[UInt8]] {
     // The type byte sits at the inner-record start: frame[4] on WHOOP 4.0, frame[8] on WHOOP 5/MG
     // (the puffin envelope is 4 bytes longer). hist_version sits one byte past the type+seq+cmd
     // header — frame[5] (4.0) / frame[9] (5/MG) — same shift.
     let typeIndex = family == .whoop5 ? 8 : 4
     let versionIndex = family == .whoop5 ? 9 : 5
-    return rawFrames.filter { f in
+    let matchingParsedFrames = parsedFrames?.count == rawFrames.count ? parsedFrames : nil
+    return rawFrames.enumerated().filter { index, f in
         // Only genuine HISTORICAL_DATA records (47). Console (50) and METADATA frames have a
         // different type byte, so they never pass this gate — they are excluded by construction.
         guard f.count > typeIndex, Int(f[typeIndex]) == 47 else { return false }
@@ -112,7 +116,7 @@ public func rejectedHistoricalRecords(_ rawFrames: [[UInt8]], family: DeviceFami
         // (`RawHistoryArchive.evictLines`) evicts entirely-zero-payload frames first, so a firmware that
         // banks empty placeholder records at 1 Hz cannot push out the one informative frame either.
         if family == .whoop5, isUnmappedWhoop5HistoricalRecord(f) { return true }
-        let p = parseFrame(f, family: family)
+        let p = matchingParsedFrames?[index] ?? parseFrame(f, family: family)
         // Envelope/CRC reject: parse failed outright or the CRC32 trailer mismatched.
         if !p.ok || p.crcOK == false { return true }
         // Unmapped layout: the envelope parsed but no usable biometrics decoded. A record is genuinely
@@ -121,7 +125,7 @@ public func rejectedHistoricalRecords(_ rawFrames: [[UInt8]], family: DeviceFami
         // the sleep stager uses — keep it. Only HR-less AND gravity-less type-47 records are rejected.
         return p.parsed["unix"]?.intValue == nil
             || (p.parsed["heart_rate"]?.intValue == nil && p.parsed["gravity_x"]?.doubleValue == nil)
-    }
+    }.map(\.element)
 }
 
 /// A rejected history frame whose entire record PAYLOAD is zero — a valid header + trailing CRC wrapping
