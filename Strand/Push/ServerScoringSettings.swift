@@ -5,7 +5,6 @@ enum ServerScoringSettings {
     static let defaultsKey = "noop.serverScoring"
     static let authEmailKey = "noop.serverScoring.authEmail"
     static let pollIntervalSeconds = 60
-    static let staleAfterSeconds = 6 * 60 * 60
     /// Foreground idle push cadence when server scoring is on (spec: 30–60 s).
     static let idlePushIntervalSeconds: TimeInterval = 45
     /// During an active offload, flush push at most once per this interval (spec: ≤10 s).

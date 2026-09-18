@@ -394,7 +394,7 @@ public struct PushCoordinator: Sendable {
         let mutableOrder: [PushMutableTable] = [.dailyMetric, .sleepSession, .workout, .journal]
         let appendOrder: [PushAppendTable] = [
             .event, .battery, .hrSample, .spo2Sample, .skinTempSample,
-            .respSample, .gravitySample, .rrInterval,
+            .respSample, .gravitySample, .rrInterval, .rrPacketProvenance,
         ]
 
         for deviceId in selectedDevices {

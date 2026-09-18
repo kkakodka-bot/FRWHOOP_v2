@@ -4,17 +4,17 @@ import WhoopStore
 /// Maps server score cache onto Today/Sleep display fields when `serverScoring` is on.
 enum ServerScoreDisplay {
     static func hrvRmssd(day: String, overlay: ServerScoreDayCache?) -> Double? {
-        guard ServerScoringSettings.isEnabled, let daily = overlay?.daily else { return nil }
+        guard ServerScoringSettings.isEnabled, overlay?.day == day, let daily = overlay?.daily else { return nil }
         return daily.hrvRmssdMs
     }
 
     static func restingHr(day: String, overlay: ServerScoreDayCache?) -> Int? {
-        guard ServerScoringSettings.isEnabled, let daily = overlay?.daily else { return nil }
+        guard ServerScoringSettings.isEnabled, overlay?.day == day, let daily = overlay?.daily else { return nil }
         return daily.restingHrBpm
     }
 
     static func sleepTotalMin(day: String, overlay: ServerScoreDayCache?) -> Double? {
-        guard ServerScoringSettings.isEnabled, let daily = overlay?.daily else { return nil }
+        guard ServerScoringSettings.isEnabled, overlay?.day == day, let daily = overlay?.daily else { return nil }
         return daily.sleepTotalMin
     }
 
@@ -25,6 +25,9 @@ enum ServerScoreDisplay {
         case "deep": return daily.sleepDeepMin
         case "rem": return daily.sleepRemMin
         case "awake": return daily.sleepAwakeMin
+        case "sleep_unstaged": return daily.sleepUnstagedMin
+        case "state_unknown": return daily.stateUnknownMin
+        case "off_body": return daily.offBodyMin
         default: return nil
         }
     }

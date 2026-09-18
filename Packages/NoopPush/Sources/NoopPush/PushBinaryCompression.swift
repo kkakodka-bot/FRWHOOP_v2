@@ -3,6 +3,9 @@ import Foundation
 import Compression
 #endif
 import zlib
+#if canImport(CNoopZstd)
+import CNoopZstd
+#endif
 
 public enum PushBinaryCompression {
     public static func compress(_ decoded: Data, encoding: String) throws -> Data {
@@ -47,15 +50,17 @@ public enum PushBinaryCompression {
         defer { deflateEnd(&stream) }
 
         var output = Data(capacity: decoded.count)
-        try decoded.withUnsafeBytes { input in
+        decoded.withUnsafeBytes { input in
             stream.next_in = UnsafeMutablePointer<Bytef>(mutating: input.bindMemory(to: Bytef.self).baseAddress!)
             stream.avail_in = uInt(decoded.count)
             let chunk = 64 * 1024
             var buffer = [UInt8](repeating: 0, count: chunk)
             repeat {
-                stream.next_out = UnsafeMutablePointer<Bytef>(&buffer)
-                stream.avail_out = uInt(chunk)
-                status = deflate(&stream, Z_FINISH)
+                buffer.withUnsafeMutableBufferPointer { outputBuffer in
+                    stream.next_out = outputBuffer.baseAddress
+                    stream.avail_out = uInt(chunk)
+                    status = deflate(&stream, Z_FINISH)
+                }
                 let produced = chunk - Int(stream.avail_out)
                 if produced > 0 { output.append(buffer, count: produced) }
             } while status == Z_OK
@@ -72,10 +77,21 @@ public enum PushBinaryCompression {
     }
 
     private static func zstd(_ decoded: Data, maxDecoded: Int, maxWire: Int) throws -> Data {
-        #if canImport(Compression)
         guard decoded.count <= maxDecoded else {
             throw PushProtocolException("binary payload exceeds decoded limit")
         }
+        #if canImport(CNoopZstd)
+        var outputPointer: UnsafeMutablePointer<UInt8>?
+        var outputCount = 0
+        let status = decoded.withUnsafeBytes { bytes in
+            noop_zstd_compress(bytes.bindMemory(to: UInt8.self).baseAddress, decoded.count,
+                               &outputPointer, &outputCount)
+        }
+        guard status == 0, let outputPointer else { throw PushProtocolException("zstd failed") }
+        defer { noop_zstd_free(outputPointer) }
+        guard outputCount <= maxWire else { throw PushProtocolException("zstd payload exceeds wire limit") }
+        return Data(bytes: outputPointer, count: outputCount)
+        #elseif canImport(Compression)
         let algorithm = compression_algorithm(rawValue: 9) // COMPRESSION_ZSTD
         // compression_encode_buffer fails outright when dst is too small, and zstd can EXPAND
         // incompressible input (rawBatch's already-zlib'd frames) by more than a flat 64 bytes.

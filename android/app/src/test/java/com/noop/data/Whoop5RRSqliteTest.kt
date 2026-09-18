@@ -38,6 +38,7 @@ class Whoop5RRSqliteTest {
             "seq INTEGER NOT NULL, synced INTEGER NOT NULL, ord INTEGER, srcChannel INTEGER, tsSuspect INTEGER, " +
             "PRIMARY KEY(deviceId, ts, rrMs, seq))")
         sql(WhoopDatabase.RR_SOURCE_INDEX_SQL)
+        WhoopDatabase.RR_PACKET_PROVENANCE_MIGRATION_SQL.forEach(::sql)
         sql("CREATE TABLE pairedDevice(id TEXT PRIMARY KEY, brand TEXT, model TEXT, status TEXT)")
         sql("CREATE TABLE hrSample(deviceId TEXT, ts INTEGER, bpm INTEGER, PRIMARY KEY(deviceId, ts))")
         listOf("ppgHrSample", "respSample", "gravitySample", "sleepStateSample", "event",
@@ -61,7 +62,6 @@ class Whoop5RRSqliteTest {
                 "hasHrInWindow" -> hrRows(args).isNotEmpty()
                 "countHrInWindow" -> hrRows(args).size
                 "maxHrTsInWindow" -> hrRows(args).maxOfOrNull { it.ts } ?: 0L
-                "gravityWitnessInWindow" -> GravityWitness(0, 0L)
                 "gravitySamples" -> gravity.filter {
                     it.deviceId == args[0] && it.ts in (args[1] as Long)..(args[2] as Long)
                 }
@@ -118,7 +118,7 @@ class Whoop5RRSqliteTest {
                 "dayStreamFingerprint" -> query(DAY_STREAM_FINGERPRINT_SQL,
                     listOf("deviceId", "from", "to").zip(args.take(3)).toMap()) { it.getString(1) }.single()
                 "stepSamples", "ppgHrSamples", "spo2Samples",
-                "skinTempSamples", "respSamples", "sleepStateSamples", "events" -> emptyList<Any>()
+                "skinTempSamples", "respSamples", "sleepStateSamples", "events", "rrPackets" -> emptyList<Any>()
                 else -> error("Unimplemented DAO call: ${method.name}")
             }
         } as WhoopDao
@@ -178,6 +178,22 @@ class Whoop5RRSqliteTest {
         assertFalse(plan.any { it.contains("SCAN rrInterval") })
     }
 
+    @Test fun receiptOnlySourceWitnessDoesNotOverrideKnownDeviceFamily() = runBlocking {
+        registry("WHOOP")
+        assertFalse(repo.isWhoop5RrSource(id))
+        val before = repo.dayStreamFingerprint(id,0,1)
+        val p = com.noop.protocol.RrPacketProvenance.checked(com.noop.protocol.RrPacketProvenance.bytes(
+            "aa011800010022e12f12000000000000f153650000003c0200040002700d85e7")!!)!!
+        sql("INSERT INTO rrPacketProvenance VALUES('$id','${p.packetId}',${p.ts},${p.sensorTs},${p.recordIndex},'${p.rawHex}',5,1,'${p.decoderVersion}','${p.clockVersion}',1,0,2)")
+        assertTrue(repo.isWhoop5RrSource(id))
+        assertNotEquals(before,repo.dayStreamFingerprint(id,0,1))
+        assertFalse(repo.isWhoop5RrSource("other-owner"))
+        registry("4.0")
+        assertFalse(repo.isWhoop5RrSource(id))
+        registry("5.0 MG",brand="Oura")
+        assertFalse(repo.isWhoop5RrSource(id))
+    }
+
     @Test fun actualNightlyScorerGuardsCanonicalHistoryAfterRePairing() = runBlocking {
         registry("WHOOP")
         registry("5.0 MG", owner = "new-five")
@@ -209,8 +225,11 @@ class Whoop5RRSqliteTest {
         assertEquals(0, repo.insert(StreamBatch(rr = (start until end).map {
             RrRow(it, if (it % 2L == 0L) 980 else 1020, RrSourceChannel.WHOOP5_HISTORICAL)
         }), id).rr)
+        assertEquals(3600, read(start, end, 4000).size)
+        assertTrue(read(start, end, 4000).all { it.srcChannel == RrSourceChannel.WHOOP5_HISTORICAL.code })
         val promoted = score().single()
-        assertEquals(40.0, promoted.hrv!!, 0.001)
+        // Source promotion makes the canonical values readable, not original timing proven.
+        assertNull("coarse legacy rows still cannot supply canonical HRV", promoted.hrv)
         assertEquals(promoted.hrv, days.getValue("new-five-noop" to first.day).avgHrv)
         assertEquals(promoted.hrv, score().single().hrv)
     }
@@ -249,7 +268,8 @@ class Whoop5RRSqliteTest {
         }), id)
         assertEquals("the real restaging path must exclude ambiguous R-R", baseline, restage())
         registry("4.0")
-        assertNotEquals("confirmed WHOOP 4 still stages from the same R-R", baseline, restage())
+        assertEquals(duration, read(start, start + duration, duration + 1).size)
+        assertEquals("confirmed WHOOP 4 values remain readable but coarse RR cannot fabricate RSA timing", baseline, restage())
     }
 
     @Test fun actualNightlySlidingWindowDoesNotSpliceStandardIntoHistoricalSource() = runBlocking {

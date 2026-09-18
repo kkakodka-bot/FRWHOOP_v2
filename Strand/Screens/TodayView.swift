@@ -187,6 +187,8 @@ struct ActiveWorkoutIndicatorSection: View {
 }
 
 struct TodayView: View {
+    @AppStorage(ServerScoringSettings.defaultsKey) private var serverScoringEnabled = true
+    @State private var serverSnapshotRevision = 0
     @AppStorage(DayCycleMode.storageKey) private var dayCycleModeRaw = DayCycleMode.sleepOnset.rawValue
     private var dayCycleMode: DayCycleMode { DayCycleMode.persisted(dayCycleModeRaw) }
     /// Product mark, never natural-language copy. Keeping it out of localization also makes source
@@ -550,7 +552,9 @@ struct TodayView: View {
 
     /// Phase 4: last-known server HRV/sleep overlay when `serverScoring` is on.
     private var serverOverlay: ServerScoreDayCache? {
-        app.serverScores.overlay(for: selectedDayKey)
+        _ = serverSnapshotRevision
+        guard ServerScoringSettings.ready, app.serverScores.signedIn else { return nil }
+        return app.serverScores.overlay(for: selectedDayKey)
     }
 
     /// Recovery cold-start: recovery is nil until the HRV baseline crosses the seed gate
@@ -1529,9 +1533,10 @@ struct TodayView: View {
         // day-scoped, so navigating must re-fetch them for the newly selected window.
         .task(id: TodayLoadKey(seq: repo.refreshSeq, offset: selectedDayOffset,
                               dayCycleMode: dayCycleModeRaw)) { await loadAll() }
-        .task(id: selectedDayKey) {
+        .task(id: "\(selectedDayKey)|\(serverScoringEnabled)|\(ServerScoringSettings.ready)|\(app.serverScores.signedIn)") {
             await app.serverScores.refreshVisibleDays(todayKey: selectedDayKey)
         }
+        .onReceive(app.serverScores.objectWillChange) { _ in serverSnapshotRevision &+= 1 }
         // #989: hydration writes don't bump refreshSeq, so the card needs its own triggers, a logged /
         // edited / deleted drink (hydrationSeq) and the Settings feature toggle both re-read just the two
         // hydration fields. Cheap (one metricSeries row), never re-runs the heavy loads.
@@ -2606,7 +2611,7 @@ struct TodayView: View {
                           value: dashboardValue(card), route: .health)
         case .hrv, .restingHr, .respiratory, .bloodOxygen, .skinTemp:
             // The overnight vitals share the Health detail screen (the vital-signs surface).
-            pinnedCardRow(icon: card.icon, tint: tint, title: card.title, subtitle: card.subtitle,
+            pinnedCardRow(icon: card.icon, tint: tint, title: card.title, subtitle: serverVitalSubtitle(card) ?? card.subtitle,
                           value: dashboardValue(card), route: .health)
         case .sleep:
             // #110: the value is `totalSleepMin` — WHOOP's imported TST, which can legitimately differ
@@ -2654,6 +2659,24 @@ struct TodayView: View {
         }
     }
 
+    private func serverVitalSelection(_ card: DashboardCard, localValue: Double?) -> ServerVitalSelection? {
+        let metric: ServerVitalSelection.Metric
+        switch card {
+        case .hrv: metric = .hrv
+        case .restingHr: metric = .restingHR
+        case .respiratory: metric = .respiratory
+        default: return nil
+        }
+        return ServerVitalSelection.resolve(metric, serverEnabled: serverScoringEnabled,
+                                            selectedDay: selectedDayKey, overlay: serverOverlay, localValue: localValue)
+    }
+
+    private func serverVitalSubtitle(_ card: DashboardCard) -> String? {
+        guard let selection = serverVitalSelection(card, localValue: nil), selection.fromServer else { return nil }
+        let label = String(localized: "Server · \(selection.day) · \(selection.status ?? "unavailable")")
+        return selection.stale ? String(localized: "Stale · \(label)") : label
+    }
+
     /// Resolve a dashboard card's CURRENT display value from the values Today already loads, with its unit
     /// suffix appended. Returns ", " when the value isn't available yet, never a fabricated number. Reuses
     /// the same reads the Key-Metrics tiles use (displayDay vitals, restScore / sleep duration, the pinned
@@ -2667,26 +2690,22 @@ struct TodayView: View {
         switch card {
         case .hrv:
             #if DEBUG
-            if let f = DemoDayHarness.active { return withUnit("\(f.hrvMs)") }
+            if !serverScoringEnabled, let f = DemoDayHarness.active { return withUnit("\(f.hrvMs)") }
             #endif
             // PER-FIELD carry: today → the freshest prior row that actually HAS an HRV (#1842). Was
             // today-only, so this card blanked to "—" every rollover while the Key Metrics tile — which
             // has carried via `carriedVital(perField:)` all along — showed a number on the same screen.
             // Not the whole-row `lastVitalsDay`: its OR predicate resolves nil HRV on a respiratory-only
             // row. Mirrors the Android dashboardCardValue.
-            if let server = ServerScoreDisplay.hrvRmssd(day: selectedDayKey, overlay: serverOverlay) {
-                return withUnit("\(Int(server.rounded()))")
-            }
-            return withUnit((d?.avgHrv ?? lastHrvDay?.avgHrv).map { "\(Int($0.rounded()))" } ?? "—")
+            return withUnit(serverVitalSelection(card, localValue: d?.avgHrv ?? lastHrvDay?.avgHrv)?.value
+                .map { "\(Int($0.rounded()))" } ?? "—")
         case .restingHr:
             #if DEBUG
-            if let f = DemoDayHarness.active { return withUnit("\(f.rhrBpm)") }
+            if !serverScoringEnabled, let f = DemoDayHarness.active { return withUnit("\(f.rhrBpm)") }
             #endif
             // PER-FIELD carry — twin of `.hrv` above (#1842).
-            if let server = ServerScoreDisplay.restingHr(day: selectedDayKey, overlay: serverOverlay) {
-                return withUnit("\(server)")
-            }
-            return withUnit((d?.restingHr ?? lastRestingHrDay?.restingHr).map { "\($0)" } ?? "—")
+            return withUnit(serverVitalSelection(card, localValue: (d?.restingHr ?? lastRestingHrDay?.restingHr).map(Double.init))?.value
+                .map { "\(Int($0))" } ?? "—")
         case .respiratory:
             // PER-FIELD carry: today → the STALENESS-BOUNDED prior night (`lastRespDay`). Recovery-
             // independent, so a night with real R-R but a null recovery still carries.
@@ -2699,8 +2718,8 @@ struct TodayView: View {
             // bounded carry reads the same column, so anything the tail could still surface is by
             // definition older than the window deliberately excludes. A gap now reads "—", which is the
             // truthful answer when nobody measured.
-            return withUnit(d?.respRateBpm.map { String(format: "%.1f", locale: AppLanguage.activeLocale, $0) }
-                            ?? lastRespDay?.respRateBpm.map { String(format: "%.1f", locale: AppLanguage.activeLocale, $0) } ?? "—")
+            return withUnit(serverVitalSelection(card, localValue: d?.respRateBpm ?? lastRespDay?.respRateBpm)?.value
+                .map { String(format: "%.1f", locale: AppLanguage.activeLocale, $0) } ?? "—")
         case .bloodOxygen:
             // PER-FIELD carry: today → whole-row vitals carry → the last row that actually HAS a reading
             // (computed "-noop" rows write spo2Pct = nil), so this card agrees with the Key Metrics tile
@@ -2928,9 +2947,9 @@ struct TodayView: View {
         let hd = lastHrvDay
         let rd = lastRestingHrDay
         let vd = lastVitalsDay
-        let hrv = d?.avgHrv ?? hd?.avgHrv
-        let rhr = d?.restingHr ?? rd?.restingHr
-        let resp = d?.respRateBpm ?? vd?.respRateBpm
+        let hrv = serverVitalSelection(.hrv, localValue: d?.avgHrv ?? hd?.avgHrv)?.value
+        let rhr = serverVitalSelection(.restingHr, localValue: (d?.restingHr ?? rd?.restingHr).map(Double.init))?.value
+        let resp = serverVitalSelection(.respiratory, localValue: d?.respRateBpm ?? vd?.respRateBpm)?.value
         // The provenance row a shown vital fell back to (nil when every shown vital is today's own): stamps
         // that row's own date, so the footnote can't claim "Last night" for a value that IS today's.
         // Each vital can now carry from a DIFFERENT row, so the one card-level footnote stamps the OLDEST
@@ -2947,8 +2966,8 @@ struct TodayView: View {
             VStack(spacing: 0) {
                 // DEBUG promo harness: pin HRV / Resting HR to the active frame's values. No-op otherwise.
                 #if DEBUG
-                let demoHrv = DemoDayHarness.active.map { "\($0.hrvMs)" }
-                let demoRhr = DemoDayHarness.active.map { "\($0.rhrBpm)" }
+                let demoHrv = serverScoringEnabled ? nil : DemoDayHarness.active.map { "\($0.hrvMs)" }
+                let demoRhr = serverScoringEnabled ? nil : DemoDayHarness.active.map { "\($0.rhrBpm)" }
                 #else
                 let demoHrv: String? = nil
                 let demoRhr: String? = nil
@@ -2956,22 +2975,31 @@ struct TodayView: View {
                 metricRow(icon: "waveform.path.ecg", label: "HRV",
                           value: demoHrv ?? (hrv.map { "\(Int($0.rounded()))" } ?? "—"), unit: "ms",
                           tint: StrandPalette.metricCyan, route: .metric("hrv"))
+                if let caption = serverVitalSubtitle(.hrv) {
+                    Text(caption).font(StrandFont.caption).foregroundStyle(StrandPalette.textTertiary)
+                }
                 Divider().overlay(StrandPalette.hairline)
                 metricRow(icon: "heart.fill", label: "Resting HR",
-                          value: demoRhr ?? (rhr.map { "\($0)" } ?? "—"), unit: "bpm",
+                          value: demoRhr ?? (rhr.map { "\(Int($0.rounded()))" } ?? "—"), unit: "bpm",
                           tint: StrandPalette.metricRose, route: .metric("rhr"))
+                if let caption = serverVitalSubtitle(.restingHr) {
+                    Text(caption).font(StrandFont.caption).foregroundStyle(StrandPalette.textTertiary)
+                }
                 Divider().overlay(StrandPalette.hairline)
                 metricRow(icon: "lungs.fill", label: "Respiratory",
                           // Today's own respiratory, else the carried night's; a non-carrying today keeps the
                           // sparkline-tail fallback so a sparse-but-recent value still reads.
                           value: resp.map { String(format: "%.1f", locale: AppLanguage.activeLocale, $0) }
-                              ?? (vd == nil ? latestString("resp_rate", decimals: 1) : "—"),
+                              ?? (!serverScoringEnabled && vd == nil ? latestString("resp_rate", decimals: 1) : "—"),
                           unit: "rpm",
                           tint: StrandPalette.accent, route: .metric("resp_rate"))
+                if let caption = serverVitalSubtitle(.respiratory) {
+                    Text(caption).font(StrandFont.caption).foregroundStyle(StrandPalette.textTertiary)
+                }
                 // ONE provenance footnote when a shown vital is a carried prior-day read (not today's),
                 // stamped with THAT row's date via the shared caption (which relabels a weeks-old carry to
                 // "Latest sleep", #779), so a prior read is never silently passed off as today.
-                if let prior = provenance {
+                if !serverScoringEnabled, let prior = provenance {
                     HStack(spacing: 4) {
                         Image(systemName: "clock.arrow.circlepath")
                             .font(.system(size: 10, weight: .semibold))
@@ -3912,7 +3940,10 @@ struct TodayView: View {
             // is stamped "Last night · <date>", and a never-scored metric still shows ", ".
             let nightly = carriedVital(unit: "ms", today: d?.avgHrv,
                                        prior: { $0.avgHrv }, format: { "\(Int($0.rounded()))" })
-            if selectedDayOffset == 0, let current = app.currentHrv {
+            if serverScoringEnabled {
+                StatTile(label: "HRV", value: dashboardValue(.hrv), caption: serverVitalSubtitle(.hrv),
+                         accent: StrandPalette.metricPurple, sparkline: nil, sparkColor: StrandPalette.metricPurple)
+            } else if selectedDayOffset == 0, let current = app.currentHrv {
                 let updated = Self.hrTimeFmt.string(
                     from: Date(timeIntervalSince1970: TimeInterval(current.computedAtUnix)))
                 StatTile(
@@ -3938,10 +3969,10 @@ struct TodayView: View {
                                    prior: { $0.restingHr.map(Double.init) }, format: { "\(Int($0.rounded()))" })
             StatTile(
                 label: "Resting HR",
-                value: rhr.value,
-                caption: rhr.caption,
+                value: serverScoringEnabled ? dashboardValue(.restingHr) : rhr.value,
+                caption: serverVitalSubtitle(.restingHr) ?? rhr.caption,
                 accent: rhr.value == "—" ? StrandPalette.textPrimary : StrandPalette.metricRose,
-                sparkline: sparks["rhr"],
+                sparkline: serverScoringEnabled ? nil : sparks["rhr"],
                 sparkColor: StrandPalette.metricRose
             )
         case .bloodOxygen:
@@ -3991,13 +4022,13 @@ struct TodayView: View {
                 ? latestString("resp_rate", decimals: 1) : respCarry.value
             StatTile(
                 label: "Respiratory",
-                value: respValue,
+                value: serverScoringEnabled ? dashboardValue(.respiratory) : respValue,
                 // When the sparkline-tail fallback surfaces a real value (respValue ≠ ", " while respCarry
                 // was empty), use the plain "rpm" caption, not carriedVital's empty "After tonight's sleep"
                 // state, so the caption matches the shown number (H10 mustn't mislabel a real value).
-                caption: (respValue != "—" && respCarry.value == "—") ? "rpm" : respCarry.caption,
+                caption: serverVitalSubtitle(.respiratory) ?? ((respValue != "—" && respCarry.value == "—") ? "rpm" : respCarry.caption),
                 accent: respValue == "—" ? StrandPalette.textPrimary : StrandPalette.accent,
-                sparkline: sparks["resp_rate"],
+                sparkline: serverScoringEnabled ? nil : sparks["resp_rate"],
                 sparkColor: StrandPalette.accent
             )
         case .steps:

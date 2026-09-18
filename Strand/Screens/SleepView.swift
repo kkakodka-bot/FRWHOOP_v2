@@ -7,6 +7,158 @@ import WhoopStore
 import UIKit
 #endif
 
+/// Server-only branch: boundary edits use the authenticated override RPC, never local sleep rows.
+private struct ServerSleepScreen: View {
+    @ObservedObject var scores: ServerScoreRepository
+    @State private var dayOffset = 0
+    @State private var editing: ServerSleepEditTarget?
+    @State private var editError: String?
+    @State private var restoring = false
+    private var day: String {
+        Repository.dayString(Calendar.current.date(byAdding: .day, value: -dayOffset, to: Date()) ?? Date())
+    }
+    var body: some View {
+        let cache = ServerScoringSettings.ready && scores.signedIn ? scores.overlay(for: day) : nil
+        let episodes = ServerSleepEpisode.episodes(cache, day: day)
+        ScreenScaffold(title: "Sleep", subtitle: "Server physiology", onRefresh: {
+            await scores.refreshVisibleDays(todayKey: day)
+        }, lazy: true) {
+            HStack {
+                Button { dayOffset += 1 } label: { Image(systemName: "chevron.left") }.accessibilityLabel("Previous day")
+                Spacer()
+                Text(day).font(StrandFont.subhead)
+                Spacer()
+                Button { dayOffset = max(0, dayOffset - 1) } label: { Image(systemName: "chevron.right") }
+                    .disabled(dayOffset == 0).accessibilityLabel("Next day")
+            }
+            NoopCard(tint: StrandPalette.restColor) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(status(cache)).font(StrandFont.subhead)
+                    if let cache {
+                        ForEach(cache.sleepMetadataLines, id: \.self) { line in
+                            Text(line).font(StrandFont.footnote).foregroundStyle(StrandPalette.textSecondary)
+                        }
+                    }
+                    if episodes.isEmpty { Text("No server sleep episodes available for this day.").font(StrandFont.footnote) }
+                    if let message = scores.sleepEditMessage { Text(message).font(StrandFont.footnote) }
+                    if let error = editError ?? scores.lastError { Text(error).font(StrandFont.footnote).foregroundStyle(StrandPalette.statusCritical) }
+                    if cache?.features["sleep"]?.supportsBoundaryOverrides != true {
+                        Text("The selected server model does not support boundary corrections.")
+                            .font(StrandFont.footnote).foregroundStyle(StrandPalette.textTertiary)
+                    }
+                }
+            }
+            ForEach(episodes) { episode in
+                episodeCard(episode, cache: cache)
+            }
+            if let cache, cache.features["sleep"]?.supportsBoundaryOverrides == true {
+                ForEach(cache.sleepOverrides.filter(\.tombstone)) { deleted in
+                    NoopCard(tint: StrandPalette.restColor) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Deleted sleep · \(utcClock(deleted.start)) – \(utcClock(deleted.end)) UTC").font(StrandFont.footnote)
+                            Button("Restore this sleep") {
+                                guard let target = try? ServerSleepEditTarget.prepare(cache: cache, existing: deleted) else {
+                                    editError = String(localized: "Refresh before restoring this sleep."); return
+                                }
+                                restoring = true
+                                Task { _ = await scores.saveSleepOverride(target, start: target.start, end: target.end, tombstone: false); restoring = false }
+                            }.buttonStyle(.noopGhost).disabled(restoring)
+                        }
+                    }
+                }
+            }
+        }.task(id: day) { await scores.refreshVisibleDays(todayKey: day) }
+            .onChangeCompat(of: scores.signedIn) { signedIn in if !signedIn { editing = nil; editError = nil } }
+            .onChangeCompat(of: cache?.ownerId) { owner in if editing?.ownerId != owner { editing = nil; editError = nil } }
+            .sheet(item: $editing) { target in
+                SleepTimeEditor(bedTs: target.start, wakeTs: target.end,
+                    title: "Edit sleep boundaries",
+                    blurb: "Your reported boundaries are not proof of sleep. The server recomputes from available evidence; local sleep records are unchanged.",
+                    bedLabel: "Started", wakeLabel: "Ended", coverage: target.originalStart...target.originalEnd,
+                    automaticallyDismiss: false, statusMessage: scores.lastError,
+                    deleteMessage: "Suppresses this sleep window on the server. You can restore it from Deleted sleep after the change is confirmed.",
+                    onSave: { start, end in
+                        if await scores.saveSleepOverride(target, start: start, end: end, tombstone: false) { editing = nil }
+                    }, onDelete: {
+                        if await scores.saveSleepOverride(target, start: target.start, end: target.end, tombstone: true) { editing = nil }
+                    })
+            }
+    }
+    private func episodeCard(_ episode: ServerSleepEpisode, cache: ServerScoreDayCache?) -> some View {
+        NoopCard(tint: StrandPalette.restColor) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text(episode.episodeType.replacingOccurrences(of: "_", with: " ").capitalized)
+                    .font(StrandFont.subhead)
+                Text(episode.clockLabel)
+                    .font(StrandFont.footnote).foregroundStyle(StrandPalette.textSecondary)
+                Text("Asleep \(minutes(episode.asleepMin)) · \(String(localized: String.LocalizationValue(episode.opportunityLabel))) \(minutes(episode.inBedMin))")
+                    .font(StrandFont.subhead)
+                if let night = cache?.nights.first(where: { $0.id == episode.id }) {
+                    Text(night.stateCoverageDescription).font(StrandFont.footnote).foregroundStyle(StrandPalette.textSecondary)
+                }
+                if let cache, cache.features["sleep"]?.supportsBoundaryOverrides == true {
+                    Button("Edit boundaries or delete") {
+                        do { editing = try ServerSleepEditTarget.prepare(cache: cache, nightId: episode.id); editError = nil }
+                        catch { editError = String(localized: "Refresh this day before editing; the original boundary revision is unavailable.") }
+                    }.buttonStyle(.noopGhost)
+                }
+                if let reason = episode.reason {
+                    Text(reason).font(StrandFont.footnote)
+                } else {
+                    ForEach(ServerSleepEpisode.states, id: \.self) { state in
+                        let bands = episode.bands.filter { $0.state == state }
+                        let total = bands.reduce(0) { $0 + $1.end - $1.start }
+                        HStack(spacing: 8) {
+                            Text(ServerSleepEpisode.label(state)).font(StrandFont.footnote).frame(width: 100, alignment: .leading)
+                            GeometryReader { geo in
+                                ZStack(alignment: .leading) {
+                                    Rectangle().fill(StrandPalette.textTertiary.opacity(0.08))
+                                    ForEach(Array(bands.enumerated()), id: \.offset) { _, band in
+                                        Rectangle().fill(color(state))
+                                            .frame(width: geo.size.width * Double(band.end - band.start) / Double(episode.end - episode.start))
+                                            .offset(x: geo.size.width * Double(band.start - episode.start) / Double(episode.end - episode.start))
+                                    }
+                                }
+                            }.frame(height: 10)
+                            Text(bands.isEmpty ? "—" : String(format: String(localized: "%.1fm"), locale: .current, Double(total) / 60)).font(StrandFont.footnote).frame(width: 48, alignment: .trailing)
+                        }
+                    }
+                    Text("Actual server epochs · blank space has no epoch evidence")
+                        .font(StrandFont.footnote).foregroundStyle(StrandPalette.textTertiary)
+                }
+            }
+        }
+    }
+
+    private func status(_ cache: ServerScoreDayCache?) -> String {
+        if !ServerScoringSettings.ready { return String(localized: "Server sleep unavailable: configure the server connection.") }
+        if !scores.signedIn { return String(localized: "Server sleep unavailable: sign in to your account.") }
+        guard let cache else { return scores.lastError ?? String(localized: "Server sleep unavailable for this day.") }
+        let feature = cache.features["sleep"]
+        let value = "\(feature?.status ?? "unavailable")\(feature?.reason.map { " · \($0)" } ?? "")"
+        return cache.stale ? String(localized: "Stale · \(value)") : value
+    }
+    private func minutes(_ value: Double?) -> String {
+        value.map { String(format: String(localized: "%.0f min"), locale: .current, $0) } ?? "—"
+    }
+    private func utcClock(_ value: Int) -> String {
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short; formatter.dateStyle = .none; formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        return formatter.string(from: Date(timeIntervalSince1970: Double(value)))
+    }
+    private func color(_ state: String) -> Color {
+        switch state {
+        case "wake": return StrandPalette.sleepAwake
+        case "light": return StrandPalette.sleepLight
+        case "deep": return StrandPalette.sleepDeep
+        case "rem": return StrandPalette.sleepREM
+        case "sleep_unstaged": return StrandPalette.textSecondary
+        case "off_body": return StrandPalette.textTertiary.opacity(0.45)
+        default: return StrandPalette.textTertiary.opacity(0.25)
+        }
+    }
+}
+
 // MARK: - SleepView
 //
 // Whoop-sleep clarity on the locked Noop component system. Scannable in two seconds:
@@ -27,6 +179,7 @@ import UIKit
 // minutes for light/deep/rem/awake; typical = mean of repo.days).
 
 struct SleepView: View {
+    @AppStorage(ServerScoringSettings.defaultsKey) private var serverScoringEnabled = true
     @EnvironmentObject var repo: Repository
     /// For `circadianPhase` only (the body-clock dial). Named `appModel` because `model` on this screen is
     /// already the built `SleepModel`.
@@ -127,6 +280,16 @@ struct SleepView: View {
     }
 
     var body: some View {
+        Group {
+            if serverScoringEnabled {
+                ServerSleepScreen(scores: appModel.serverScores)
+            } else {
+                localBody
+            }
+        }
+    }
+
+    private var localBody: some View {
         // Resolve the memoized model for THIS render. `dataKey` is O(1)-ish (counts + last-row
         // identity), so comparing it every render is cheap. When it matches the cached key we
         // reuse the cached model untouched — the many body re-evaluations from hover/animation/
@@ -139,7 +302,7 @@ struct SleepView: View {
         // the normal Sleep canvas. Empty state still gets a plain scaffold title for orientation.
         // Night scene is a FIXED ScrollView topBackground (Home sky pattern): edge-to-edge under the
         // status bar and stable on overscroll — pulling to the top reveals the scene, not surfaceBase.
-        ScreenScaffold(title: resolved == nil ? "Sleep" : nil,
+        return ScreenScaffold(title: resolved == nil ? "Sleep" : nil,
                        subtitle: resolved == nil ? "Last night, read in two seconds." : nil,
                        // PERF (scroll): lazy column — byte-identical layout (LazyVStack == eager VStack
                        // alignment/spacing/header), builds trailing trend/ledger cards on demand. Combined
@@ -2720,6 +2883,9 @@ private struct SleepTimeEditor: View {
     /// userEdited/nap row, which is never re-detected, so the delete-confirm copy drops the suppression
     /// promise for it, matching the undo banner. (#65 confirm honesty.)
     private let suppressesReDetection: Bool
+    private let automaticallyDismiss: Bool
+    private let statusMessage: String?
+    private let deleteMessage: LocalizedStringKey?
 
     @Environment(\.dismiss) private var dismiss
     @State private var bed: Date
@@ -2744,6 +2910,9 @@ private struct SleepTimeEditor: View {
          deleteLabel: LocalizedStringKey = "Delete this sleep",
          coverage: ClosedRange<Int>? = nil,
          suppressesReDetection: Bool = true,
+         automaticallyDismiss: Bool = true,
+         statusMessage: String? = nil,
+         deleteMessage: LocalizedStringKey? = nil,
          onSave: @escaping (Int, Int) async -> Void,
          onDelete: (() async -> Void)? = nil) {
         self.onSave = onSave
@@ -2753,6 +2922,9 @@ private struct SleepTimeEditor: View {
         self.deleteLabel = deleteLabel
         self.coverage = coverage
         self.suppressesReDetection = suppressesReDetection
+        self.automaticallyDismiss = automaticallyDismiss
+        self.statusMessage = statusMessage
+        self.deleteMessage = deleteMessage
         // A bed can never be seeded in the future (#940): the "Add a nap" anchor is wake+1h, which is
         // ahead of the clock right after a morning sync; clamp so the picker opens inside its bound.
         let seedBed = min(bedTs, Int(Date().timeIntervalSince1970))
@@ -2774,7 +2946,8 @@ private struct SleepTimeEditor: View {
         saving = true
         Task {
             await onSave(start, end)
-            dismiss()
+            saving = false
+            if automaticallyDismiss { dismiss() }
         }
     }
 
@@ -2786,6 +2959,7 @@ private struct SleepTimeEditor: View {
             Text(blurb)
                 .font(StrandFont.subhead).foregroundStyle(StrandPalette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
+            if let statusMessage { Text(statusMessage).font(StrandFont.footnote).foregroundStyle(StrandPalette.statusCritical) }
 
             NoopCard(padding: NoopMetrics.cardPadding, tint: StrandPalette.restColor) {
                 VStack(alignment: .leading, spacing: 10) {
@@ -2881,15 +3055,16 @@ private struct SleepTimeEditor: View {
                 saving = true
                 Task {
                     await onDelete?()
-                    dismiss()
+                    saving = false
+                    if automaticallyDismiss { dismiss() }
                 }
             }
         } message: {
             // A detected night is tombstoned so it won't re-detect; a userEdited/nap row writes no
             // tombstone, so its copy drops that (false) promise. Mirrors the undo banner. (#65)
-            Text(suppressesReDetection
+            Text(deleteMessage ?? (suppressesReDetection
                  ? "Removes this recorded sleep and recomputes the day without it. NARA won't re-detect sleep in this window. You can undo for a few seconds after."
-                 : "Removes this sleep and recomputes the day without it. You can undo for a few seconds after.")
+                 : "Removes this sleep and recomputes the day without it. You can undo for a few seconds after."))
         }
     }
 }

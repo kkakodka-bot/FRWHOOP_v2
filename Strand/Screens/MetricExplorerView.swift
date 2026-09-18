@@ -763,6 +763,14 @@ struct MetricDetailView: View {
         let fellBack = effRange != range
         return ScrollView {
             VStack(alignment: .leading, spacing: NoopMetrics.sectionGap) {
+                if ServerScoringSettings.isEnabled && (metric.key == "hrv" || metric.key == "resp_rate") {
+                    if metric.key == "hrv" {
+                        ServerHrvSeriesView(scores: app.serverScores)
+                    } else {
+                        ServerRespirationSummaryView(scores: app.serverScores)
+                    }
+                    Text("Local history").font(StrandFont.subhead).foregroundStyle(StrandPalette.textSecondary)
+                }
                 if loaded && chartSeries.isEmpty {
                     // No data in the entire history — keep the range bar for context, then the
                     // honest empty state (no scenic hero floating over nothing). Deliberately

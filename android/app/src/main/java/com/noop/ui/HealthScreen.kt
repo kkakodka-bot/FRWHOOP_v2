@@ -33,6 +33,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -172,6 +173,14 @@ fun HealthScreen(
         // down (Today / Trends / Sleep / metric-detail parity - same two prefs, same two behaviours).
         fullBleedBackground = screenBackdropFullBleed(showDayCycleBackground, skyBehindCards),
     ) {
+        if (com.noop.push.ServerScoringSettings.isEnabled(context)) {
+            item {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    TextButton(onClick = { onVitalClick("hrv") }) { Text(uiString(R.string.physiology_hrv_title)) }
+                    TextButton(onClick = { onVitalClick("resp") }) { Text(uiString(R.string.server_resp_title)) }
+                }
+            }
+        }
         if (today == null && !hasLiveHr) {
             // Even with no history yet, a freshly-connected strap can be told to sync now (#364) — the
             // manual "Sync now" + honest status sits above the empty state so it's always reachable.
@@ -1575,6 +1584,9 @@ private fun VitalsSection(
     // Display-only — banding still runs on the stored °C value.
     Column(verticalArrangement = Arrangement.spacedBy(Metrics.gap)) {
         SectionHeader(title = title, overline = overline, trailing = trailing)
+        if (com.noop.push.ServerScoringSettings.isEnabled(LocalContext.current)) {
+            Text(uiString(R.string.server_vitals_local_history), style = NoopType.footnote, color = Palette.textSecondary)
+        }
 
         // A uniform 2-column grid of fixed-height tiles. The macOS LazyVGrid is
         // adaptive(min: 168); on phones two columns is the faithful equivalent.
@@ -1936,6 +1948,10 @@ fun VitalDetailScreen(vm: AppViewModel, key: String) {
         // offset left the lower cards on plain canvas (tester report).
         fullBleedBackground = screenBackdropFullBleed(showDayCycleBackground, skyBehindCards),
     ) {
+        if (com.noop.push.ServerScoringSettings.isEnabled(context) && (key == "hrv" || key == "resp")) {
+            if (key == "hrv") ServerHrvSeriesCard(vm) else ServerRespirationSummaryCard(vm)
+            Text(uiString(R.string.physiology_hrv_local_history), style = NoopType.subhead, color = Palette.textSecondary)
+        }
         if (isSeriesBacked && !seriesLoaded) {
             DataPendingNote(
                 title = uiString(R.string.l10n_health_screen_loading_33ce4174),

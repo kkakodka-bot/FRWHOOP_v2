@@ -2,6 +2,9 @@ package com.noop.push
 
 import android.content.Context
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -15,11 +18,16 @@ class ServerScoreRepository(
     private val scope: CoroutineScope,
 ) {
     private val cacheStore = ServerScoreCacheStore(appContext)
-    private val memory = mutableMapOf<String, ServerScoreDayCache>()
+    private val session = ServerScoreSessionState()
+    private val visibleDays = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    private var pollingDay: String? = null
+    private fun currentOwnerId() = CloudAuthClient.storedSession(appContext)?.userId?.lowercase()
     private var pollJob: Job? = null
 
     private val _lastError = MutableStateFlow<String?>(null)
     val lastError: StateFlow<String?> = _lastError.asStateFlow()
+    private val _sleepEditMessage = MutableStateFlow<String?>(null)
+    val sleepEditMessage: StateFlow<String?> = _sleepEditMessage.asStateFlow()
 
     private val _lastFetchedAtMs = MutableStateFlow<Long?>(null)
     val lastFetchedAtMs: StateFlow<Long?> = _lastFetchedAtMs.asStateFlow()
@@ -28,20 +36,39 @@ class ServerScoreRepository(
     val signedIn: StateFlow<Boolean> = _signedIn.asStateFlow()
 
     init {
+        session.activate(currentOwnerId())
         preloadRecentDays()
     }
 
     fun overlay(day: String): ServerScoreDayCache? {
         if (!ServerScoringSettings.isEnabled(appContext)) return null
-        return memory[day]
+        synchronizeOwner()
+        visibleDays.add(day)
+        return session.overlay(day, currentOwnerId())
     }
 
     suspend fun signIn(email: String, password: String) {
+        stopPolling()
+        CloudAuthClient.clearSession(appContext)
+        session.activate(null)
+        _signedIn.value = false
+        _lastFetchedAtMs.value = null
+        _sleepEditMessage.value = null
+        val attempt = session.generation()
         runCatching {
             CloudAuthClient.signIn(appContext, email, password)
+            if (attempt != session.generation()) return
+            session.activate(currentOwnerId())
             _signedIn.value = true
             _lastError.value = null
+            preloadRecentDays()
+            val today = pollingDay ?: java.time.LocalDate.now().toString()
+            if (visibleDays.isEmpty()) visibleDays.add(today)
+            for (day in visibleDays.sorted()) refreshDay(day)
+            startPolling(today)
         }.onFailure {
+            if (it is CancellationException) throw it
+            if (attempt != session.generation()) return
             _signedIn.value = false
             _lastError.value = "Sign-in failed"
         }
@@ -51,9 +78,14 @@ class ServerScoreRepository(
         CloudAuthClient.clearSession(appContext)
         _signedIn.value = false
         stopPolling()
+        session.activate(null)
+        _lastFetchedAtMs.value = null
+        _lastError.value = null
+        _sleepEditMessage.value = null
     }
 
     fun startPolling(todayKey: String) {
+        pollingDay = todayKey
         if (!ServerScoringSettings.ready(appContext) || !_signedIn.value) return
         stopPolling()
         pollJob = scope.launch {
@@ -69,34 +101,96 @@ class ServerScoreRepository(
         pollJob = null
     }
 
+    /** Authenticated boundary writes never mutate the local sleep database or invoke local scoring. */
+    suspend fun saveSleepOverride(target: ServerSleepEditTarget,start: Long,end: Long,tombstone: Boolean): Boolean {
+        synchronizeOwner()
+        val cache=session.overlay(target.day,currentOwnerId())
+        if(!ServerScoringSettings.ready(appContext) || target.ownerId!=session.ownerId() ||
+            cache?.features?.get("sleep")?.deviceId!=target.deviceId || cache?.features?.get("sleep")?.supportsBoundaryOverrides!=true) {
+            _lastError.value="The account or sleep source changed. Refresh before editing."
+            return false
+        }
+        val generation=session.generation(); val key="override:${target.id}"; val request=session.beginRequest(key)
+        _lastError.value=null
+        try {
+            ServerScoreClient.saveSleepOverride(appContext,target,start,end,tombstone)
+            currentCoroutineContext().ensureActive()
+            if(!session.isCurrentRequest(key,generation,currentOwnerId(),request)) return false
+            _sleepEditMessage.value=if(tombstone) "Sleep deleted. Server recomputation queued." else "Sleep boundaries saved. Server recomputation queued."
+            refreshDay(target.day)
+            return generation==session.generation() && currentOwnerId()==target.ownerId
+        } catch(error: Exception) {
+            if(error is CancellationException) throw error
+            synchronizeOwner()
+            if(!session.isCurrentRequest(key,generation,currentOwnerId(),request)) return false
+            when(error) {
+                is ServerScoreClient.Unauthorized -> {
+                    if(!CloudAuthClient.clearSessionIfCurrent(appContext,error.accessToken,target.ownerId)) return false
+                    synchronizeOwner()
+                    _lastError.value="Session expired — sign in again"
+                }
+                is ServerScoreClient.Conflict -> {
+                    refreshDay(target.day)
+                    if(generation!=session.generation() || currentOwnerId()!=target.ownerId) return false
+                    _lastError.value="This sleep was changed elsewhere. Close the editor and reopen it to use the latest revision."
+                }
+                else -> _lastError.value="Sleep changes were not confirmed. Refresh before retrying; local sleep records were not changed."
+            }
+            return false
+        }
+    }
+
     suspend fun refreshDay(day: String) {
+        synchronizeOwner()
         if (!ServerScoringSettings.ready(appContext) || !_signedIn.value) return
+        visibleDays.add(day)
+        val owner = session.ownerId() ?: return
+        val generation = session.generation()
+        val request = session.beginRequest(day)
         runCatching {
-            val cache = ServerScoreClient.fetchDaySnapshot(appContext, day)
-            memory[day] = cache
+            val cache = ServerScoreClient.fetchDaySnapshot(appContext, day, owner)
+            currentCoroutineContext().ensureActive()
+            if (!session.accept(cache, generation, currentOwnerId(), request)) return
             cacheStore.upsert(cache)
             _lastFetchedAtMs.value = cache.fetchedAtMs
             _lastError.value = null
         }.onFailure { err ->
-            if (err.message == "unauthorized" || err.message == "session expired") {
+            if (err is CancellationException) throw err
+            synchronizeOwner()
+            if (!session.isCurrentRequest(day, generation, currentOwnerId(), request)) return
+            if (err is ServerScoreClient.Unauthorized) {
+                if (!CloudAuthClient.clearSessionIfCurrent(appContext, err.accessToken, owner)) return
                 _signedIn.value = false
+                session.activate(null)
                 _lastError.value = "Session expired — sign in again"
             } else {
                 _lastError.value = "Server scores unavailable"
-                memory[day]?.let { /* keep last-known */ }
-                    ?: cacheStore.load(day)?.let { memory[day] = it }
+                cacheStore.load(owner, day)?.let { session.accept(it, generation, currentOwnerId(), request) }
             }
         }
     }
 
     private fun preloadRecentDays() {
+        val owner = session.ownerId() ?: return
         val cal = java.util.Calendar.getInstance()
         val fmt = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
         repeat(14) { offset ->
             cal.timeInMillis = System.currentTimeMillis()
             cal.add(java.util.Calendar.DAY_OF_YEAR, -offset)
             val key = fmt.format(cal.time)
-            cacheStore.load(key)?.let { memory[key] = it }
+            cacheStore.load(owner, key)?.let { session.accept(it, session.generation(), currentOwnerId()) }
         }
+    }
+
+    private fun synchronizeOwner() {
+        val current = currentOwnerId()
+        if (session.ownerId() == current) return
+        stopPolling()
+        session.activate(current)
+        _signedIn.value = current != null
+        _lastFetchedAtMs.value = null
+        _lastError.value = null
+        _sleepEditMessage.value = null
+        preloadRecentDays()
     }
 }

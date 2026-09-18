@@ -542,7 +542,7 @@ private fun decodeWhoop5Historical(frame: ByteArray): Map<String, Any?>? {
  * (`burst_index`, NOT a channel id; PR#553) is carried beside the waveform
  * so durable rows retain their burst boundaries. The footer after [75] remains intentionally unmapped.
  */
-private data class V26Record(val unix: Long, val samples: List<Int>, val burstIndex: Int?)
+private data class V26Record(val unix: Long, val samples: List<Int>, val burstIndex: Int?, val recordIndex: Long?)
 
 private fun decodeWhoop5HistoricalV26(frame: ByteArray): V26Record? {
     if (frame.histU8(8) != PacketType.HISTORICAL_DATA.rawValue) return null
@@ -560,7 +560,7 @@ private fun decodeWhoop5HistoricalV26(frame: ByteArray): V26Record? {
     if (samples.isEmpty()) return null
     val rawBurstIndex = frame.histU8(21)
     return V26Record(unix = unix, samples = samples,
-        burstIndex = rawBurstIndex?.takeIf { it > 0 })
+        burstIndex = rawBurstIndex?.takeIf { it > 0 }, recordIndex = frame.histU32(11))
 }
 
 /**
@@ -797,6 +797,7 @@ fun extractHistoricalStreams(
 
     val hr = ArrayList<HrRow>()
     val rr = ArrayList<RrRow>()
+    val rrPackets = ArrayList<RrPacketProvenance>()
     val spo2 = ArrayList<Spo2Row>()
     val skinTemp = ArrayList<SkinTempRow>()
     val steps = ArrayList<StepRow>()
@@ -839,7 +840,7 @@ fun extractHistoricalStreams(
                             // corrected wall-second. Guard on non-empty so a truncated frame that decoded
                             // zero samples never banks an empty row (mirrors the Swift `!samples.isEmpty`).
                             if (rec.samples.isNotEmpty()) {
-                                ppgWaveform.add(PpgWaveformRow(baseTs, rec.samples, rec.burstIndex))
+                                ppgWaveform.add(PpgWaveformRow(baseTs, rec.samples, rec.burstIndex, rec.recordIndex))
                             }
                         }
                     }
@@ -854,6 +855,7 @@ fun extractHistoricalStreams(
                 // the u32 the decoder just carried in the unsigned domain, sending a post-2038 record
                 // negative and straight into the #547 drop below — silently, on Android only. See [histU32].
                 val ts = p.longOrNull("unix")?.let { correctedWall(it) } ?: continue
+                if (family == DeviceFamily.WHOOP5) RrPacketProvenance.checked(frame, ts)?.let(rrPackets::add)
 
                 // skip startup hr=0 (matches Swift `bpm != 0`).
                 p.intOrNull("heart_rate")?.let { bpm -> if (bpm != 0) hr.add(HrRow(ts, bpm)) }
@@ -1067,7 +1069,7 @@ fun extractHistoricalStreams(
         .map { PpgHrRow(ts = it.ts, bpm = it.bpm, conf = it.conf) }
 
     return StreamBatch(
-        hr = hr, rr = rr, events = events, battery = battery,
+        hr = hr, rr = rr, rrPackets = rrPackets, events = events, battery = battery,
         spo2 = spo2, skinTemp = skinTemp, resp = resp, gravity = gravity, steps = steps,
         sleepState = sleepState,
         ppgHr = ppgHr,

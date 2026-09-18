@@ -9,24 +9,26 @@ object ServerScoringSettings {
     const val DEFAULTS_KEY = "noop.serverScoring"
     const val AUTH_EMAIL_KEY = "noop.serverScoring.authEmail"
     const val POLL_INTERVAL_SECONDS = 60L
-    const val STALE_AFTER_SECONDS = 6 * 60 * 60L
-    const val ALGORITHM_VERSION = "frwhoop-server-1"
+    const val ALGORITHM_VERSION = "frwhoop-physiology-2"
     /** Foreground idle push cadence when server scoring is on (spec: 30–60 s). */
     const val IDLE_PUSH_INTERVAL_MS = 45_000L
     /** During an active offload, flush push at most once per this interval (spec: ≤10 s). */
     const val SYNC_PUSH_INTERVAL_MS = 10_000L
 
     fun skipsSyncCoupledRescore(context: Context): Boolean = isEnabled(context)
+    fun skipsSyncCoupledRescore(prefs: SharedPreferences): Boolean = isEnabled(prefs)
 
     fun prefs(context: Context): SharedPreferences =
         context.getSharedPreferences("noop_server_scoring", Context.MODE_PRIVATE)
 
     fun isEnabled(context: Context): Boolean =
-        prefs(context).getBoolean(DEFAULTS_KEY, true)
+        isEnabled(prefs(context))
+    fun isEnabled(prefs: SharedPreferences): Boolean = prefs.getBoolean(DEFAULTS_KEY, true)
 
     fun setEnabled(context: Context, enabled: Boolean) {
-        prefs(context).edit().putBoolean(DEFAULTS_KEY, enabled).apply()
+        setEnabled(prefs(context), enabled)
     }
+    fun setEnabled(prefs: SharedPreferences, enabled: Boolean) { prefs.edit().putBoolean(DEFAULTS_KEY, enabled).apply() }
 
     fun authEmail(context: Context): String =
         prefs(context).getString(AUTH_EMAIL_KEY, "") ?: ""
@@ -36,7 +38,7 @@ object ServerScoringSettings {
     }
 
     fun supabaseProjectUrl(): String? {
-        val endpoint = SelfHostedPushSettings.endpointText().trim().removeSuffix("/")
+        val endpoint = BuildConfig.NOOP_PUSH_ENDPOINT.trim().removeSuffix("/")
         if (!endpoint.endsWith("/functions/v1/push")) return null
         return endpoint.removeSuffix("/functions/v1/push")
     }

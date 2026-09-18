@@ -21,7 +21,8 @@ extension WhoopStore {
         if knownFamily == nil && !nonWhoop {
             tagged = try Bool.fetchOne(db, sql: """
                 SELECT EXISTS(SELECT 1 FROM rrInterval WHERE deviceId = ? AND srcChannel IN (5, 6, 7))
-                """, arguments: [deviceId]) ?? false
+                    OR EXISTS(SELECT 1 FROM rrPacketProvenance WHERE deviceId = ?)
+                """, arguments: [deviceId, deviceId]) ?? false
             // Re-pairing can leave legacy rows under the canonical alias while callers still hold
             // that old ID. Resolve its active strap here so sleep edits and ordinary reads agree.
             // Physical owners and confirmed WHOOP 4 history never inherit another strap's policy.

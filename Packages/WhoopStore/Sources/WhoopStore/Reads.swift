@@ -124,7 +124,7 @@ extension WhoopStore {
     /// changed. Fingerprint the complete scoring input instead. HR keeps its established count+timestamp
     /// fingerprint; the other streams use SQLite's monotonic rowid frontier, which catches old backfills
     /// without full-table COUNT scans over millions of dense motion/R-R rows.
-    /// `v3` also witnesses authoritative WHOOP 5 RR promotions and registry-only source-policy changes.
+    /// `v4` also witnesses immutable packet receipts, including packet-only late arrival.
     /// The version changes the persisted watermark once so the normal recent window is recomputed.
     /// Older persisted scores remain until explicitly rescored; raw legacy intervals stay on disk.
     public func analysisFingerprint() async throws -> String {
@@ -135,6 +135,8 @@ extension WhoopStore {
                   (SELECT COALESCE(MAX(ts), 0) FROM hrSample) AS hm,
                   (SELECT COALESCE(MAX(rowid), 0) FROM ppgHrSample) AS p,
                   (SELECT COALESCE(MAX(rowid), 0) FROM rrInterval) AS r,
+                  (SELECT COUNT(*) FROM rrPacketProvenance) AS qc,
+                  (SELECT COALESCE(MAX(rowid), 0) FROM rrPacketProvenance) AS qm,
                   (SELECT COUNT(*) FROM rrInterval WHERE srcChannel = 5
                      AND (tsSuspect IS NULL OR tsSuspect <> 1)) AS w5,
                   (SELECT COUNT(*) FROM rrInterval WHERE srcChannel = 7
@@ -159,7 +161,7 @@ extension WhoopStore {
             }
             let historyCount: Int = row["w5"]
             let registry: String = row["registry"]
-            return "v3|h\(hc):\(hm)|" + tails.joined(separator: "|")
+            return "v4|h\(hc):\(hm)|" + tails.joined(separator: "|") + "|q\(row["qc"] as Int):\(row["qm"] as Int)"
                 + "|w5\(historyCount)|w7\(row["w7"] as Int)|tagged\(row["w5tagged"] as Int)|registry\(registry)"
         }
     }
@@ -200,6 +202,8 @@ extension WhoopStore {
                   (SELECT COUNT(*) FROM rrInterval WHERE deviceId = :d AND ts >= :f AND ts <= :t
                      AND (srcChannel IS NULL OR srcChannel <> :rrx)
                      AND (tsSuspect IS NULL OR tsSuspect <> 1)) AS rc,
+                  (SELECT COUNT(*) FROM rrPacketProvenance WHERE deviceId = :d AND ts >= :f AND ts <= :t) AS qc,
+                  (SELECT COALESCE(MAX(rowid), 0) FROM rrPacketProvenance WHERE deviceId = :d AND ts >= :f AND ts <= :t) AS qm,
                   (SELECT COALESCE(MAX(ts), 0) FROM rrInterval WHERE deviceId = :d AND ts >= :f AND ts <= :t
                      AND (srcChannel IS NULL OR srcChannel <> :rrx)
                      AND (tsSuspect IS NULL OR tsSuspect <> 1)) AS rm,
@@ -226,7 +230,7 @@ extension WhoopStore {
                   (SELECT COALESCE(MAX(ts), 0) FROM event WHERE deviceId = :d AND ts >= :f AND ts <= :t) AS em
                 """, arguments: ["d": deviceId, "f": from, "t": to,
                                  "rrx": RRSourceChannel.spo2Ibi.rawValue]) else { return "" }
-            let keys = ["p", "r", "x", "o", "g", "z", "t", "b", "e"]
+            let keys = ["p", "r", "q", "x", "o", "g", "z", "t", "b", "e"]
             let parts = keys.map { key -> String in
                 let count: Int = row[key + "c"], maxTs: Int = row[key + "m"]
                 return "\(key)\(count):\(maxTs)"
@@ -234,7 +238,7 @@ extension WhoopStore {
             let historyCount: Int = row["w5"]
             let registry: String = row["registry"]
             let strictRR = try Self.isWhoop5RRSource(db: db, deviceId: deviceId)
-            return "s2|" + parts.joined(separator: "|") + "|w5\(historyCount)|w7\(row["w7"] as Int)|ownerTagged\(row["w5owner"] as Int)|registry\(registry)|rr5=\(strictRR)"
+            return "s3|" + parts.joined(separator: "|") + "|w5\(historyCount)|w7\(row["w7"] as Int)|ownerTagged\(row["w5owner"] as Int)|registry\(registry)|rr5=\(strictRR)"
         }
     }
 

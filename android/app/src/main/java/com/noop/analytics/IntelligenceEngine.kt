@@ -1047,6 +1047,7 @@ object IntelligenceEngine {
                 hr = hr,
                 rr = rr,
                 resp = resp,
+                hrvObservations = rr.observations,
                 vendorResp = vendorResp,
                 gravity = grav,
                 steps = steps,
@@ -2741,11 +2742,21 @@ object IntelligenceEngine {
         }
 
     /** Keep owner-policy lookup out of the bytecode-constrained main scoring method. */
+    private class RrWindowInputs(
+        rows: List<com.noop.data.RrInterval>,
+        val observations: List<PhysiologyQuality.IntervalObservation>?,
+    ) : List<com.noop.data.RrInterval> by rows
+
     private suspend fun readRrWindow(
         window: SlidingStreamWindow<com.noop.data.RrInterval>, repo: com.noop.data.WhoopRepository,
         owner: String, from: Long, to: Long, unlabelledAliasOfWhoop5: Boolean,
-    ) = window.rows(owner, from, to,
-        allowReuse = !repo.isWhoop5RrSource(owner, unlabelledAliasOfWhoop5))
+    ): RrWindowInputs {
+        val historical = repo.isWhoop5RrSource(owner, unlabelledAliasOfWhoop5)
+        val rows = window.rows(owner, from, to, allowReuse = !historical)
+        val observations = if (historical) PhysiologyQuality.packetOrLegacy(
+            repo.rrPacketProvenance(owner, from, to + 1), rows, owner) else null
+        return RrWindowInputs(rows, observations)
+    }
 
 
     /**

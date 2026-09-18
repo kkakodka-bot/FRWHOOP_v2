@@ -119,6 +119,7 @@ class DeviceRegistry(
     private suspend fun reKeyDeviceScopedRows(from: String, to: String) {
         dao.reKeyHr(from, to); dao.deleteHrFor(from)
         dao.reKeyRr(from, to); dao.deleteRrFor(from)
+        dao.reKeyRrPackets(from, to); dao.deleteRrPacketsFor(from)
         dao.reKeySpo2(from, to); dao.deleteSpo2For(from)
         dao.reKeySkinTemp(from, to); dao.deleteSkinTempFor(from)
         dao.reKeyResp(from, to); dao.deleteRespFor(from)
@@ -199,6 +200,7 @@ class DeviceRegistry(
         transactor.run {
             dao.deleteHrFor(id)
             dao.deleteRrFor(id)
+            dao.deleteRrPacketsFor(id)
             dao.deleteSpo2For(id)
             dao.deleteSkinTempFor(id)
             dao.deleteRespFor(id)

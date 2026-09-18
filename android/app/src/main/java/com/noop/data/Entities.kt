@@ -155,6 +155,14 @@ data class RrInterval(
     val tsSuspect: Int? = null,
 )
 
+@Entity(tableName = "rrPacketProvenance", primaryKeys = ["deviceId", "packetId"],
+    indices = [Index(value = ["deviceId", "ts"], name = "rrPacketProvenance_device_ts")])
+data class RrPacketProvenanceEntity(
+    val deviceId: String, val packetId: String, val ts: Long, val sensorTs: Long, val recordIndex: Long,
+    val rawHex: String, val srcChannel: Int, val schemaVersion: Int, val decoderVersion: String,
+    val clockVersion: String, val timestampPrecisionSeconds: Double, val clockOffsetSeconds: Long, val declaredCount: Int,
+)
+
 /**
  * Strap event. Swift `event` (v1). PK (deviceId, ts, kind).
  * `payloadJSON` is the deterministic (sorted-keys) JSON of the remaining parsed fields,
@@ -708,19 +716,20 @@ data class SyncJournalEntryEntity(
  * and a waveform has no aggregate that survives it. Bounding the bytes while always leaving a full working
  * set is the whole point. Swift twin: `WhoopStore.ppgWaveformRetentionRows`.
  */
-@Entity(tableName = "ppgWaveformSample", primaryKeys = ["deviceId", "ts"])
+@Entity(tableName = "ppgWaveformSample", primaryKeys = ["deviceId", "ts", "recordIndex"])
 data class PpgWaveformSampleEntity(
     val deviceId: String,
     val ts: Long,
     val samples: ByteArray,
     val burstIndex: Int? = null,
+    val recordIndex: Long = -1,
 ) {
     // ByteArray needs structural equals/hashCode (the generated identity ones break round-trip asserts).
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (other !is PpgWaveformSampleEntity) return false
         return deviceId == other.deviceId && ts == other.ts && samples.contentEquals(other.samples) &&
-            burstIndex == other.burstIndex
+            burstIndex == other.burstIndex && recordIndex == other.recordIndex
     }
 
     override fun hashCode(): Int {
@@ -728,6 +737,7 @@ data class PpgWaveformSampleEntity(
         result = 31 * result + ts.hashCode()
         result = 31 * result + samples.contentHashCode()
         result = 31 * result + (burstIndex ?: 0)
+        result = 31 * result + recordIndex.hashCode()
         return result
     }
 }

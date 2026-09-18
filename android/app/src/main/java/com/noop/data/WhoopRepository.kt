@@ -93,12 +93,13 @@ data class StreamBatch(
      * a migration. Diag only (excluded from [isEmpty]). Byte-identical twin of Swift `Streams.dynAccel`.
      */
     val dynAccel: DynAccelDiag = DynAccelDiag(),
+    val rrPackets: List<com.noop.protocol.RrPacketProvenance> = emptyList(),
 ) {
     // [v18Aux] counts here, and it is load-bearing rather than cosmetic: `insert` early-returns on
     // `isEmpty`, so a batch carrying ONLY aux rows would silently bank nothing. Swift's `Streams.isEmpty`
     // lists it too — the two must agree or the same offload drops rows on one platform only.
     val isEmpty: Boolean
-        get() = hr.isEmpty() && rr.isEmpty() && events.isEmpty() && battery.isEmpty() &&
+        get() = hr.isEmpty() && rr.isEmpty() && rrPackets.isEmpty() && events.isEmpty() && battery.isEmpty() &&
             spo2.isEmpty() && skinTemp.isEmpty() && resp.isEmpty() && gravity.isEmpty() &&
             steps.isEmpty() && sleepState.isEmpty() && ppgHr.isEmpty() && ppgWaveform.isEmpty() &&
             v18Aux.isEmpty()
@@ -303,7 +304,8 @@ data class PpgHrRow(val ts: Long, val bpm: Int, val conf: Double)
  * unix second, [samples] the raw i16 ADC counts (usually 24, fewer on a truncated frame). deviceId is
  * attached on insert; the samples are packed to a little-endian i16 BLOB by [StreamPersistence.packPpgSamples].
  */
-data class PpgWaveformRow(val ts: Long, val samples: List<Int>, val burstIndex: Int? = null)
+data class PpgWaveformRow(val ts: Long, val samples: List<Int>, val burstIndex: Int? = null,
+                          val recordIndex: Long? = null)
 
 /** Count of rows ACTUALLY inserted per stream (mirrors WhoopStore.insert return tuple). */
 data class InsertCounts(
@@ -563,6 +565,13 @@ class WhoopRepository(
     ): InsertResult {
         val hrIds = if (streams.hr.isEmpty()) emptyList() else
             dao.insertHr(streams.hr.map { HrSample(deviceId, it.ts, it.bpm) })
+        val packets = streams.rrPackets.filter { p -> com.noop.protocol.RrPacketProvenance.bytes(p.rawHex)?.let {
+            com.noop.protocol.RrPacketProvenance.checked(it, p.ts) == p
+        } == true }
+        val packetIds = if (packets.isEmpty()) emptyList() else dao.insertRrPackets(packets.map { p ->
+            RrPacketProvenanceEntity(deviceId, p.packetId, p.ts, p.sensorTs, p.recordIndex, p.rawHex, p.srcChannel,
+                p.schemaVersion, p.decoderVersion, p.clockVersion, p.timestampPrecisionSeconds, p.clockOffsetSeconds, p.declaredCount)
+        })
         val rrRows = assignRrSeq(deviceId, streams.rr)
         val rrIds = if (rrRows.isEmpty()) emptyList() else dao.insertRr(rrRows)
         for ((index, row) in rrRows.withIndex()) {
@@ -617,7 +626,7 @@ class WhoopRepository(
             dao.insertPpgWaveform(
                 streams.ppgWaveform.map {
                     PpgWaveformSampleEntity(deviceId, it.ts, StreamPersistence.packPpgSamples(it.samples),
-                        it.burstIndex)
+                        it.burstIndex, it.recordIndex ?: -1)
                 },
             )
             // #1911 rolling retention, amortised and best-effort on exactly the same terms as the v18-aux
@@ -683,7 +692,7 @@ class WhoopRepository(
         // The debt rows are in THIS Room transaction with the raw rows. A process death can therefore
         // expose either both or neither; it can never leave an ACKed productive chunk with no rescore debt.
         // Battery-only chunks do not affect scoring and deliberately create no post-offload work.
-        val productiveForScoring = shouldMarkPostBackfillDebt(counts, sleepStateIds.countInserted())
+        val productiveForScoring = shouldMarkPostBackfillDebt(counts, sleepStateIds.countInserted()) || packetIds.countInserted() > 0
         if (markPostBackfillDebt && productiveForScoring) {
             val now = System.currentTimeMillis() / 1000L
             SyncDrainPolicy.stageOrder.forEach { kind ->
@@ -1145,7 +1154,8 @@ class WhoopRepository(
     suspend fun ppgWaveformSamples(deviceId: String, from: Long, to: Long, limit: Int = DEFAULT_LIMIT):
         List<PpgWaveformRow> =
         dao.ppgWaveformSamples(deviceId, from, to, limit)
-            .map { PpgWaveformRow(it.ts, StreamPersistence.unpackPpgSamples(it.samples)) }
+            .map { PpgWaveformRow(it.ts, StreamPersistence.unpackPpgSamples(it.samples),
+                it.burstIndex, it.recordIndex.takeUnless { index -> index == -1L }) }
 
     /**
      * The banked 5/MG v18 auxiliary fields in [from, to] for one device, ascending by ts — one row per
@@ -1304,6 +1314,13 @@ class WhoopRepository(
     suspend fun rawRrIntervalsForDevice(deviceId: String, from: Long, to: Long,
                                         limit: Int = DEFAULT_LIMIT): List<RrInterval> =
         dao.rrIntervals(deviceId, from, to, limit)
+
+    suspend fun rrPacketProvenance(deviceId: String, from: Long, to: Long): List<com.noop.protocol.RrPacketProvenance> =
+        dao.rrPackets(deviceId, from, to).mapNotNull { row ->
+            com.noop.protocol.RrPacketProvenance.bytes(row.rawHex)?.let { bytes ->
+                com.noop.protocol.RrPacketProvenance.checked(bytes, row.ts)?.takeIf { it.packetId == row.packetId }
+            }
+        }
 
     suspend fun rrIntervalsForDevice(deviceId: String, from: Long, to: Long,
                                      limit: Int = DEFAULT_LIMIT,

@@ -396,11 +396,14 @@ fun TodayScreen(
         if (selectedDayOffset == 0) today?.day ?: selectedDay.toString() else selectedDay.toString()
     }
     val context = LocalContext.current
-    val lastServerFetch by viewModel.serverScores.lastFetchedAtMs.collectAsStateWithLifecycle()
-    val serverOverlay = remember(selectedDayKey, lastServerFetch) {
-        viewModel.serverScores.overlay(selectedDayKey)
+    val serverSignedIn by viewModel.serverScores.signedIn.collectAsStateWithLifecycle()
+    val serverEnabled = com.noop.push.ServerScoringSettings.isEnabled(context)
+    val serverReady = com.noop.push.ServerScoringSettings.ready(context)
+    // Observe refreshes, but re-read the inexpensive owner-scoped cache instead of memoizing an owner.
+    val serverOverlay = viewModel.serverScores.lastFetchedAtMs.collectAsStateWithLifecycle().value.let {
+        if (serverReady && serverSignedIn) viewModel.serverScores.overlay(selectedDayKey) else null
     }
-    LaunchedEffect(selectedDayKey) {
+    LaunchedEffect(selectedDayKey, serverEnabled, serverReady, serverSignedIn) {
         if (com.noop.push.ServerScoringSettings.isEnabled(context)) {
             viewModel.serverScores.refreshDay(selectedDayKey)
         }
@@ -439,7 +442,6 @@ fun TodayScreen(
     }
     // Display-only unit system + the SI profile weight, read once like every other Settings-backed
     // preference (SharedPreferences isn't reactive, a Settings write triggers recomposition).
-    val context = LocalContext.current
     val unitSystem = UnitPrefs.system(context)
     // Effort display scale (#268), drives the Effort tile's value + caption. Display-only.
     val effortScale = UnitPrefs.effortScale(context)
@@ -1605,6 +1607,9 @@ fun TodayScreen(
                                 MetricGrid(
                                     d = stepResolvedDisplayMetric,
                                     w = window,
+                                    serverEnabled = serverEnabled,
+                                    selectedDayKey = selectedDayKey,
+                                    serverOverlay = serverOverlay,
                                     recoveryCalibration = recoveryCalibration,
                                     lastScoredCharge = lastScoredCharge,
                                     carriedDay = lastScoredRecoveryDay,
@@ -1666,7 +1671,9 @@ fun TodayScreen(
                         // The three hero vitals, HRV / Resting HR / Respiratory. Carried day (#543).
                         TodaySection.RECOVERY_VITALS -> Box(modifier = Modifier.fillMaxWidth().staggeredAppear(stagger)) {
                             HeroMetricRows(day = displayMetric, carriedDay = lastScoredRecoveryDay,
-                                           vitalsDay = lastVitalsDay, onOpenMetric = onOpenMetric)
+                                           vitalsDay = lastVitalsDay, onOpenMetric = onOpenMetric,
+                                           serverEnabled = serverEnabled, selectedDayKey = selectedDayKey,
+                                           serverOverlay = serverOverlay)
                         }
                         // YOUR CARDS, the user-customisable dashboard (WHOOP "My Dashboard"). Hydration is
                         // hidden when its tracking is OFF (the editor still offers it, so the choice
@@ -1701,6 +1708,8 @@ fun TodayScreen(
                             onCustomise = { showDashboardEditor = true },
                             spo2CandidateByDay = spo2CandidateByDay,
                             serverOverlay = serverOverlay,
+                            serverEnabled = serverEnabled,
+                            selectedDayKey = selectedDayKey,
                         )
                         TodaySection.MENSTRUAL_CYCLE -> MenstrualCycleHomeCard(
                             enabled = cycleEnabled,
@@ -3225,6 +3234,9 @@ private fun HeroMetricRows(
     day: DailyMetric?,
     carriedDay: DailyMetric? = null,
     vitalsDay: DailyMetric? = null,
+    serverEnabled: Boolean = false,
+    selectedDayKey: String = "",
+    serverOverlay: com.noop.push.ServerScoreDayCache? = null,
     // #706/#684: the same `vital_detail/<key>` trends the HRV / Resting HR / Respiratory dashboard cards
     // open. These three rows show the SAME metrics and had no way through, so the summary card was the one
     // place on Today where a metric was a dead end. Keys come from `dashboardCardMetricKey`, so the two
@@ -3232,9 +3244,12 @@ private fun HeroMetricRows(
     onOpenMetric: (String) -> Unit = {},
 ) {
     // Per-field, today-first: today's own value wins; the vitals carry only fills a field today lacks.
-    val hrv = day?.avgHrv ?: vitalsDay?.avgHrv
-    val rhr = day?.restingHr ?: vitalsDay?.restingHr
-    val resp = day?.respRateBpm ?: vitalsDay?.respRateBpm
+    val hrv = dashboardServerVital(DashboardCard.HRV, serverEnabled, selectedDayKey, serverOverlay,
+        day?.avgHrv ?: vitalsDay?.avgHrv)?.value
+    val rhr = dashboardServerVital(DashboardCard.RESTING_HR, serverEnabled, selectedDayKey, serverOverlay,
+        (day?.restingHr ?: vitalsDay?.restingHr)?.toDouble())?.value
+    val resp = dashboardServerVital(DashboardCard.RESPIRATORY, serverEnabled, selectedDayKey, serverOverlay,
+        day?.respRateBpm ?: vitalsDay?.respRateBpm)?.value
     // The caption reflects the row the shown vitals actually came from: if today supplied ANY of them the
     // values are today's own, so don't stamp them as a prior "Last night · <date>"; only when EVERY shown
     // vital is carried do we stamp the carry's date (relabelled "Latest sleep · <date>" when weeks-old).
@@ -3245,7 +3260,7 @@ private fun HeroMetricRows(
     // values describing one night. `day?.sleepHrOnly ?: vitalsDay?.sleepHrOnly` would instead fall through
     // on a pre-v36 row whose flag is merely unknown, and explain a different night's numbers.
     // Gated on something actually being blank, so a night that recovered its vitals stays quiet.
-    val hrOnlyNight = showsHrOnlyNote(day, vitalsDay, carriedFromVitals, hrv, rhr)
+    val hrOnlyNight = !serverEnabled && showsHrOnlyNote(day, vitalsDay, carriedFromVitals, hrv, rhr?.roundToInt())
     // iOS `recoveryVitalsSection`: a frosted card with a "RECOVERY VITALS" header + a "last night · <date>"
     // on the right, then three `vitalRow`s (26dp mini LIQUID VESSEL + label + value). NoopCard supplies the
     // same neutral surfaceRaised + hairline as iOS's frosted card. Inner spacing 12, matching iOS.
@@ -3257,7 +3272,7 @@ private fun HeroMetricRows(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Overline(uiString(R.string.today_section_recovery_vitals), modifier = Modifier.weight(1f))
                 // iOS `lastNightLine` — today's own "Last night · <date>" unless the shown vitals are a carry.
-                Text(
+                if (!serverEnabled) Text(
                     if (carriedFromVitals) carriedCaption(vitalsDay!!.day).localized() else heroVitalsLastNightLine(),
                     style = NoopType.caption,
                     color = Palette.textTertiary,
@@ -3270,14 +3285,16 @@ private fun HeroMetricRows(
                 fraction = hrv?.let { (it / 120.0).coerceIn(0.0, 1.0) },
                 metricKey = dashboardCardMetricKey(DashboardCard.HRV),
                 onOpenMetric = onOpenMetric,
+                caption = dashboardServerVitalSubtitle(DashboardCard.HRV, serverEnabled, selectedDayKey, serverOverlay),
             )
             HeroVitalRow(
                 label = uiString(R.string.l10n_today_screen_resting_heart_rate_348928d6),
-                value = rhr?.let { "$it bpm" } ?: NO_DATA,
+                value = rhr?.let { "${it.roundToInt()} bpm" } ?: NO_DATA,
                 tint = Palette.metricRose,
                 fraction = rhr?.let { (it / 100.0).coerceIn(0.0, 1.0) },
                 metricKey = dashboardCardMetricKey(DashboardCard.RESTING_HR),
                 onOpenMetric = onOpenMetric,
+                caption = dashboardServerVitalSubtitle(DashboardCard.RESTING_HR, serverEnabled, selectedDayKey, serverOverlay),
             )
             HeroVitalRow(
                 label = uiString(R.string.l10n_today_screen_breaths_per_minute_2b197c54),
@@ -3286,6 +3303,7 @@ private fun HeroMetricRows(
                 fraction = resp?.let { (it / 24.0).coerceIn(0.0, 1.0) },
                 metricKey = dashboardCardMetricKey(DashboardCard.RESPIRATORY),
                 onOpenMetric = onOpenMetric,
+                caption = dashboardServerVitalSubtitle(DashboardCard.RESPIRATORY, serverEnabled, selectedDayKey, serverOverlay),
             )
             if (hrOnlyNight) {
                 Text(
@@ -3313,6 +3331,7 @@ private fun HeroVitalRow(
     value: String,
     tint: Color,
     fraction: Double?,
+    caption: String? = null,
     // The metric-detail key this row opens, from `dashboardCardMetricKey` so the row and its dashboard-card
     // twin cannot drift onto different trends for the same vital. NULL means the row simply does not
     // navigate: it loses the tap AND the chevron together, which is the honest degradation. An earlier
@@ -3338,7 +3357,10 @@ private fun HeroVitalRow(
             animated = false,
             modifier = Modifier.size(26.dp),
         )
-        Text(label, style = NoopType.subhead, color = Palette.textSecondary, modifier = Modifier.weight(1f))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(label, style = NoopType.subhead, color = Palette.textSecondary)
+            caption?.let { Text(it, style = NoopType.caption, color = Palette.textTertiary) }
+        }
         Text(
             displayValue,
             style = NoopType.number(15f),
@@ -3510,6 +3532,8 @@ private fun YourCardsSection(
     onCustomise: () -> Unit,
     spo2CandidateByDay: Map<String, Double> = emptyMap(),
     serverOverlay: com.noop.push.ServerScoreDayCache? = null,
+    serverEnabled: Boolean = false,
+    selectedDayKey: String = day?.day.orEmpty(),
 ) {
     // #1331 parity: honor the °C/°F preference on the Skin Temp card, the way Health / Compare (and the
     // Swift twin) do. The classic dashboard hardcoded Celsius here alone, so a °F user saw °C on this
@@ -3569,6 +3593,8 @@ private fun YourCardsSection(
                         hydrationGoalMl = hydrationGoalMl,
                         spo2CandidateByDay = spo2CandidateByDay,
                         serverOverlay = serverOverlay,
+                        serverEnabled = serverEnabled,
+                        selectedDayKey = selectedDayKey,
                     ),
                     // The mini liquid vessel's fill — the SAME per-card fraction iOS `liquidCard` uses.
                     fraction = dashboardCardFraction(
@@ -3583,12 +3609,16 @@ private fun YourCardsSection(
                         vitality = vitality,
                         importedStepsForDay = importedStepsForDay,
                         estimatedStepsForDay = estimatedStepsForDay,
+                        serverOverlay = serverOverlay,
+                        serverEnabled = serverEnabled,
+                        selectedDayKey = selectedDayKey,
                     ),
                     tint = dashboardCardTint(card),
                     // #110: label the sleep row with its source + night (this section renders at offset 0
                     // only, so it IS last night), so a WHOOP-imported figure is never silently shown as
                     // "last night" with no provenance. iOS TodayView.sleepSourceSubtitle twin.
-                    subtitleOverride = sleepSourceSubtitle(card, day),
+                    subtitleOverride = dashboardServerVitalSubtitle(card, serverEnabled, selectedDayKey, serverOverlay)
+                        ?: sleepSourceSubtitle(card, day),
                     // #706/#684: every card now opens its OWN detail, matching iOS. The Stress card -> Stress;
                     // the overnight vitals (HRV / Resting HR / Respiratory / SpO₂ / Skin Temp) + Fitness age /
                     // Vitality / Steps / Calories -> each metric's focused trend (vital_detail/<key>, the iOS
@@ -3724,6 +3754,9 @@ private fun dashboardCardFraction(
     vitality: Double?,
     importedStepsForDay: Int?,
     estimatedStepsForDay: Int?,
+    serverOverlay: com.noop.push.ServerScoreDayCache? = null,
+    serverEnabled: Boolean = false,
+    selectedDayKey: String = day?.day.orEmpty(),
 ): Double? {
     fun over(v: Double?, ceiling: Double): Double? = v?.let { (it / ceiling).coerceIn(0.0, 1.0) }
     val vd = carriedDay ?: day
@@ -3732,13 +3765,16 @@ private fun dashboardCardFraction(
         DashboardCard.FITNESS_AGE -> if (fitnessAge != null) 0.5 else null
         DashboardCard.VO2MAX -> if (vo2max != null) 0.5 else null
         DashboardCard.VITALITY -> over(vitality, 100.0)
-        DashboardCard.HRV -> over(day?.avgHrv ?: vitalsDay?.avgHrv, 120.0)
-        DashboardCard.RESTING_HR -> over((day?.restingHr ?: vitalsDay?.restingHr)?.toDouble(), 100.0)
+        DashboardCard.HRV -> over(dashboardServerVital(card, serverEnabled, selectedDayKey, serverOverlay,
+            day?.avgHrv ?: vitalsDay?.avgHrv)?.value, 120.0)
+        DashboardCard.RESTING_HR -> over(dashboardServerVital(card, serverEnabled, selectedDayKey, serverOverlay,
+            (day?.restingHr ?: vitalsDay?.restingHr)?.toDouble())?.value, 100.0)
         // PER-FIELD carry: today → the STALENESS-BOUNDED prior night (`respDay` = lastRespRow). The
         // unbounded `vitalsDay?.respRateBpm` is dropped on purpose — it picks the newest row with ANY
         // vital regardless of age and printed one CSV import's 15.6 as today's rate for a fortnight
         // (#1331). Byte-twin of the Swift `lastRespDay` card.
-        DashboardCard.RESPIRATORY -> over(day?.respRateBpm ?: respDay?.respRateBpm, 24.0)
+        DashboardCard.RESPIRATORY -> over(dashboardServerVital(card, serverEnabled, selectedDayKey, serverOverlay,
+            day?.respRateBpm ?: respDay?.respRateBpm)?.value, 24.0)
         DashboardCard.STEPS -> {
             val steps = (day?.steps ?: importedStepsForDay ?: estimatedStepsForDay)?.toDouble()
             over(steps, 10000.0)
@@ -3752,19 +3788,26 @@ private fun dashboardCardFraction(
     }
 }
 
-/**
- * Resolve a dashboard card's CURRENT display value from the values Today already loads, with its unit
- * suffix appended. Returns a dash when the value isn't available yet, never a fabricated number. Reuses
- * the SAME reads the rest of Today uses (displayMetric vitals, the pinned Stress / Fitness age / Vitality,
- * steps, calories, sleep duration). Mirrors iOS dashboardValue.
- *
- * The three overnight vitals (HRV / Resting HR / Respiratory) read PER-FIELD today-first with the
- * recovery-INDEPENDENT [vitalsDay] carry (#543 follow-up), so a night whose recovery was nulled post-update
- * still shows its OWN preserved value rather than an older recovery-scored day's (the tile-vs-card fix).
- * SpO₂ / Skin Temp / Sleep keep the recovery-gated `carriedDay ?: day` carry. Steps / Calories stay on
- * today's own row (they accrue through the day, never a carry). Stress / Fitness age / Vitality come from
- * their own resolved loads.
- */
+/** Selects the configured source for overnight vitals; other card policies remain unchanged. */
+private fun dashboardServerVital(card: DashboardCard, serverEnabled: Boolean, day: String,
+    overlay: com.noop.push.ServerScoreDayCache?, localValue: Double?): com.noop.push.ServerVitalSelection? {
+    val metric = when (card) {
+        DashboardCard.HRV -> com.noop.push.ServerVitalSelection.Metric.HRV
+        DashboardCard.RESTING_HR -> com.noop.push.ServerVitalSelection.Metric.RESTING_HR
+        DashboardCard.RESPIRATORY -> com.noop.push.ServerVitalSelection.Metric.RESPIRATORY
+        else -> return null
+    }
+    return com.noop.push.ServerVitalSelection.resolve(metric, serverEnabled, day, overlay, localValue)
+}
+
+private fun dashboardServerVitalSubtitle(card: DashboardCard, serverEnabled: Boolean, day: String,
+    overlay: com.noop.push.ServerScoreDayCache?): String? {
+    val selection = dashboardServerVital(card, serverEnabled, day, overlay, null)?.takeIf { it.fromServer } ?: return null
+    val label = uiString(R.string.server_vital_source_day_status, selection.day, selection.status ?: "unavailable")
+    return if (selection.stale) uiString(R.string.server_sleep_stale, label) else label
+}
+
+/** Missing selected-day server vitals stay unavailable; local mode retains its per-field carry. */
 private fun dashboardCardValue(
     card: DashboardCard,
     day: DailyMetric?,
@@ -3789,6 +3832,8 @@ private fun dashboardCardValue(
     skinTempPreferred: com.noop.analytics.SkinTempDisplay.Kind =
         com.noop.analytics.SkinTempDisplay.Kind.ABSOLUTE,
     serverOverlay: com.noop.push.ServerScoreDayCache? = null,
+    serverEnabled: Boolean = false,
+    selectedDayKey: String = day?.day.orEmpty(),
 ): String {
     fun withUnit(s: String): String =
         if (s == NO_DATA) NO_DATA else if (card.unit.isEmpty()) s else "$s ${card.unit}"
@@ -3807,21 +3852,21 @@ private fun dashboardCardValue(
         // Deliberately NOT the recovery-scored carry: the comment on `lastVitalsDay` is explicit that
         // vitals must not fall back to an older recovery-scored day.
         DashboardCard.HRV -> {
-            val server = serverOverlay?.daily?.hrvRmssdMs
-            if (server != null) withUnit(server.roundToInt().toString())
-            else withUnit((day?.avgHrv ?: hrvDay?.avgHrv)?.let { it.roundToInt().toString() } ?: NO_DATA)
+            val selection = dashboardServerVital(card, serverEnabled, selectedDayKey, serverOverlay, day?.avgHrv ?: hrvDay?.avgHrv)
+            withUnit(selection?.value?.let { it.roundToInt().toString() } ?: NO_DATA)
         }
         DashboardCard.RESTING_HR -> {
-            val server = serverOverlay?.daily?.restingHrBpm
-            if (server != null) withUnit(server.toString())
-            else withUnit((day?.restingHr ?: rhrDay?.restingHr)?.toString() ?: NO_DATA)
+            val selection = dashboardServerVital(card, serverEnabled, selectedDayKey, serverOverlay,
+                (day?.restingHr ?: rhrDay?.restingHr)?.toDouble())
+            withUnit(selection?.value?.toInt()?.toString() ?: NO_DATA)
         }
         DashboardCard.RESPIRATORY ->
             // PER-FIELD carry: today → the STALENESS-BOUNDED `respDay` (lastRespRow). The unbounded
             // `vitalsDay?.respRateBpm` is dropped on purpose (see the gauge site + Swift `lastRespDay`):
             // it had no age bound and showed a fortnight-old imported 15.6 as today's rate (#1331). A gap
             // past the window now reads NO_DATA — the truthful answer when nobody measured.
-            withUnit((day?.respRateBpm ?: respDay?.respRateBpm)?.let { String.format(Locale.getDefault(), "%.1f", it) } ?: NO_DATA)
+            withUnit(dashboardServerVital(card, serverEnabled, selectedDayKey, serverOverlay,
+                day?.respRateBpm ?: respDay?.respRateBpm)?.value?.let { String.format(Locale.getDefault(), "%.1f", it) } ?: NO_DATA)
         DashboardCard.BLOOD_OXYGEN ->
             // PER-FIELD carry: the whole-row carries (vd) land on rows whose spo2Pct is null (the engine
             // writes spo2Pct = null on computed rows), so fall through to the last row that HAS one.
@@ -4920,6 +4965,8 @@ private fun RecoveryContributorsSection(day: DailyMetric?, carriedDay: DailyMetr
     SectionHeader(uiString(R.string.today_contributors), overline = overline, trailing = uiString(R.string.today_what_drove_charge))
     NoopCard {
         Column(verticalArrangement = Arrangement.spacedBy(Metrics.space16)) {
+            Text(uiString(R.string.server_vitals_local_recovery_day, cd?.day ?: ""),
+                style = NoopType.caption, color = Palette.textTertiary)
             // HRV, higher is better; map a typical 20–120 ms span. Teal (its biometric hue; iOS metricCyan).
             ContributorBar(
                 label = uiString(R.string.today_metric_hrv),
@@ -5199,6 +5246,9 @@ internal fun resolveSkinTempReading(
 private fun MetricGrid(
     d: DailyMetric?,
     w: Window,
+    serverEnabled: Boolean = false,
+    selectedDayKey: String = "",
+    serverOverlay: com.noop.push.ServerScoreDayCache? = null,
     recoveryCalibration: Int? = null,
     lastScoredCharge: LastCharge? = null,
     carriedDay: DailyMetric? = null,
@@ -5326,25 +5376,29 @@ private fun MetricGrid(
             caption = if (restPendingSync) uiString(R.string.l10n_today_screen_strap_history_still_offloading_80140264) else null,
         ),
         KeyMetric.HRV to run {
-            val v = d?.avgHrv ?: carriedDay?.avgHrv
+            val v = dashboardServerVital(DashboardCard.HRV, serverEnabled, selectedDayKey, serverOverlay,
+                d?.avgHrv ?: carriedDay?.avgHrv)?.value
             KeyTileData(
                 label = "HRV",
                 value = v?.let { "${it.roundToInt()}" } ?: NO_DATA,
                 unit = if (v != null) "ms" else "",
                 tint = Palette.metricCyan,
                 frac = v?.let { (it / 120.0).coerceIn(0.0, 1.0) },
-                spark = w.hrv,
+                spark = if (serverEnabled) emptyList() else w.hrv,
+                caption = dashboardServerVitalSubtitle(DashboardCard.HRV, serverEnabled, selectedDayKey, serverOverlay),
             )
         },
         KeyMetric.RESTING_HR to run {
-            val v = d?.restingHr ?: carriedDay?.restingHr
+            val v = dashboardServerVital(DashboardCard.RESTING_HR, serverEnabled, selectedDayKey, serverOverlay,
+                (d?.restingHr ?: carriedDay?.restingHr)?.toDouble())?.value
             KeyTileData(
                 label = uiString(R.string.l10n_today_screen_rest_hr_04005617),
-                value = v?.toString() ?: NO_DATA,
+                value = v?.roundToInt()?.toString() ?: NO_DATA,
                 unit = if (v != null) "bpm" else "",
                 tint = Palette.metricRose,
                 frac = v?.let { (it / 100.0).coerceIn(0.0, 1.0) },
-                spark = w.rhr,
+                spark = if (serverEnabled) emptyList() else w.rhr,
+                caption = dashboardServerVitalSubtitle(DashboardCard.RESTING_HR, serverEnabled, selectedDayKey, serverOverlay),
             )
         },
         KeyMetric.BLOOD_OXYGEN to run {
@@ -5371,14 +5425,16 @@ private fun MetricGrid(
             )
         },
         KeyMetric.RESPIRATORY to run {
-            val v = d?.respRateBpm ?: carriedDay?.respRateBpm ?: respCarryDay?.respRateBpm
+            val v = dashboardServerVital(DashboardCard.RESPIRATORY, serverEnabled, selectedDayKey, serverOverlay,
+                d?.respRateBpm ?: carriedDay?.respRateBpm ?: respCarryDay?.respRateBpm)?.value
             KeyTileData(
                 label = uiString(R.string.l10n_today_screen_respiratory_1cd8c175),
                 value = v?.let { String.format(Locale.getDefault(), "%.1f", it) } ?: NO_DATA,
                 unit = if (v != null) "rpm" else "",
                 tint = Palette.accent,
                 frac = v?.let { (it / 24.0).coerceIn(0.0, 1.0) },
-                spark = w.resp,
+                spark = if (serverEnabled) emptyList() else w.resp,
+                caption = dashboardServerVitalSubtitle(DashboardCard.RESPIRATORY, serverEnabled, selectedDayKey, serverOverlay),
             )
         },
         KeyMetric.STEPS to run {

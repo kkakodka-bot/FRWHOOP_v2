@@ -216,7 +216,7 @@ final class DecoderOracleTests: XCTestCase {
     /// Row count per stream, keyed by the oracle's (and `Streams.CodingKeys`') wire names.
     private static func streamCounts(_ s: Streams) -> [String: Int] {
         [
-            "hr": s.hr.count, "rr": s.rr.count, "spo2": s.spo2.count, "skin_temp": s.skinTemp.count,
+            "hr": s.hr.count, "rr": s.rr.count, "rr_packets": s.rrPackets.count, "spo2": s.spo2.count, "skin_temp": s.skinTemp.count,
             "resp": s.resp.count, "gravity": s.gravity.count, "steps": s.steps.count,
             "sleep_state": s.sleepState.count, "ppg_hr": s.ppgHr.count,
             "ppg_waveform": s.ppgWaveform.count, "v18_aux": s.v18Aux.count,
@@ -235,6 +235,7 @@ final class DecoderOracleTests: XCTestCase {
         let oneOf: [String: Streams] = [
             "hr": Streams(hr: [HRSample(ts: 1, bpm: 60)]),
             "rr": Streams(rr: [RRInterval(ts: 1, rrMs: 900)]),
+            "rr_packets": Streams(rrPackets: [try XCTUnwrap(RRPacketProvenance.checked(hexToBytes("aa011800010022e12f12000000000000f153650000003c0200040002700d85e7")))]),
             "spo2": Streams(spo2: [SpO2Sample(ts: 1, red: 1, ir: 1)]),
             "skin_temp": Streams(skinTemp: [SkinTempSample(ts: 1, raw: 3000)]),
             "resp": Streams(resp: [RespSample(ts: 1, raw: 3000)]),

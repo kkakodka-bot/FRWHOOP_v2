@@ -11,7 +11,7 @@ import kotlinx.coroutines.flow.Flow
 /** Kept as one compile-time constant so Room and the plain-JVM SQLite regression test execute the exact
  * same statement. Swift's twin lives in WhoopStore.analysisFingerprint(). */
 internal const val ANALYSIS_FINGERPRINT_SQL =
-    "SELECT 'v3|' || " +
+    "SELECT 'v4|' || " +
         "'h' || (SELECT COUNT(*) FROM hrSample) || ':' || (SELECT COALESCE(MAX(ts), 0) FROM hrSample) || '|' || " +
         "'p' || (SELECT COALESCE(MAX(rowid), 0) FROM ppgHrSample) || '|' || " +
         "'r' || (SELECT COALESCE(MAX(rowid), 0) FROM rrInterval) || '|' || " +
@@ -22,6 +22,7 @@ internal const val ANALYSIS_FINGERPRINT_SQL =
         "'o' || (SELECT COALESCE(MAX(rowid), 0) FROM spo2Sample) || '|' || " +
         "'t' || (SELECT COALESCE(MAX(rowid), 0) FROM skinTempSample) || '|' || " +
         "'z' || (SELECT COALESCE(MAX(rowid), 0) FROM stepSample) || " +
+        "'|q' || (SELECT COUNT(*) FROM rrPacketProvenance) || ':' || (SELECT COALESCE(MAX(rowid), 0) FROM rrPacketProvenance) || " +
         "'|w5' || (SELECT COUNT(*) FROM rrInterval WHERE srcChannel = 5 AND (tsSuspect IS NULL OR tsSuspect <> 1)) || " +
         "'|w7' || (SELECT COUNT(*) FROM rrInterval WHERE srcChannel = 7 AND (tsSuspect IS NULL OR tsSuspect <> 1)) || " +
         "'|tagged' || (SELECT COUNT(*) FROM rrInterval WHERE srcChannel IN (5, 6, 7)) || " +
@@ -55,13 +56,15 @@ internal const val ANALYSIS_FINGERPRINT_SQL =
  * same statement; unlike [ANALYSIS_FINGERPRINT_SQL] it carries :deviceId/:from/:to binds, so a plain-JVM
  * SQLite harness could not run it verbatim. Room's KSP verification is what checks it. */
 internal const val DAY_STREAM_FINGERPRINT_SQL =
-    "SELECT 's2|' || " +
+    "SELECT 's3|' || " +
         "'p' || (SELECT COUNT(*) FROM ppgHrSample WHERE deviceId = :deviceId AND ts >= :from AND ts <= :to) || " +
         "':' || (SELECT COALESCE(MAX(ts), 0) FROM ppgHrSample WHERE deviceId = :deviceId AND ts >= :from AND ts <= :to) || '|' || " +
         "'r' || (SELECT COUNT(*) FROM rrInterval WHERE deviceId = :deviceId AND ts >= :from AND ts <= :to " +
         "AND (srcChannel IS NULL OR srcChannel <> 2) AND (tsSuspect IS NULL OR tsSuspect <> 1)) || " +
         "':' || (SELECT COALESCE(MAX(ts), 0) FROM rrInterval WHERE deviceId = :deviceId AND ts >= :from AND ts <= :to " +
         "AND (srcChannel IS NULL OR srcChannel <> 2) AND (tsSuspect IS NULL OR tsSuspect <> 1)) || '|' || " +
+        "'q' || (SELECT COUNT(*) FROM rrPacketProvenance WHERE deviceId = :deviceId AND ts >= :from AND ts <= :to) || " +
+        "':' || (SELECT COALESCE(MAX(rowid), 0) FROM rrPacketProvenance WHERE deviceId = :deviceId AND ts >= :from AND ts <= :to) || '|' || " +
         "'x' || (SELECT COUNT(*) FROM respSample WHERE deviceId = :deviceId AND ts >= :from AND ts <= :to) || " +
         "':' || (SELECT COALESCE(MAX(ts), 0) FROM respSample WHERE deviceId = :deviceId AND ts >= :from AND ts <= :to) || '|' || " +
         "'o' || (SELECT COUNT(*) FROM spo2Sample WHERE deviceId = :deviceId AND ts >= :from AND ts <= :to) || " +
@@ -99,7 +102,8 @@ internal const val WHOOP5_RR_INTERVALS_SQL =
     "ORDER BY ts ASC, ord ASC, rrMs ASC, seq ASC LIMIT :limit"
 
 internal const val HAS_WHOOP5_RR_SOURCE_SQL =
-    "SELECT EXISTS(SELECT 1 FROM rrInterval WHERE deviceId = :deviceId AND srcChannel IN (5, 6, 7))"
+    "SELECT EXISTS(SELECT 1 FROM rrInterval WHERE deviceId = :deviceId AND srcChannel IN (5, 6, 7)) " +
+        "OR EXISTS(SELECT 1 FROM rrPacketProvenance WHERE deviceId = :deviceId)"
 
 internal const val PROMOTE_WHOOP5_RR_SOURCE_SQL =
     "UPDATE rrInterval SET srcChannel = :source, ord = :ord " +
@@ -123,6 +127,11 @@ internal const val PROMOTE_WHOOP5_RR_SOURCE_SQL =
  */
 @Dao
 interface WhoopDao : DeviceRegistryDao {
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertRrPackets(rows: List<RrPacketProvenanceEntity>): List<Long>
+
+    @Query("SELECT * FROM rrPacketProvenance WHERE deviceId = :deviceId AND ts >= :from AND ts < :to ORDER BY ts, recordIndex, packetId")
+    suspend fun rrPackets(deviceId: String, from: Long, to: Long): List<RrPacketProvenanceEntity>
 
     // MARK: - Durable post-offload sync debt
 
@@ -499,7 +508,7 @@ interface WhoopDao : DeviceRegistryDao {
     /** RAW v26 optical PPG waveform rows in [from, to] (ascending), packed i16 BLOB. (#156 follow-up) */
     @Query(
         "SELECT * FROM ppgWaveformSample WHERE deviceId = :deviceId AND ts >= :from AND ts <= :to " +
-            "ORDER BY ts ASC LIMIT :limit"
+            "ORDER BY ts ASC, recordIndex ASC LIMIT :limit"
     )
     suspend fun ppgWaveformSamples(deviceId: String, from: Long, to: Long, limit: Int):
         List<PpgWaveformSampleEntity>

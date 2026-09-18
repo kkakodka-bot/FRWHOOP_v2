@@ -1,18 +1,13 @@
 package com.noop.push
 
-import android.content.Context
-import androidx.test.core.app.ApplicationProvider
 import org.junit.After
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
-import org.junit.runner.RunWith
-import org.robolectric.RobolectricTestRunner
 
-@RunWith(RobolectricTestRunner::class)
 class ServerScoringRescoreSkipTest {
-    private val context: Context = ApplicationProvider.getApplicationContext()
+    private val context = SelfHostedPushSettingsTest.FakePushPrefs()
 
     @Before
     fun setUp() {

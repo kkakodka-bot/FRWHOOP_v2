@@ -3,6 +3,8 @@ import Security
 
 /// Supabase GoTrue session for authenticated score reads (JWT only — never the push ingest token).
 enum CloudAuthClient {
+    private static let sessionLock = NSLock()
+    private static var generation: UInt64 = 0
     struct Session: Equatable {
         let accessToken: String
         let refreshToken: String
@@ -30,10 +32,24 @@ enum CloudAuthClient {
     }
 
     static func clearSession() {
-        KeychainHelper.delete(service: K.service, account: K.account)
+        sessionLock.withLock {
+            generation &+= 1
+            KeychainHelper.delete(service: K.service, account: K.account)
+        }
+    }
+
+    @discardableResult static func clearSession(ifAccessToken token: String, ownerId: String) -> Bool {
+        sessionLock.withLock {
+            guard let current = storedSession(), current.accessToken == token,
+                  current.userId.lowercased() == ownerId.lowercased() else { return false }
+            generation &+= 1
+            KeychainHelper.delete(service: K.service, account: K.account)
+            return true
+        }
     }
 
     static func signIn(email: String, password: String) async throws -> Session {
+        let requestGeneration = sessionLock.withLock { generation &+= 1; return generation }
         guard let base = ServerScoringSettings.supabaseProjectURL(),
               let anon = ServerScoringSettings.anonKey() else {
             throw AuthError.notConfigured
@@ -53,7 +69,11 @@ enum CloudAuthClient {
                 throw AuthError.invalidCredentials
             }
             let session = try parseSession(data)
-            persist(session)
+            try Task.checkCancellation()
+            try sessionLock.withLock {
+                guard generation == requestGeneration else { throw AuthError.invalidCredentials }
+                persist(session)
+            }
             ServerScoringSettings.setAuthEmail(email)
             return session
         } catch let e as AuthError {
@@ -71,6 +91,7 @@ enum CloudAuthClient {
     }
 
     private static func refresh(session: Session) async throws -> Session {
+        let requestGeneration = sessionLock.withLock { generation }
         guard let base = ServerScoringSettings.supabaseProjectURL(),
               let anon = ServerScoringSettings.anonKey() else {
             throw AuthError.notConfigured
@@ -84,11 +105,21 @@ enum CloudAuthClient {
         ])
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-            clearSession()
+            sessionLock.withLock {
+                if generation == requestGeneration && storedSession()?.refreshToken == session.refreshToken {
+                    generation &+= 1
+                    KeychainHelper.delete(service: K.service, account: K.account)
+                }
+            }
             throw AuthError.invalidCredentials
         }
         let refreshed = try parseSession(data)
-        persist(refreshed)
+        try Task.checkCancellation()
+        try sessionLock.withLock {
+            guard generation == requestGeneration, storedSession()?.refreshToken == session.refreshToken,
+                  refreshed.userId == session.userId else { throw AuthError.invalidCredentials }
+            persist(refreshed)
+        }
         return refreshed
     }
 

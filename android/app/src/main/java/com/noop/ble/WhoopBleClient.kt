@@ -3332,6 +3332,7 @@ class WhoopBleClient(
                     return@launch
                 }
                 }
+                }
 
                 // Health Connect and widget publication are separate durable stages. They run only after
                 // the newest rescore debt settled, and compare-token deletion cannot clear later work.

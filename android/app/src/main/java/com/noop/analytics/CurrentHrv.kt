@@ -19,7 +19,7 @@ object CurrentHrv {
     )
 
     /** Trailing window length (seconds) for the current HRV readout. */
-    const val WINDOW_SECONDS: Int = 30 * 60
+    const val WINDOW_SECONDS: Int = HrvWindow.SECONDS
 
     /** Rows newer than this many seconds before `nowUnix` are treated as stale by the app-layer caller. */
     const val STALE_THRESHOLD_SECONDS: Int = 900
@@ -35,27 +35,18 @@ object CurrentHrv {
         nowUnix: Int,
         windowSeconds: Int = WINDOW_SECONDS,
     ): Snapshot? {
-        if (windowSeconds <= 0) return null
-        val windowStart = nowUnix - windowSeconds
-        val seg = rows.filter { it.ts >= windowStart && it.ts <= nowUnix }
-        if (seg.isEmpty()) return null
+        if (windowSeconds != HrvWindow.SECONDS) return null
+        return deriveObservations(PhysiologyQuality.legacy(rows, "legacy-unscoped"), nowUnix)
+    }
 
-        val ts = seg.map { it.ts }
-        val rrMs = seg.map { it.rrMs.toDouble() }
-        val coverage = HrvAnalyzer.rrCoverage(ts, rrMs)
-        if (coverage <= 0.0) return null
-
-        val verdict = HrvAnalyzer.classifyCoverage(coverage, coverage)
-        if (!HrvAnalyzer.successiveDiffIsTrustworthy(verdict)) return null
-
-        val h = HrvAnalyzer.analyzeRaw(rrMs)
-        val rmssd = h.rmssd ?: return null
-
-        return Snapshot(
-            rmssdMs = rmssd,
-            cleanBeats = h.nClean,
-            coverage = coverage,
-            computedAtUnix = nowUnix,
-        )
+    /** The latest completed UTC window, never pooled with a previous sparse window. */
+    fun deriveObservations(observations: List<PhysiologyQuality.IntervalObservation>, nowUnix: Int,
+                           policy: HrvWindow.Policy = HrvWindow.Policy(), inputRevision: String = "unversioned"): Snapshot? {
+        val result = HrvWindow.measure(HrvWindow.alignedStart(nowUnix) - HrvWindow.SECONDS,
+            observations, policy = policy, inputRevision = inputRevision, computationMode = "causal")
+        val rmssd = result.observedRMSSD ?: return null
+        if (!result.measurementValid) return null
+        return Snapshot(rmssd, Math.round(result.validIntervalFraction * result.originalIds.size).toInt(),
+            result.observedTimeFraction, nowUnix)
     }
 }

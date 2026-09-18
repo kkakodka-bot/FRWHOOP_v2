@@ -11,6 +11,7 @@ public struct DecodedField: Codable, Equatable {
 }
 
 public struct ParsedFrame: Codable, Equatable {
+    public var rrPacketProvenance: RRPacketProvenance? = nil
     public let ok: Bool
     public let typeName: String
     public let seq: Int?
@@ -332,9 +333,11 @@ private func parseFrameWhoop5(_ frame: [UInt8], collectFields: Bool) -> ParsedFr
     let cmdName = (t == 35 || t == 36 || t == PuffinPacketType.puffinCommandResponse)
         ? schema.enumName("CommandNumber", cmdByte) : nil
 
-    return ParsedFrame(ok: true, typeName: typeName, seq: seq, cmdName: cmdName,
-                       crcOK: crcOK, lenBytes: frame.count, rawHex: rawHex,
-                       fields: fb.fields, parsed: fb.parsed)
+    var result = ParsedFrame(ok: true, typeName: typeName, seq: seq, cmdName: cmdName,
+                             crcOK: crcOK, lenBytes: frame.count, rawHex: rawHex,
+                             fields: fb.fields, parsed: fb.parsed)
+    result.rrPacketProvenance = RRPacketProvenance.checked(frame)
+    return result
 }
 
 /// The WHOOP 5/MG type-47 `hist_version` values `decodeWhoop5Historical` has a REAL field map for.

@@ -25,6 +25,17 @@ private struct RRBatchSecond: Hashable {
 }
 
 extension WhoopStore {
+    /// Dual-read companion: legacy RR remains unchanged and carries no inferred identity.
+    public func rrPacketProvenance(deviceId: String, from: Int, to: Int) async throws -> [RRPacketProvenance] {
+        try syncRead { db in
+            try Row.fetchAll(db, sql: "SELECT rawHex, ts, packetId FROM rrPacketProvenance WHERE deviceId = ? AND ts >= ? AND ts < ? ORDER BY ts, recordIndex, packetId",
+                arguments: [deviceId, from, to]).compactMap { row in
+                let hex: String = row["rawHex"], ts: Int = row["ts"], id: String = row["packetId"]
+                guard let bytes = RRPacketProvenance.bytes(hex), let packet = RRPacketProvenance.checked(bytes, mappedTs: ts), packet.packetId == id else { return nil }
+                return packet
+            }
+        }
+    }
     /// Backfill duplicate-replay skip (v45). Default ON; `enableBackfillRangeSkip = false` disables.
     /// Live `insert()` passes empty `postOffloadJobKinds` and never consults the frontier.
     private static var backfillRangeSkipEnabled: Bool {
@@ -295,6 +306,7 @@ extension WhoopStore {
             var stepsInserted = 0
             var sleepStateInserted = 0
             var ppgHrInserted = 0
+            var rrPacketsInserted = 0
             // Backfill-only: skip per-stream insert loops when this chunk's max ts is at/below the
             // persisted frontier (one indexed read per stream). Live insert() passes empty job kinds.
             let useRangeSkip = Self.backfillRangeSkipEnabled && !postOffloadJobKinds.isEmpty
@@ -333,6 +345,22 @@ extension WhoopStore {
                     conflict: "ON CONFLICT(deviceId, ts) DO NOTHING",
                     rows: rowArgs.map { [deviceId] + $0 })
                 try recordFrontier("hr", timestamps: streams.hr.map(\.ts))
+            }
+            // Identity-based companion records bypass the legacy timestamp frontier. They are never
+            // synthesized from old rrInterval rows or pruned without verified archive retention.
+            if !streams.rrPackets.isEmpty {
+                let stmt = try db.cachedStatement(sql: """
+                    INSERT INTO rrPacketProvenance (deviceId, packetId, ts, sensorTs, recordIndex, rawHex,
+                        srcChannel, schemaVersion, decoderVersion, clockVersion, timestampPrecisionSeconds, clockOffsetSeconds, declaredCount)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(deviceId, packetId) DO NOTHING
+                    """)
+                for p in streams.rrPackets {
+                    guard let bytes = RRPacketProvenance.bytes(p.rawHex), RRPacketProvenance.checked(bytes, mappedTs: p.ts) == p else { continue }
+                    try stmt.execute(arguments: [deviceId, p.packetId, p.ts, p.sensorTs, p.recordIndex, p.rawHex,
+                        p.srcChannel, p.schemaVersion, p.decoderVersion, p.clockVersion, p.timestampPrecisionSeconds, p.clockOffsetSeconds, p.declaredCount])
+                    rrPacketsInserted += db.changesCount
+                }
             }
             if !streams.rr.isEmpty, !shouldSkip("rr", timestamps: streams.rr.map(\.ts)) {
                 let stmt = try db.cachedStatement(sql: """
@@ -510,20 +538,21 @@ extension WhoopStore {
             }
             // RAW v26 optical PPG waveform (#156 follow-up) — the samples `ppgHr` above is derived FROM.
             // Persist-only, same as steps/sleepState/ppgHr: not added to the 8-field return tuple. ON
-            // CONFLICT DO NOTHING keeps the FIRST-seen waveform for a second, matching every other
-            // per-second stream's dedupe rule. Packed into one compact BLOB per row (see
+            // CONFLICT DO NOTHING keeps the first waveform for each wire identity. Multiple records
+            // in the same second survive. Packed into one compact BLOB per row (see
             // `packPpgSamples`) rather than 24 scalar rows, so this insert is O(records), not O(samples).
-            if !streams.ppgWaveform.isEmpty, !shouldSkip("ppgWaveform", timestamps: streams.ppgWaveform.map(\.ts)) {
+            // A timestamp frontier cannot establish that all records in a second were committed.
+            if !streams.ppgWaveform.isEmpty {
                 let stmt = try db.cachedStatement(sql: """
-                    INSERT INTO ppgWaveformSample (deviceId, ts, samples, burstIndex) VALUES (?, ?, ?, ?)
-                    ON CONFLICT(deviceId, ts) DO NOTHING
+                    INSERT INTO ppgWaveformSample (deviceId, ts, samples, burstIndex, recordIndex)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(deviceId, ts, recordIndex) DO NOTHING
                     """)
                 for s in streams.ppgWaveform {
                     try stmt.execute(arguments: [deviceId, s.ts, WhoopStore.packPpgSamples(s.samples),
-                                                 s.burstIndex])
-                    ppgWaveformWritten += 1
+                                                 s.burstIndex, s.recordIndex ?? -1])
+                    ppgWaveformWritten += db.changesCount
                 }
-                try recordFrontier("ppgWaveform", timestamps: streams.ppgWaveform.map(\.ts))
             }
             // Every remaining v18 slot (v31), one compact blob per strap-second. Persist-only, same as
             // steps/sleepState/ppgHr/ppgWaveform: not added to the 8-field return tuple. A sample whose
@@ -546,7 +575,7 @@ extension WhoopStore {
             // does not carry): a duplicate-only replay inserts zero rows and must neither eat the debt
             // nor refresh it. Every stream that appears in the scoring fingerprint is represented here.
             let scoringInserted = hr + rr + ev + spo2 + skin + resp + grav
-                + stepsInserted + sleepStateInserted + ppgHrInserted
+                + stepsInserted + sleepStateInserted + ppgHrInserted + rrPacketsInserted
             var markedJobs = false
             if scoringInserted > 0, !postOffloadJobKinds.isEmpty {
                 let now = Int(Date().timeIntervalSince1970)
@@ -877,13 +906,14 @@ extension WhoopStore {
         -> [PpgWaveformSample] {
         try syncRead { db in
             try Row.fetchAll(db, sql: """
-                SELECT ts, samples, burstIndex FROM ppgWaveformSample
+                SELECT ts, samples, burstIndex, recordIndex FROM ppgWaveformSample
                 WHERE deviceId = ? AND ts >= ? AND ts <= ?
-                ORDER BY ts LIMIT ?
+                ORDER BY ts, recordIndex LIMIT ?
                 """, arguments: [deviceId, from, to, limit])
                 .map { PpgWaveformSample(ts: $0["ts"],
                                          samples: WhoopStore.unpackPpgSamples($0["samples"]),
-                                         burstIndex: $0["burstIndex"]) }
+                                         burstIndex: $0["burstIndex"],
+                                         recordIndex: ($0["recordIndex"] as Int) == -1 ? nil : $0["recordIndex"]) }
         }
     }
 

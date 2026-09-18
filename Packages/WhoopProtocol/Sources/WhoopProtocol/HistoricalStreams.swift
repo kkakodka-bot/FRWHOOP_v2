@@ -251,6 +251,7 @@ public func extractHistoricalStreams(_ parsed: [ParsedFrame],
             // `correctedWall` returns nil for an implausible ts (covers the v26 PPG baseTs too, since the
             // v26 waveform rides this same `unix`) — skip the whole record so no garbage-ts row is banked.
             guard let rawTs = p["unix"]?.intValue, let ts = correctedWall(rawTs) else { continue }
+            if let packet = r.rrPacketProvenance?.mapped(to: ts) { out.rrPackets.append(packet) }
             // v26 PPG buffer: stash the waveform for the post-loop HR estimator AND persist the raw
             // samples themselves (issue #156 follow-up — previously ONLY the derived estimate survived,
             // the waveform that produced it was discarded here). A v26 record carries no
@@ -258,7 +259,8 @@ public func extractHistoricalStreams(_ parsed: [ParsedFrame],
             if let samples = p["ppg_waveform"]?.intArrayValue, !samples.isEmpty {
                 ppgRecords.append((ts: ts, samples: samples))
                 out.ppgWaveform.append(PpgWaveformSample(ts: ts, samples: samples,
-                                                         burstIndex: p["burst_index"]?.intValue))
+                                                         burstIndex: p["burst_index"]?.intValue,
+                                                         recordIndex: p["record_index"]?.intValue))
             }
             if let bpm = p["heart_rate"]?.intValue, bpm != 0 {  // skip startup hr=0
                 out.hr.append(HRSample(ts: ts, bpm: bpm))

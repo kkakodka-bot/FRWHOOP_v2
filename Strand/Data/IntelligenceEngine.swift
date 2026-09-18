@@ -1055,6 +1055,9 @@ final class IntelligenceEngine: ObservableObject {
                 let strictWhoop5RR = (try? await store.isWhoop5RRSource(deviceId: owner,
                     unlabelledAliasOfWhoop5: activeWhoop5RR && owner == Repository.whoopSource)) ?? true
                 let rr = await rrWindow.rows(owner: owner, from: from, to: to, allowReuse: !strictWhoop5RR)
+                let hrvObservations = strictWhoop5RR ? PhysiologyQuality.packetOrLegacy(
+                    (try? await store.rrPacketProvenance(deviceId: owner, from: from, to: to + 1)) ?? [],
+                    legacy: rr, deviceId: owner) : nil
                 // `forScoring` drops an Oura ring's respiration rows: those are the ring's OWN per-window
                 // RATE (0x6A, milli-bpm, ~1 row per 5 min), stored as instrumentation, while the stager
                 // reads this stream as a ~1 Hz raw ADC waveform. Refusing by provenance keeps the
@@ -1271,8 +1274,9 @@ final class IntelligenceEngine: ObservableObject {
                 var strainDiagLines: [String] = []
                 let res = AnalyticsEngine.analyzeDay(day: day,
                                                      strainDiag: { strainDiagLines.append($0) },
-                                                     hr: hr, rr: rr, resp: resp,
-                                                     vendorResp: vendorResp, gravity: grav,
+                                                     hr: hr, rr: rr,
+                                                     hrvObservations: hrvObservations,
+                                                     resp: resp, vendorResp: vendorResp, gravity: grav,
                                                      steps: steps, dayHr: dayHr, daySteps: daySteps,
                                                      dayGravity: dayGrav,
                                                      skinTemp: skin,

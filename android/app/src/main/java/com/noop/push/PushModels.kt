@@ -11,6 +11,7 @@ sealed interface PushTable {
 enum class PushAppendTable(override val wireName: String) : PushTable {
     HR_SAMPLE("hrSample"),
     RR_INTERVAL("rrInterval"),
+    RR_PACKET_PROVENANCE("rrPacketProvenance"),
     EVENT("event"),
     BATTERY("battery"),
     SPO2_SAMPLE("spo2Sample"),
@@ -44,6 +45,7 @@ data class PushPpgWaveformRecord(
     val ts: Long,
     val burstIndex: Int?,
     val samples: ByteArray,
+    val recordIndex: Long? = null,
 ) {
     init {
         require(rowId > 0)
@@ -53,7 +55,7 @@ data class PushPpgWaveformRecord(
         if (this === other) return true
         if (other !is PushPpgWaveformRecord) return false
         return rowId == other.rowId && ts == other.ts && burstIndex == other.burstIndex &&
-            samples.contentEquals(other.samples)
+            samples.contentEquals(other.samples) && recordIndex == other.recordIndex
     }
 
     override fun hashCode(): Int {
@@ -61,6 +63,7 @@ data class PushPpgWaveformRecord(
         result = 31 * result + ts.hashCode()
         result = 31 * result + (burstIndex ?: 0)
         result = 31 * result + samples.contentHashCode()
+        result = 31 * result + (recordIndex?.hashCode() ?: 0)
         return result
     }
 }
