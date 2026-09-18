@@ -48,13 +48,14 @@ enum CloudPushPeriodicScheduler {
         // Double-check under lock: another caller may have just scheduled.
         if pendingTask != nil { lock.unlock(); return }
         lastScheduledAt = now
-        let task = Task { @MainActor in
+        let task = Task {
             defer {
                 lock.lock()
                 pendingTask = nil
                 lastRunAt = Date()
                 lock.unlock()
             }
+            await CloudPushBackgroundRuntime.reconcileActive()
             _ = await CloudPushWorker.runOnce(db: db, trigger: reason)
         }
         pendingTask = task
