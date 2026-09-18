@@ -11,7 +11,7 @@ import {
 import { MAX_OBJECT_LANE_BYTES, MAX_RANGE_MS, expiresAt } from './retention.ts';
 import { createManifestStore, type ManifestStore } from './manifests.ts';
 import { completeDurableObject, registerDevice, reserveManifest, MAX_DECODED_OBJECT_BYTES } from './durability.ts';
-import { PushProtocolError } from './registry.ts';
+import { PushProtocolError, schemaVersionFor } from './registry.ts';
 import type { SupabaseRest } from './rest.ts';
 import type { S3Store } from './s3.ts';
 import type { PushFunctionConfig } from './config.ts';
@@ -38,8 +38,8 @@ export function validateObjectIntent(manifest: any) {
   const errors: string[] = [];
   const m = manifest || {};
   const protocolVersion = m.protocolVersion ?? '1.2';
-  const schemaVersion = m.schemaVersion ?? (protocolVersion === '1.3' && m.stream === 'ppgWaveformSample' ? 2 : 1);
-  if (!['1.2', '1.3'].includes(protocolVersion)) errors.push('protocolVersion');
+  const schemaVersion = m.schemaVersion ?? schemaVersionFor(m.stream, protocolVersion);
+  if (!['1.2', '1.3', '1.4'].includes(protocolVersion)) errors.push('protocolVersion');
   if (m.type !== 'binaryObject') errors.push('type');
   if (!OBJECT_LANE_STREAMS.has(m.stream)) errors.push('stream');
   if (!isUuid(m.objectId)) errors.push('objectId');
@@ -59,8 +59,7 @@ export function validateObjectIntent(manifest: any) {
   if (!Number.isInteger(sampleCount) || sampleCount < 0) errors.push('sampleCount');
   const uncompressedBytes = Number(m.uncompressedBytes);
   if (!Number.isSafeInteger(uncompressedBytes) || uncompressedBytes <= 0 || uncompressedBytes > MAX_DECODED_OBJECT_BYTES) errors.push('uncompressedBytes');
-  if (![1, 2].includes(schemaVersion) || (schemaVersion === 2 && (protocolVersion !== '1.3' || m.stream !== 'ppgWaveformSample')) ||
-    (protocolVersion === '1.3' && m.stream === 'ppgWaveformSample' && schemaVersion !== 2)) errors.push('schemaVersion');
+  if (schemaVersion !== schemaVersionFor(m.stream, protocolVersion)) errors.push('schemaVersion');
   const compressedBytes = Number(m.compressedBytes);
   if (!Number.isInteger(compressedBytes) || compressedBytes <= 0 || compressedBytes > MAX_OBJECT_LANE_BYTES) {
     errors.push('compressedBytes');

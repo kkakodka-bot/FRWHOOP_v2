@@ -36,10 +36,14 @@ export async function sweepExpiredManifests({
   const iso = now().toISOString();
   const rows = await rest.select(
     'object_manifests',
-    `status=in.(ready,verified,expired)&expires_at=lte.${encodeURIComponent(iso)}&select=id,object_key,status,format`,
+    `status=in.(ready,verified,expired)&expires_at=lte.${encodeURIComponent(iso)}&select=id,object_key,status,format,object_kind,push_protocol_version`,
   );
   let deleted = 0;
   for (const row of rows || []) {
+    if (row.object_kind === 'v18AuxSample' && row.push_protocol_version === '1.4') {
+      const validated = await rest.select('noop_aux_object_validation', `object_id=eq.${row.id}&state=eq.validated&select=object_id`).catch(() => []);
+      if (!validated.length) continue;
+    }
     // Unsettled inline archives are the server's repair source. A missing/unreadable ledger is
     // also a hold (upgrade scan has not examined it yet), never permission to delete bytes.
     if (String(row.format).startsWith('ndjson')) {

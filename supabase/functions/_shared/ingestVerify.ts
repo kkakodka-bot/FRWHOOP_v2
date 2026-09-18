@@ -17,6 +17,7 @@ export type IngestVerifyStage =
   | 'receipt_verified'
   | 'signal_index'
   | 'projection_debt'
+  | 'auxiliary_validation'
   | 'b2_object'
   | 'projection_row';
 
@@ -47,7 +48,7 @@ export async function buildIngestVerifyReport({
     ).catch(() => []),
     rest.select(
       'object_manifests',
-      `user_id=eq.${userId}&period_day=eq.${day}&select=id,object_key,status,object_class,object_kind,format,compressed_bytes,sha256,sha256_source,durability_receipt,indexed_at,created_at,updated_at&order=created_at.asc`,
+      `user_id=eq.${userId}&period_day=eq.${day}&select=id,object_key,status,object_class,object_kind,push_protocol_version,format,compressed_bytes,sha256,sha256_source,durability_receipt,indexed_at,created_at,updated_at&order=created_at.asc`,
     ).catch(() => []),
     rest.select('noop_signal_windows', `user_id=eq.${userId}&select=object_id,object_key`).catch(() => []),
     rest.select(
@@ -66,6 +67,7 @@ export async function buildIngestVerifyReport({
     object_key: m.object_key,
     status: m.status,
     object_kind: m.object_kind,
+    push_protocol_version: m.push_protocol_version,
     format: m.format,
     object_class: m.object_class ?? 'raw',
     durability_receipt: m.durability_receipt ?? null,
@@ -76,6 +78,9 @@ export async function buildIngestVerifyReport({
     created_at: m.created_at,
     updated_at: m.updated_at,
   }));
+  const auxiliaryObjects = manifests.filter((m) => m.object_kind === 'v18AuxSample' && m.push_protocol_version === '1.4' && m.status !== 'deleted');
+  const auxiliaryValidation = auxiliaryObjects.length ? await rest.select('noop_aux_object_validation',
+    `user_id=eq.${userId}&select=object_id,state,validation&limit=2000`).catch(() => []) : [];
 
   const b2Presence: Record<string, { exists: boolean; contentLength: number | null }> = {};
   if (objectStore) {
@@ -137,6 +142,7 @@ export async function buildIngestVerifyReport({
       return m.object_key && (!hit || !hit.exists);
     });
     if (missingB2) return 'b2_object';
+    if (auxiliaryObjects.some((m) => !auxiliaryValidation.some((v: any) => v.object_id === m.id && v.state === 'validated'))) return 'auxiliary_validation';
     if (raw.some((m) => String(m.format).startsWith('ndjson') &&
       !projectionDebt.some((d: any) => d.object_id === m.id && d.state === 'complete'))) return 'projection_debt';
     if (!projections.daily_metrics?.present) return 'projection_row';
@@ -154,6 +160,7 @@ export async function buildIngestVerifyReport({
     b2_presence: b2Presence,
     projections,
     projection_debt: projectionDebt.filter((d: any) => manifests.some((m) => m.id === d.object_id)),
+    auxiliary_validation: auxiliaryValidation.filter((v: any) => auxiliaryObjects.some((m) => m.id === v.object_id)),
     daily_metrics_row: (dailyRows as any[])[0] ?? null,
     scoring_service_heartbeat: heartbeat
       ? {

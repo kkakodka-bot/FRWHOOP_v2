@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { gzipSync } from 'node:zlib';
-import { createS3, sha256Hex } from '../_shared/s3.ts';
+import { sha256Hex } from '../_shared/s3.ts';
 import { createPushObjects } from '../_shared/objects.ts';
 import { createPushArchive, createPushIngest } from '../_shared/ingest.ts';
 import { createPushWalStore } from '../_shared/wal.ts';
@@ -9,6 +9,7 @@ import { commitArchivedBatch, reconcileProjections } from '../_shared/projection
 import { sweepExpiredManifests } from '../_shared/workers.ts';
 import { startLocalPostgres, USER_A, USER_B } from './local_postgres.ts';
 import { compressFor } from './helpers.ts';
+import { startObjectHttp } from './local_objects.ts';
 
 const DEVICE = '33333333-3333-4333-8333-333333333333';
 const SOURCE = '44444444-4444-4444-8444-444444444444';
@@ -34,41 +35,6 @@ function objectFixture(over: Record<string, unknown> = {}) {
     contentSha256: sha256Hex(payload), contentEncoding: 'gzip', ...over,
   };
   return { manifest, payload, wire };
-}
-
-function startObjectHttp() {
-  const objects = new Map<string, Uint8Array>();
-  const abort = new AbortController();
-  let failCopy = false;
-  let omitLength = false;
-  const server = Deno.serve({ hostname: '127.0.0.1', port: 0, signal: abort.signal, onListen() {} }, async (req) => {
-    const key = decodeURIComponent(new URL(req.url).pathname.slice('/fixture/'.length));
-    if (req.method === 'PUT') {
-      const source = req.headers.get('x-amz-copy-source');
-      if (source) {
-        if (failCopy) return new Response('<Error><Code>FixtureCopyFailure</Code></Error>');
-        const body = objects.get(decodeURIComponent(source.slice('/fixture/'.length)));
-        if (!body) return new Response('<Error/>', { status: 404 });
-        objects.set(key, body.slice());
-        return new Response('<CopyObjectResult><ETag>synthetic</ETag></CopyObjectResult>');
-      }
-      objects.set(key, new Uint8Array(await req.arrayBuffer()));
-      return new Response(null, { status: 200 });
-    }
-    if (req.method === 'DELETE') { objects.delete(key); return new Response(null, { status: 204 }); }
-    const bytes = objects.get(key);
-    if (!bytes) return new Response(null, { status: 404 });
-    const headers: Record<string,string> = omitLength ? {} : { 'content-length': String(bytes.length) };
-    if (req.method === 'HEAD') return new Response(null, { headers });
-    // Real HTTP streaming deliberately splits compressed input and does not rely on HEAD.
-    return new Response(new ReadableStream({ start(controller) {
-      for (let i = 0; i < bytes.length; i += 31) controller.enqueue(bytes.slice(i, i+31));
-      controller.close();
-    } }), { headers });
-  });
-  const endpoint = `http://127.0.0.1:${(server.addr as Deno.NetAddr).port}`;
-  const raw = createS3({ endpoint, bucket: 'fixture', region: 'local', accessKeyId: 'fixture', secretAccessKey: 'fixture' });
-  return { raw, objects, async close() { abort.abort(); await server.finished; }, setFailCopy(value: boolean) { failCopy = value; }, setOmitLength(value: boolean) { omitLength = value; } };
 }
 
 Deno.test('native intake durability: PostgreSQL, PostgREST roles, and loopback object HTTP', async (t) => {

@@ -18,6 +18,9 @@ import {
   PushProtocolError,
   parseNdjsonEntity,
   archiveWindowFromRecords,
+  scalarAppendFields,
+  schemaVersionFor,
+  streamsForVersion,
 } from './registry.ts';
 import { expiresAt } from './retention.ts';
 import { createManifestStore } from './manifests.ts';
@@ -131,6 +134,11 @@ export function createPushIngest({
         throw new PushProtocolError('unsupported_delivery', 422);
       }
       const deviceId = noopDeviceId(userId, header.deviceId);
+      // Reject malformed scalar rows before reservation/archive; ACK must cover every row.
+      if (!streamsForVersion(header.protocolVersion).has(header.stream)) throw new PushProtocolError('unsupported_version', 422);
+      const schemaVersion = schemaVersionFor(header.stream, header.protocolVersion);
+      if (header.schemaVersion != null && header.schemaVersion !== schemaVersion) throw new PushProtocolError('invalid_schema_version', 422);
+      for (const record of records) scalarAppendFields(header.stream, record, header.protocolVersion);
       await ensureDevice({
           id: deviceId, user_id: userId, source_kind: 'noop_push',
           external_device_id: String(header.deviceId || ''), last_seen_at: now().toISOString(),
@@ -181,7 +189,7 @@ export function createPushIngest({
         contentType: 'application/x-ndjson',
         format: 'ndjson_gzip_noop_push_v1',
         compression: 'gzip',
-        schemaVersion: 1,
+        schemaVersion,
         protocolVersion: header.protocolVersion,
         sha256: archiveSha256,
         uncompressedBytes: decodedBody.length,

@@ -4,6 +4,9 @@ Run from `supabase/functions` in the integrated worktree. This creates a fresh s
 PostgreSQL cluster, starts PostgREST and an HTTP object fixture on loopback, applies the
 listed **actual** prerequisite migrations plus scoring `20260918010000`, intake `020000`,
 scoring review repairs `030000`, and projection debt `040000`, and stops its services.
+The separate scalar integration fixture opts into actual `050000` plus additive `060000`;
+the shared harness default remains through `040000` for root's Swift loopback runner.
+The identity/provenance and actual Swift IMU fixtures opt into the entire chain through `070000`.
 It never accepts a production database URL, reads an env file, or invokes a device.
 Cluster data, SQL/server logs and `receipt-example.json` remain on the external SSD.
 The older failed bootstrap fixtures are retained as evidence too, not running services.
@@ -93,7 +96,57 @@ now also persists projection debt for inline NDJSON; it excludes binary object-l
 Native tests also inject invalidation failure, corrupt a verified HTTP object, reclaim an
 expired lease, simulate a lost committed response, finish a multipart generation using only
 server replay, preserve newer overlapping windows, hold retention, and deny real authenticated
-and anonymous roles access to debt, ordering records, metrics and settlement RPCs.
+  and anonymous roles access to debt, ordering records, metrics and settlement RPCs.
+
+## Three existing scalar streams (060000)
+
+`scalar_integration_test.ts` exercises step counter/activity class, raw sleep-band state/byte,
+and derived PPG-HR/confidence against their real tables, PostgREST owner roles and loopback
+object storage. These streams are offered at 1.1 and later, never 1.0. Optional absent values
+remain NULL. Invalid numeric types/ranges and inconsistent band state/raw-byte pairs fail
+before reservation or archive writes. These are not clinical sleep stages or measured HR.
+
+Unlike the original append streams' correction policy, the three scalar timestamp keys are
+measurement-immutable: changed values fail with `scalar_identity_conflict` (409), retain the
+original projection and both archives, and leave pending projection debt without an ACK.
+Bounded replay defers such conflicts; it does not silently pick the later sample. Exact
+duplicates, concurrent settlement and lost responses do not reinvalidate settled scores.
+The native fixture deliberately retains three conflict debts as evidence, not a zero-backlog claim.
+
+## Receiver1.4 support (070000), not yet advertised
+
+Apply additive070 before the updated receiver. The supported schema map matches root's sender:
+PPG schema2 at1.3/1.4; auxiliary and three scalars schema2 at1.4; other cases schema1.
+Negotiation still tops out at1.3 pending the cross-stack golden approval. Known provenance is
+rejected below1.4 rather than stripped. Legacy absent/null provenance remains unknown.
+Strict scalar JSONB validation matches producer fields/types/origin-specific shape and bounds;
+the archive keeps exact submitted bytes and atomic projection replay preserves the metadata.
+
+Auxiliary1.4 verification streams NPB1format2/kind2 with at most64KiB parser buffering. It
+checks count, half-open bounds, strict presence flag, u32-domain i64 index and complete known
+fields-blob identity. Unsupported fields retain exact bytes with `noop_aux_object_validation`
+pending debt, in the same transaction as receipt/index. No guessed identity or candidate
+physiology is produced. Pending/missing validation holds automatic retention. `ingest-verify`
+reports `auxiliary_validation`; validated framing is not scorer completion. A future decoder
+upgrade/typed-debt settlement policy remains separate from this receipt contract.
+
+Full native suite additionally requires root's synthetic exports under EDGE_TEST_ARTIFACTS:
+`aux14-swift/{payload.npb1,payload.gz,golden.json}`,
+`aux14-swift-intake-v1/{manifest.json,payload.npb1,payload.gz,golden.json}` and
+`imf1-swift-native-v1/{fixture.json,session/*,continuous/*}`. Missing exports fail the suite;
+they are never silently replaced with a hand-built sender fixture. Export recipes/evidence are
+in `root-push-aux14-golden.log` and `W5-IMF1-SWIFT-FIXTURE-HANDOFF.md`.
+The original auxiliary golden uses ts100 and proves parser/fingerprint parity. The separate
+actual Swift intake export uses ts1800000000 and runs unchanged through the entire070 PG/HTTP
+intake, transactional fault rollback, server-only reconciliation and duplicate/owner-role gates
+in `swift_auxiliary_integration_test.ts`. The original golden is untouched. Actual Swift IMU intake runs unchanged
+except adding measured compressedBytes, just as the direct-lane sender does.
+
+`swift_imf1_integration_test.ts` decodes recovered bytes only for verification. Production
+rawBatch remains opaque, retains the two framed descriptor/file members, and indexes received
+members2 with expected/missing/coverage NULL. It does not pretend these are two BLE samples.
+Those native results do not alone authorize pruning: W5 exact owner/file/member/source-commit
+and cleanup gates still apply. No OS power-loss, device, real B2 or deployment claim follows.
 
 ## Scout handoff outside Edge ownership
 

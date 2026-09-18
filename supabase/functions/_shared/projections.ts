@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { noopDeviceId } from './keys.ts';
 import { APPEND_STREAM_PROJECTIONS, REPLACE_STREAM_PROJECTIONS, parseNdjsonEntity,
-  replacementKeys, ackMatchesBatch } from './registry.ts';
+  replacementKeys, ackMatchesBatch, PushProtocolError, schemaVersionFor } from './registry.ts';
 import { sha256Hex, type S3Store } from './s3.ts';
 import type { SupabaseRest } from './rest.ts';
 import type { DurabilityReceipt } from './durability.ts';
@@ -16,7 +16,8 @@ export async function commitArchivedBatch(rest: SupabaseRest, receipt: Durabilit
   if (decodedBody.length > MAX_INLINE_ARCHIVE_BYTES || receipt.state !== 'verified_indexed' || receipt.version !== 1 ||
       receipt.contentSha256 !== digest || receipt.uncompressedBytes !== decodedBody.length ||
       receipt.batchId !== header.batchId || receipt.objectId !== header.batchId || receipt.sourceId !== header.sourceId ||
-      receipt.stream !== header.stream || receipt.deviceId !== noopDeviceId(receipt.ownerUserId, header.deviceId)) {
+      receipt.stream !== header.stream || receipt.schemaVersion !== schemaVersionFor(header.stream, header.protocolVersion) ||
+      receipt.deviceId !== noopDeviceId(receipt.ownerUserId, header.deviceId)) {
     throw new Error('projection_archive_mismatch');
   }
   const projection = header.delivery === 'append' ? APPEND_STREAM_PROJECTIONS[header.stream]
@@ -30,6 +31,11 @@ export async function commitArchivedBatch(rest: SupabaseRest, receipt: Durabilit
   const ack = await rest.rpc('noop_commit_push_projection', {
     p_object_id: receipt.objectId, p_body_sha256: digest, p_header: header, p_rows: rows,
     p_keep_keys: [...replacementKeys(header.stream, records, header.deviceId)], p_token: leaseToken,
+  }).catch((error: unknown) => {
+    if (error instanceof Error && error.message.includes('scalar_identity_conflict')) {
+      throw new PushProtocolError('scalar_identity_conflict', 409);
+    }
+    throw error;
   });
   if (!ackMatchesBatch(ack, header) || Object.keys(receipt).some((key) =>
     ack.durabilityReceipt?.[key] !== receipt[key as keyof DurabilityReceipt])) throw new Error('projection_ack_mismatch');

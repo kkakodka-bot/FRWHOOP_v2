@@ -5,6 +5,7 @@ import type { S3Store } from './s3.ts';
 import { PushProtocolError } from './registry.ts';
 import { MAX_OBJECT_LANE_BYTES } from './retention.ts';
 import { ZstdBounds } from './zstdBounds.ts';
+import { AuxiliaryIdentityValidator } from './auxiliaryIdentity.ts';
 
 // Streaming verification bounds output even when the compressed input is small.
 export const MAX_DECODED_OBJECT_BYTES = 512 * 1024 * 1024;
@@ -69,6 +70,8 @@ export async function verifyStoredObject(raw: S3Store, row: any, key: string) {
   const contentHash = createHash('sha256');
   let compressedBytes = 0;
   let uncompressedBytes = 0;
+  const auxiliary = row.object_kind === 'v18AuxSample' && row.push_protocol_version === '1.4'
+    ? new AuxiliaryIdentityValidator(Number(row.sample_count), Date.parse(row.start_at) / 1000, Date.parse(row.end_at) / 1000) : null;
   const countWire = new TransformStream<Uint8Array, Uint8Array>({
     transform(chunk, controller) {
       compressedBytes += chunk.length;
@@ -105,6 +108,7 @@ export async function verifyStoredObject(raw: S3Store, row: any, key: string) {
       uncompressedBytes += chunk.length;
       if (uncompressedBytes > (expectedDecoded ?? MAX_DECODED_OBJECT_BYTES)) mismatch('decoded_size_mismatch');
       contentHash.update(chunk);
+      auxiliary?.push(chunk);
     }
   } catch (err) {
     if (err instanceof PushProtocolError) throw err;
@@ -117,7 +121,8 @@ export async function verifyStoredObject(raw: S3Store, row: any, key: string) {
   // Old inline manifests recorded the gzip digest; old binary manifests recorded decoded SHA.
   const scope = row.digest_scope ?? (String(row.format).startsWith('ndjson') ? 'wire' : 'decoded');
   if ((scope === 'wire' ? wireSha256 : contentSha256) !== String(row.sha256).toLowerCase()) mismatch('digest_mismatch');
-  return { compressedBytes, uncompressedBytes, wireSha256, contentSha256 };
+  return { compressedBytes, uncompressedBytes, wireSha256, contentSha256,
+    auxiliaryValidation: auxiliary?.finish() };
 }
 
 export async function completeDurableObject({ rest, raw, row }: {
@@ -151,10 +156,11 @@ export async function completeDurableObject({ rest, raw, row }: {
   }
   let receipt: DurabilityReceipt;
   try {
-    receipt = await rest.rpc('noop_commit_object_receipt', {
+    receipt = await rest.rpc(verified.auxiliaryValidation ? 'noop_commit_aux_object_receipt' : 'noop_commit_object_receipt', {
       p_user_id: row.user_id, p_object_id: row.id, p_verified_key: verifiedKey,
       p_wire_sha256: verified.wireSha256, p_content_sha256: verified.contentSha256,
       p_compressed_bytes: verified.compressedBytes, p_uncompressed_bytes: verified.uncompressedBytes,
+      ...(verified.auxiliaryValidation ? { p_validation: verified.auxiliaryValidation } : {}),
     });
   } catch (err) { intakeError(err); }
   if (receipt!.version !== 1 || receipt!.state !== 'verified_indexed') throw new Error('invalid_durability_receipt');
