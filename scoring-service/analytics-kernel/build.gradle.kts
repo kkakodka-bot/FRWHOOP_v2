@@ -12,8 +12,8 @@
 //   * The scoped twin tests are copied BYTE-VERBATIM from ../android/app/src/test/... and run
 //     UNMODIFIED on the JVM — they are the parity oracle (FRWHOOP migration locked decision #2).
 //
-// Scope (locked): RR/HRV pipeline + sleep staging/sleep score. Charge/Effort/Rest and insights
-// engines are NOT synced. Anything importing android.* / androidx.* is excluded by construction
+// W4 scope (explicitly approved 2026-09-18): existing pure history/derived engines are also synced.
+// Live capture, Android runtime and Room remain excluded. Imports of android.* / androidx.* are excluded
 // and guarded by the verifyKernelScope task.
 
 plugins {
@@ -51,6 +51,8 @@ val kernelAnalyticsFiles = listOf(
     "AnalyticsModels.kt",
     "Baselines.kt",
     "DayCycle.kt",
+    "PhysiologicalSteps.kt",
+    "SleepAwareStepCounter.kt",
     "GuidedCaptureProgress.kt",
     "HRVReadiness.kt",
     "HrvAnalyzer.kt",
@@ -71,6 +73,26 @@ val kernelAnalyticsFiles = listOf(
     "StrainScorer.kt",
     "WakeMotionRefinement.kt",
     "WorkoutDetector.kt",
+    "SleepDebt.kt",
+    "VitalityEngine.kt",
+    "TrainingLoadEngine.kt",
+    "ReadinessTrainingLoad.kt",
+    "ReadinessEngine.kt",
+    "RecoveryDrivers.kt",
+    "FitnessAgeEngine.kt",
+    "HrZones.kt",
+    "HeartRateRecovery.kt",
+    "ActivityCostEngine.kt",
+    "StepsEstimateEngine.kt",
+    "IllnessSignalEngine.kt",
+    "IllnessDistance.kt",
+    "CyclePhaseEngine.kt",
+    "CircadianEngine.kt",
+    "DaytimeStress.kt",
+    "DaytimeBaselines.kt",
+    "StressIndex.kt",
+    "StressOnsetDetector.kt",
+    "SedentaryDetector.kt",
 )
 
 /** Pure protocol types the kernel references (DeviceFamily, ParsedFrame, Whoop4SkinTemp /
@@ -104,6 +126,26 @@ val kernelTestcentreFiles = listOf(
  *      (repository contract tests, import tests, UI-adjacent tests) — not analytics formulas.
  *  90 top-level + 6 agreement tests = 96 files. */
 val kernelTestFiles = listOf(
+    "HeartRateRecoveryTest.kt",
+    "ActivityCostEngineTest.kt",
+    "SleepDebtTest.kt",
+    "VitalityEngineTest.kt",
+    "TrainingLoadEngineTest.kt",
+    "ReadinessEngineTest.kt",
+    "ReadinessTrainingLoadTest.kt",
+    "RecoveryDriversTest.kt",
+    "FitnessAgeEngineTest.kt",
+    "StepsEstimateEngineTest.kt",
+    "HrZonesTest.kt",
+    "IllnessSignalEngineTest.kt",
+    "IllnessDistanceTest.kt",
+    "CyclePhaseEngineTest.kt",
+    "CircadianEngineTest.kt",
+    "DaytimeStressTest.kt",
+    "DaytimeBaselinesTest.kt",
+    "StressIndexTest.kt",
+    "StressOnsetDetectorTest.kt",
+    "SedentaryDetectorTest.kt",
     "AnalyticsEngineDayBoundsTest.kt",
     "AnalyticsEngineDaySliceTest.kt",
     "AnalyticsEngineHrOnlyDayTest.kt",
@@ -120,6 +162,8 @@ val kernelTestFiles = listOf(
     "DayBoutHrMaxAgreementTest.kt",
     "DayCaloriesTest.kt",
     "DayCycleResolverTest.kt",
+    "PhysiologicalStepsTest.kt",
+    "SleepAwareStepCounterTest.kt",
     "DetectionFunnelTest.kt",
     "DeviceEraEpochTest.kt",
     "DuplicatePairRatioTest.kt",
