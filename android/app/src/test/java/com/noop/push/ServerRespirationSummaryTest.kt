@@ -6,6 +6,25 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ServerRespirationSummaryTest {
+    @Test fun actualScorerSnapshotSurvivesNativeReadback() {
+        val bytes=javaClass.getResource("/server_scored_sleep_snapshot.json")!!.readText()
+        val owner="11111111-1111-1111-1111-111111111111"
+        val day="2026-09-17"
+        val cache=ServerScoreClient.parseSnapshot(bytes,day,owner)
+        val summary=ServerRespirationSummary.project(cache,day)!!
+        assertEquals(12.0,summary.breathsPerMinute!!,0.1)
+        assertEquals("main_sleep",summary.context)
+        assertEquals("resp-spectrum-acf-1",summary.method)
+        assertTrue(summary.coverage!!>0.9)
+        assertEquals(summary.acceptedWindows,summary.totalWindows)
+        assertNull(summary.reason)
+        assertEquals(2,cache.nights.size)
+        assertTrue(cache.nights.flatMap { it.stages }.any { it.state=="sleep_unstaged" })
+        assertEquals(42L,cache.features["sleep"]!!.inputRevision)
+        assertNotNull(cache.daily!!.hrvRmssdMs)
+        assertTrue(runCatching { ServerScoreClient.parseSnapshot(bytes,day,"another-owner") }.isFailure)
+    }
+
     private fun cache(version: String = "frwhoop-physiology-2", status: String = "available", scalar: Any = 16.0,
                       context: String = "main_sleep", median: Any = 16.0, coverage: Any = 0.5): ServerScoreDayCache {
         val summary = JSONObject().put("median_bpm", median).put("mean_bpm", 16.0)

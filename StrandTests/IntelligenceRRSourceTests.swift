@@ -91,14 +91,19 @@ final class IntelligenceRRSourceTests: XCTestCase {
             await engine.analyzeRecent(maxDays: 2, force: true)
             let after = try await store.dailyMetrics(deviceId: canonical + "-noop",
                 from: input.day, to: input.day)
-            let promoted = try XCTUnwrap(after.first?.avgHrv)
-            XCTAssertGreaterThan(promoted, 0, "the same engine must replace its cached R-R-less result")
+            let promoted = try XCTUnwrap(after.first)
+            XCTAssertNil(promoted.avgHrv, "source promotion proves units, not subsecond continuity or five-minute coverage")
+            let selected = try await store.rrIntervals(deviceId: canonical, from: input.rr.first!.ts,
+                to: input.rr.last!.ts, limit: input.rr.count + 1)
+            XCTAssertEqual(selected.count, input.rr.count, "promoted canonical intervals must remain readable")
+            XCTAssertTrue(log.contains { $0.contains("dayCache reused=0/2") },
+                          "source promotion must invalidate both previous cache entries: \(log)")
 
             log.removeAll()
             await engine.analyzeRecent(maxDays: 2, force: true)
             let idle = try await store.dailyMetrics(deviceId: canonical + "-noop",
                 from: input.day, to: input.day)
-            XCTAssertEqual(idle.first?.avgHrv, promoted)
+            XCTAssertEqual(idle.first?.avgHrv, promoted.avgHrv)
             XCTAssertTrue(log.contains { $0.contains("dayCache reused=2/2") },
                           "an unchanged pass should reuse both previously scored windows: \(log)")
         }
@@ -117,7 +122,11 @@ final class IntelligenceRRSourceTests: XCTestCase {
             await engine.analyzeRecent(maxDays: 2, force: true)
             let rows = try await store.dailyMetrics(deviceId: canonical + "-noop",
                 from: input.day, to: input.day)
-            XCTAssertGreaterThan(try XCTUnwrap(rows.first?.avgHrv), 0)
+            XCTAssertNotNil(rows.first)
+            XCTAssertNil(rows.first?.avgHrv, "unverified packet timing cannot produce five-minute HRV even for confirmed WHOOP 4")
+            let retained = try await store.rrIntervals(deviceId: canonical, from: input.rr.first!.ts,
+                to: input.rr.last!.ts, limit: input.rr.count + 1)
+            XCTAssertEqual(retained.count, input.rr.count, "confirmed WHOOP 4 intervals remain available to source readers")
         }
     }
 
@@ -172,8 +181,11 @@ final class IntelligenceRRSourceTests: XCTestCase {
                            "self-heal must not use unlabelled alias R-R even before active-ID adoption")
             try register(registry, canonicalModel: "4.0")
             let confirmedFour = await repo.selfHealEditedStages(from: start, to: start + duration)
-            XCTAssertNotEqual(confirmedFour.first?.stagesJSON, baseline,
-                              "the fixture must expose R-R-dependent staging, retained for confirmed WHOOP 4")
+            XCTAssertEqual(confirmedFour.first?.stagesJSON, baseline,
+                           "source identity alone cannot let coarse R-R bypass staging quality")
+            let retained = try await store.rrIntervals(deviceId: canonical, from: start,
+                to: start + duration, limit: duration + 1)
+            XCTAssertEqual(retained.count, rr.count, "abstaining from HRV does not remove WHOOP 4 source data")
         }
     }
 }

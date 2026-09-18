@@ -23,8 +23,10 @@ final class RespirationEstimatorTests: XCTestCase {
             let gapStart = (c["gap_start"] as? NSNumber)?.doubleValue ?? 1e9
             let gapEnd = (c["gap_end"] as? NSNumber)?.doubleValue ?? 1e9
             let mask = (0..<n).map { Double($0) / 4 < gapStart || Double($0) / 4 >= gapEnd }
-            let r = RespirationEstimator.estimate(.init(start: 0, sampleRateHz: 4, values: values, observed: mask,
-                source: "fixture", modality: "respiratory_modulation", timingVerified: true, channelVerified: true))
+            var input = RespirationEstimator.Input(start: 0, sampleRateHz: 4, values: values, observed: mask,
+                source: "fixture", modality: "respiratory_modulation", timingVerified: true, channelVerified: true)
+            input.maximumSupportedRate = (c["maximum_supported_rate"] as? NSNumber)?.doubleValue
+            let r = RespirationEstimator.estimate(input)
             XCTAssertEqual(r.reason, c["reason"] as? String, c["id"] as! String)
             if let expected = (c["expected_rate"] as? NSNumber)?.doubleValue {
                 XCTAssertEqual(r.breathsPerMinute ?? -1, expected, accuracy: 0.1, c["id"] as! String)
@@ -109,6 +111,8 @@ final class RespirationEstimatorTests: XCTestCase {
                        RespirationEstimator.estimate(wave(start: 240, bpm: 30))]
         let summary = RespirationEstimator.summarize(results, start: 0, end: 300, context: "qualified_sleep")
         XCTAssertEqual(summary.distributionBpm.count, 2)
+        XCTAssertEqual(summary.acceptedWindows, 2)
+        XCTAssertEqual(summary.totalWindows, 3)
         XCTAssertEqual(summary.distributionBpm[0], 12, accuracy: 0.1)
         XCTAssertEqual(summary.distributionBpm[1], 18, accuracy: 0.1)
         XCTAssertEqual(summary, RespirationEstimator.summarize(Array(results.reversed()), start: 0, end: 300, context: "qualified_sleep"))

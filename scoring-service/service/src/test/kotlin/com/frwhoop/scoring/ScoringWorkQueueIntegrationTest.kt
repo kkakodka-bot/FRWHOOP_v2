@@ -41,9 +41,9 @@ class ScoringWorkQueueIntegrationTest {
 
     @Test fun migrationResetsLegacySuccessAttemptsAndCatchesExistingAuxiliarySignals() {
         val legacy="00000000-0000-0000-0000-000000000001"
-        assertEquals(1L,scalar("select count(*) from scoring_work_items where user_id='$legacy' and day='2026-09-01' " +
+        assertEquals(1L,scalar("select count(*) from physiology_work_items where user_id='$legacy' and day='2026-09-01' " +
             "and attempts=0 and consecutive_failures=0 and done_at is null and claimed_at is null and timezone_id='America/Los_Angeles'"))
-        assertEquals(2L,scalar("select count(*) from scoring_work_items where user_id='$legacy' and day in ('2026-09-03','2026-09-04')"))
+        assertEquals(2L,scalar("select count(*) from physiology_work_items where user_id='$legacy' and day in ('2026-09-03','2026-09-04')"))
     }
 
     @Test fun moreThan350SuccessfulRevisionsRemainRunnable() {
@@ -52,7 +52,7 @@ class ScoringWorkQueueIntegrationTest {
             val work = claim()
             fence(work)
             assertTrue(queue.markDone(work, 1))
-            assertEquals(0L, scalar("select consecutive_failures from scoring_work_items where user_id='$user'"))
+            assertEquals(0L, scalar("select consecutive_failures from physiology_work_items where user_id='$user'"))
         }
         assertNull(queue.claimOne(user, device, day))
     }
@@ -61,14 +61,14 @@ class ScoringWorkQueueIntegrationTest {
         queue.dirtyWorkItem(user, device, day)
         repeat(8) { count ->
             assertTrue(queue.markFailed(claim(), "controlled failure"))
-            assertEquals(count+1L, scalar("select consecutive_failures from scoring_work_items where user_id='$user'"))
+            assertEquals(count+1L, scalar("select consecutive_failures from physiology_work_items where user_id='$user'"))
             makeDue()
         }
         assertNull(queue.claimOne(user, device, day))
         queue.dirtyWorkItem(user, device, day)
         val waiting = claim()
         assertTrue(queue.markWaiting(waiting, "interval acquisition pending"))
-        assertEquals(0L, scalar("select consecutive_failures from scoring_work_items where user_id='$user'"))
+        assertEquals(0L, scalar("select consecutive_failures from physiology_work_items where user_id='$user'"))
         assertNull(queue.claimOne(user, device, day))
         makeDue()
         assertTrue(queue.markDone(claim(), 1))
@@ -85,7 +85,7 @@ class ScoringWorkQueueIntegrationTest {
         assertFalse(queue.markWaiting(obsolete, "old waiting"))
         expectStale { fence(obsolete) }
         assertTrue(queue.renew(current))
-        sql("update scoring_work_items set lease_expires_at=clock_timestamp()-interval '1 second' where user_id='$user'")
+        sql("update physiology_work_items set lease_expires_at=clock_timestamp()-interval '1 second' where user_id='$user'")
         assertFalse(queue.renew(current))
         expectStale { fence(current) }
         val successor = claim()
@@ -114,10 +114,10 @@ class ScoringWorkQueueIntegrationTest {
         db.withConnection { conn ->
             conn.autoCommit=false
             conn.createStatement().use { it.execute(hrInsert()) }
-            assertEquals(0L, scalar("select count(*) from scoring_work_items where user_id='$user'"))
+            assertEquals(0L, scalar("select count(*) from physiology_work_items where user_id='$user'"))
             conn.commit()
         }
-        assertEquals(2L, scalar("select count(*) from scoring_work_items where user_id='$user'"))
+        assertEquals(2L, scalar("select count(*) from physiology_work_items where user_id='$user'"))
         assertEquals(1L, revision(day))
         assertEquals(1L, revision("2026-09-18"))
         sql("update noop_hr_samples set ingested_at=clock_timestamp(),batch_id='${UUID.randomUUID()}' where user_id='$user'")
@@ -145,7 +145,7 @@ class ScoringWorkQueueIntegrationTest {
         sql("insert into noop_rr_intervals(user_id,device_id,source_id,ts,\"rrMs\",seq,\"tsSuspect\",batch_id) " +
             "values('$user','$device','$source',9223372036854775807,1000,1,1,'$batch')")
         assertEquals(1L,scalar("select count(*) from noop_rr_intervals where user_id='$user'"))
-        assertEquals(0L,scalar("select count(*) from scoring_work_items where user_id='$user'"))
+        assertEquals(0L,scalar("select count(*) from physiology_work_items where user_id='$user'"))
     }
 
     @Test fun deviceFamilyCorrectionInvalidatesButLastSeenDoesNot() {
@@ -181,7 +181,7 @@ class ScoringWorkQueueIntegrationTest {
         // Before the prospective profile edit the historical timezone remains UTC.
         sql(hrInsert())
         assertEquals(1L,revision(day))
-        assertEquals(0L,scalar("select count(*) from scoring_work_items where user_id='$user' and day='2026-09-17' and timezone_id<>'UTC'"))
+        assertEquals(0L,scalar("select count(*) from physiology_work_items where user_id='$user' and day='2026-09-17' and timezone_id<>'UTC'"))
         sql("insert into scoring_timezone_history values('$user','2026-01-01','America/Los_Angeles','explicit_history')")
         val dst = Instant.parse("2026-03-08T08:30:00Z").epochSecond
         assertEquals(2L,scalar("select count(*) from scoring_affected_days('$user',$dst,${dst+3600})"))
@@ -205,7 +205,7 @@ class ScoringWorkQueueIntegrationTest {
         val midnight=Instant.parse("2026-09-17T18:30:00Z").epochSecond
         sql("insert into noop_hr_samples(user_id,device_id,source_id,ts,bpm,batch_id) " +
             "select '$user','$device','$source',$midnight+n,60,'$batch' from generate_series(-1,0) n")
-        assertEquals(3L,scalar("select count(*) from scoring_work_items where user_id='$user'"))
+        assertEquals(3L,scalar("select count(*) from physiology_work_items where user_id='$user'"))
         assertEquals(1L,revision("2026-09-19"))
     }
 
@@ -215,9 +215,9 @@ class ScoringWorkQueueIntegrationTest {
             "values('$objectId','$user','$device','test/$objectId','ready','client_claimed',repeat('a',64))")
         sql("insert into noop_signal_windows(user_id,device_id,stream,hour_start,object_id,object_key,start_ts,end_ts) " +
             "values('$user','$device','ppg',$ts,'$objectId','test/$objectId',$ts,${ts+30})")
-        assertEquals(0L,scalar("select count(*) from scoring_work_items where user_id='$user'"))
+        assertEquals(0L,scalar("select count(*) from physiology_work_items where user_id='$user'"))
         sql("update object_manifests set sha256_source='server_verified',sha256=repeat('a',64) where id='$objectId'")
-        assertEquals(0L,scalar("select count(*) from scoring_work_items where user_id='$user'"))
+        assertEquals(0L,scalar("select count(*) from physiology_work_items where user_id='$user'"))
         assertEquals(1L,scalar("select count(*) from object_manifests where id='$objectId' and sha256_source='server_verified'"))
         sql("update object_manifests set decode_verified_at=clock_timestamp(),decoder_version='fixture-1' where id='$objectId'")
         assertEquals(1L,revision(day))
@@ -236,7 +236,7 @@ class ScoringWorkQueueIntegrationTest {
             "values('$user','$device','ppg',$ts,'$objectId','test/$objectId',$ts,${ts+30})")
         sql("delete from object_manifests where id='$objectId'")
         assertEquals(0L,scalar("select count(*) from object_manifests where id='$objectId'"))
-        assertEquals(0L,scalar("select count(*) from scoring_work_items where user_id='$user'"))
+        assertEquals(0L,scalar("select count(*) from physiology_work_items where user_id='$user'"))
     }
 
     @Test fun publicationRowLockSerializesConcurrentNewInputUntilCommit() {
@@ -255,7 +255,7 @@ class ScoringWorkQueueIntegrationTest {
                 val deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(5)
                 var waiting=false
                 while(!waiting && System.nanoTime()<deadline) {
-                    waiting=scalar("select count(*) from pg_stat_activity where wait_event_type='Lock' and query like 'select public.scoring_enqueue_day%' ")>0
+                    waiting=scalar("select count(*) from pg_stat_activity where wait_event_type='Lock' and query like 'select public.physiology_enqueue_day%' ")>0
                     Thread.yield()
                 }
                 assertTrue("arrival must wait for publication lock",waiting)
@@ -276,10 +276,10 @@ class ScoringWorkQueueIntegrationTest {
             for (renew in listOf(false,true)) {
                 queue.dirtyWorkItem(user,device,day)
                 val item=claim()
-                sql("update scoring_work_items set lease_expires_at=clock_timestamp()+interval '700 milliseconds' where user_id='$user'")
+                sql("update physiology_work_items set lease_expires_at=clock_timestamp()+interval '700 milliseconds' where user_id='$user'")
                 db.withConnection { conn ->
                     conn.autoCommit=false
-                    conn.createStatement().use { it.execute("select 1 from scoring_work_items where user_id='$user' for update") }
+                    conn.createStatement().use { it.execute("select 1 from physiology_work_items where user_id='$user' for update") }
                     val waiting=pool.submit<Boolean> {
                         if (renew) queue.renew(item) else {
                             try { fence(item); true } catch(e: SQLException) { assertEquals("40001",e.sqlState); false }
@@ -310,7 +310,7 @@ class ScoringWorkQueueIntegrationTest {
         sql("insert into devices(id,user_id) values('$secondDevice','$user')")
         queue.dirtyWorkItem(user,device,day)
         queue.dirtyWorkItem(user,secondDevice,day)
-        assertEquals(2L,scalar("select count(*) from scoring_work_items where user_id='$user'"))
+        assertEquals(2L,scalar("select count(*) from physiology_work_items where user_id='$user'"))
         try { queue.dirtyWorkItem(otherUser,device,day); fail("cross-user device accepted") }
         catch (expected: SQLException) { assertEquals("23503",expected.sqlState) }
         val item=claim()
@@ -326,8 +326,8 @@ class ScoringWorkQueueIntegrationTest {
     }
 
     private fun claim() = queue.claimOne(user,device,day) ?: error("No runnable item for $user/$day")
-    private fun makeDue() = sql("update scoring_work_items set next_attempt_at=clock_timestamp()-interval '1 second' where user_id='$user'")
-    private fun revision(date: String)=scalar("select input_revision from scoring_work_items where user_id='$user' and device_id='$device' and day='$date'")
+    private fun makeDue() = sql("update physiology_work_items set next_attempt_at=clock_timestamp()-interval '1 second' where user_id='$user'")
+    private fun revision(date: String)=scalar("select input_revision from physiology_work_items where user_id='$user' and device_id='$device' and day='$date'")
     private fun hrInsert()="insert into noop_hr_samples(user_id,device_id,source_id,ts,bpm,batch_id) values('$user','$device','$source',$ts,60,'$batch')"
     private fun sql(statement: String)=db.withConnection { conn -> conn.createStatement().use { it.execute(statement) }; Unit }
     private fun scalar(statement: String): Long=db.withConnection { conn -> conn.createStatement().use { s ->

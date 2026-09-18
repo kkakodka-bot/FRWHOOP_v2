@@ -18,14 +18,29 @@ import java.util.UUID
 private val log = LoggerFactory.getLogger("ScoringApplication")
 
 fun main(args: Array<String>) {
-    require(args.isEmpty() || args.contentEquals(arrayOf("--replay-day")) || args.contentEquals(arrayOf("--inventory-signals"))) {
-        "Use no arguments, --replay-day, or --inventory-signals; commands cannot be combined"
+    require(args.isEmpty() || args.contentEquals(arrayOf("--replay-day")) || args.contentEquals(arrayOf("--inventory-signals")) ||
+        args.contentEquals(arrayOf("--archive-only"))) {
+        "Use no arguments, --replay-day, --inventory-signals, or --archive-only; commands cannot be combined"
     }
     if (args.contains("--inventory-signals")) {
         SignalInventoryCommand.run(System.getenv())
         return
     }
     val config = ScoringConfig.fromEnv()
+    if (args.contains("--archive-only")) {
+        val b2 = requireNotNull(config.b2Config) { "Archive-only mode requires B2 configuration" }
+        PostgresClient(config.databaseUrl).use { db ->
+            val outbox = DerivedArchiveOutbox(db, DerivedArtifactWriter(b2, config.supabaseUrl, config.serviceRoleKey))
+            while (!Thread.currentThread().isInterrupted) {
+                val processed = try { outbox.processOne() } catch (error: Exception) {
+                    log.warn("Archive queue unavailable: {}", error.javaClass.simpleName)
+                    false
+                }
+                if (!processed) Thread.sleep(config.pollInterval.toMillis())
+            }
+        }
+        return
+    }
     require(config.algorithmVersion == CanonicalScorePayload.ALGORITHM_VERSION) {
         "This build requires algorithm version ${CanonicalScorePayload.ALGORITHM_VERSION}; use the baseline build for rollback"
     }

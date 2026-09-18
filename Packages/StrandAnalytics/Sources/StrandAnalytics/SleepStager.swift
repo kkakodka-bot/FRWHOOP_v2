@@ -1737,6 +1737,8 @@ public enum SleepStager {
     public static func stageSession(start: Int, end: Int, grav: [GravitySample],
                                     hr: [HRSample], rr: [RRInterval], resp: [RespSample],
                                     hrvObservations: [PhysiologyQuality.IntervalObservation] = []) -> [StageSegment] {
+        let grav = grav.filter(SleepSignalValidity.gravity)
+        let hr = hr.filter(SleepSignalValidity.heartRate)
         // Existing cache fingerprints lack original provenance. Never reuse them for proven input.
         if !hrvObservations.isEmpty {
             return stageSessionUncached(start: start, end: end, grav: grav, hr: hr, rr: rr, resp: resp,

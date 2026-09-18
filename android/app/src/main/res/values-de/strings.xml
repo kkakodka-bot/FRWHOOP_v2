@@ -2867,4 +2867,14 @@
     <string name="physiology_hrv_percent">%1$s%%</string>
     <string name="server_vitals_local_history">Lokaler und importierter Verlauf. Öffne HRV oder Atemfrequenz für das ausgewählte Serverergebnis.</string>
     <string name="server_vitals_local_recovery_day">Lokale Erholungsdaten · %1$s</string>
+    <string name="server_scoring_title">Server-Auswertung</string>
+    <string name="server_scoring_description">Konto und Quelle für Schlaf, HRV und Atemfrequenz vom Server.</string>
+    <string name="server_scoring_use_server">Serverwerte verwenden</string>
+    <string name="server_scoring_mode_detail">Deaktivieren, um lokale und importierte Ergebnisse zu verwenden.</string>
+    <string name="server_scoring_sign_in">Anmelden</string>
+    <string name="server_scoring_signed_in">Bei der Server-Physiologie angemeldet.</string>
+    <string name="server_scoring_email">E-Mail</string>
+    <string name="server_scoring_password">Passwort</string>
+    <string name="server_scoring_signing_in">Anmeldung…</string>
+    <string name="server_scoring_sign_out">Abmelden</string>
 </resources>

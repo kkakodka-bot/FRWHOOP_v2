@@ -104,6 +104,8 @@ object RespirationEstimator {
         val denom = acf[lag - 1] - 2 * acf[lag] + acf[lag + 1]
         val shift = if (abs(denom) > 1e-12) (0.5 * (acf[lag - 1] - acf[lag + 1]) / denom).coerceIn(-0.5, 0.5) else 0.0
         acfRate = 60 * rate / (lag + shift); acfStrength = acf[lag]
+        if (!acfRate.isFinite() || acfRate < policy.minimumRate || acfRate > maximumRate)
+            return result("out_of_supported_range")
         val harmonic = listOf(peak / 2.0, peak * 2.0).any { bin ->
             val k = bin.roundToInt()
             k in firstBin..highestBin && abs(k - peak) > 2 && power[k] >= power[peak] * policy.harmonicPowerRatio
@@ -112,7 +114,10 @@ object RespirationEstimator {
         if (abs(acfRate - spectralRate) > policy.maximumDisagreement) return result("spectral_autocorrelation_disagreement")
         cycles = duration * coverage * acfRate / 60
         if (cycles < policy.minimumCycles) return result("insufficient_cycles")
-        return result(null, (spectralRate + acfRate) / 2)
+        val estimate = (spectralRate + acfRate) / 2
+        if (!estimate.isFinite() || estimate < policy.minimumRate || estimate > maximumRate)
+            return result("out_of_supported_range")
+        return result(null, estimate)
     }
 
     /** A sampled tachogram is eligible only inside verified original spans; gaps are never filled. */
@@ -180,12 +185,13 @@ object RespirationEstimator {
     /** Overlapping strides contribute to duration once. Sleep and awake-rest summaries stay separate. */
     fun summarize(results: List<Result>, start: Double, end: Double, context: String): Summary {
         require(end > start && context in listOf("qualified_sleep", "qualified_awake_rest"))
-        val accepted = results.filter { it.reason == null && it.breathsPerMinute != null && it.start >= start && it.end <= end }
+        val inPeriod = results.filter { it.start >= start && it.end <= end }
+        val accepted = inPeriod.filter { it.reason == null && it.breathsPerMinute != null }
         val values = accepted.map { it.breathsPerMinute!! }.sorted()
         val seconds = PhysiologyQuality.union(accepted.flatMap { it.acceptedSpans }, start, end)
             .sumOf { it.end - it.start }
         val median = if (values.isEmpty()) null else (values[(values.size - 1) / 2] + values[values.size / 2]) / 2
         return Summary(median, if (values.isEmpty()) null else values.average(), seconds, seconds / (end - start),
-            accepted.size, results.size, context, values)
+            accepted.size, inPeriod.size, context, values)
     }
 }

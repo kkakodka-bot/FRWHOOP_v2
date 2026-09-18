@@ -556,14 +556,11 @@ object AnalyticsEngine {
         // Mirrors Swift. (#525 / #561)
         val knownCandidates = matched.indices.filter { matched[it].hasKnownState }
         val candidates = knownCandidates.ifEmpty { matched.indices.toList() }
-        var mainGroupIdx = (SleepStageTotals.mainNightGroupIndices(
+        val mainGroupIdx = if (useFullDaySleepOpportunities) SleepOpportunityDetector.mainSleepGroupIndices(
+            matched, tzOffsetSeconds, habitualMidsleepSec) else (SleepStageTotals.mainNightGroupIndices(
             candidates.map { SleepStageTotals.NightBlock(matched[it].start, matched[it].end) },
             tzOffsetSeconds, habitualMidsleepSec,
         ) ?: emptyList()).map { candidates[it] }
-        if(useFullDaySleepOpportunities && mainGroupIdx.sumOf { i -> matched[i].stages
-            .filter(SleepStageSemantics::isSleep).sumOf { it.end-it.start } } < SleepOpportunityDetector.MINIMUM_MAIN_SLEEP_SECONDS) {
-            mainGroupIdx=emptyList()
-        }
         // Grouping establishes an estimated opportunity, not sleep in its interruptions. Retain
         // observed wake/off-body epochs there; missing and sub-threshold candidate runs stay unknown.
         // This precedes server manual overrides, whose explicit bounds must never be extended.

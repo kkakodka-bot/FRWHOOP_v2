@@ -19,7 +19,8 @@ class RespirationEstimatorTest {
                 c.getDouble("amplitude") * sin(angle) + c.optDouble("harmonic", 0.0) * sin(2 * angle)
             }
             val mask = (0 until n).map { j -> j / 4.0 < c.optDouble("gap_start", 1e9) || j / 4.0 >= c.optDouble("gap_end", 1e9) }
-            val r = RespirationEstimator.estimate(wave().copy(values = values, observed = mask))
+            val r = RespirationEstimator.estimate(wave().copy(values = values, observed = mask,
+                maximumSupportedRate = if (c.has("maximum_supported_rate")) c.getDouble("maximum_supported_rate") else null))
             assertEquals(c.getString("id"), if (c.has("reason")) c.getString("reason") else null, r.reason)
             if (c.has("expected_rate")) assertEquals(c.getString("id"), c.getDouble("expected_rate"), r.breathsPerMinute!!, 0.1)
             else assertNull(r.breathsPerMinute)
@@ -101,6 +102,8 @@ class RespirationEstimatorTest {
             RespirationEstimator.estimate(wave()),RespirationEstimator.estimate(wave(240.0,30.0)))
         val summary=RespirationEstimator.summarize(results,0.0,300.0,"qualified_sleep")
         assertEquals(2,summary.distributionBpm.size)
+        assertEquals(2,summary.acceptedWindows)
+        assertEquals(3,summary.totalWindows)
         assertEquals(12.0,summary.distributionBpm[0],0.1); assertEquals(18.0,summary.distributionBpm[1],0.1)
         assertEquals(summary,RespirationEstimator.summarize(results.reversed(),0.0,300.0,"qualified_sleep"))
         val empty=RespirationEstimator.summarize(listOf(results[1]),0.0,300.0,"qualified_awake_rest")

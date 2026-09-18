@@ -2767,4 +2767,14 @@
     <string name="physiology_hrv_percent">%1$s%%</string>
     <string name="server_vitals_local_history">本地和导入的历史记录。打开心率变异性或呼吸频率，查看所选服务器结果。</string>
     <string name="server_vitals_local_recovery_day">本地恢复数据 · %1$s</string>
+    <string name="server_scoring_title">服务器计算</string>
+    <string name="server_scoring_description">服务器睡眠、心率变异性和呼吸频率的账户与来源。</string>
+    <string name="server_scoring_use_server">使用服务器结果</string>
+    <string name="server_scoring_mode_detail">关闭后使用本地和导入的结果。</string>
+    <string name="server_scoring_sign_in">登录</string>
+    <string name="server_scoring_signed_in">已登录服务器生理数据。</string>
+    <string name="server_scoring_email">电子邮件</string>
+    <string name="server_scoring_password">密码</string>
+    <string name="server_scoring_signing_in">正在登录…</string>
+    <string name="server_scoring_sign_out">退出登录</string>
 </resources>

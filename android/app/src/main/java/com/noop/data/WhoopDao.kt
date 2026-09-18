@@ -106,7 +106,8 @@ internal const val HAS_WHOOP5_RR_SOURCE_SQL =
         "OR EXISTS(SELECT 1 FROM rrPacketProvenance WHERE deviceId = :deviceId)"
 
 internal const val PROMOTE_WHOOP5_RR_SOURCE_SQL =
-    "UPDATE rrInterval SET srcChannel = :source, ord = :ord " +
+    "UPDATE rrInterval SET srcChannel = :source, ord = :ord, " +
+    "rowid = (SELECT COALESCE(MAX(rowid), 0) + 1 FROM rrInterval) " +
     "WHERE deviceId = :deviceId AND ts = :ts AND rrMs = :rrMs AND seq = :seq " +
     "AND ((:source = 5 AND (srcChannel IS NULL OR srcChannel IN (6, 7))) " +
     "OR (:source = 7 AND (srcChannel IS NULL OR srcChannel = 6)))"
@@ -602,7 +603,7 @@ interface WhoopDao : DeviceRegistryDao {
 
     /** Newly observed canonical source wins exact-key collisions: history > standard > native/legacy. */
     @Query(PROMOTE_WHOOP5_RR_SOURCE_SQL)
-    suspend fun promoteWhoop5RrSource(deviceId: String, ts: Long, rrMs: Int, seq: Int, ord: Int, source: Int)
+    suspend fun promoteWhoop5RrSource(deviceId: String, ts: Long, rrMs: Int, seq: Int, ord: Int, source: Int): Int
 
     @Query(
         "SELECT * FROM event WHERE deviceId = :deviceId AND ts >= :from AND ts <= :to " +

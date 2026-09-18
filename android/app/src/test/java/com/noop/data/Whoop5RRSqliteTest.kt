@@ -41,6 +41,7 @@ class Whoop5RRSqliteTest {
         WhoopDatabase.RR_PACKET_PROVENANCE_MIGRATION_SQL.forEach(::sql)
         sql("CREATE TABLE pairedDevice(id TEXT PRIMARY KEY, brand TEXT, model TEXT, status TEXT)")
         sql("CREATE TABLE hrSample(deviceId TEXT, ts INTEGER, bpm INTEGER, PRIMARY KEY(deviceId, ts))")
+        sql("CREATE TABLE syncJob(kind TEXT PRIMARY KEY, owedAt INTEGER, token TEXT, attempts INTEGER, lastNote TEXT)")
         listOf("ppgHrSample", "respSample", "gravitySample", "sleepStateSample", "event",
             "spo2Sample", "skinTempSample", "stepSample").forEach {
             sql("CREATE TABLE $it(deviceId TEXT, ts INTEGER)")
@@ -100,6 +101,13 @@ class Whoop5RRSqliteTest {
                 "promoteWhoop5RrSource" -> {
                     statement(PROMOTE_WHOOP5_RR_SOURCE_SQL,
                         listOf("deviceId", "ts", "rrMs", "seq", "ord", "source").zip(args.take(6)).toMap())
+                        .use { it.executeUpdate() }
+                }
+                "markSyncJobOwed" -> {
+                    statement("INSERT INTO syncJob VALUES(:kind,:owedAt,:token,0,:lastNote) " +
+                        "ON CONFLICT(kind) DO UPDATE SET owedAt=excluded.owedAt, token=excluded.token, " +
+                        "attempts=0, lastNote=excluded.lastNote",
+                        listOf("kind", "owedAt", "token", "lastNote").zip(args.take(4)).toMap())
                         .use { it.executeUpdate() }
                     Unit
                 }
@@ -176,6 +184,31 @@ class Whoop5RRSqliteTest {
         val plan = query("EXPLAIN QUERY PLAN $ANALYSIS_FINGERPRINT_SQL") { it.getString("detail") }
         assertEquals(3, plan.count { it.contains("USING COVERING INDEX rrInterval_source_suspect") })
         assertFalse(plan.any { it.contains("SCAN rrInterval") })
+    }
+
+    @Test fun sourcePromotionReexportsMetadataAndCreatesDebtWithoutAddingBeats() = runBlocking {
+        val native = StreamBatch(rr = listOf(RrRow(100, 800, RrSourceChannel.WHOOP5_REALTIME),
+            RrRow(101, 900, RrSourceChannel.WHOOP5_REALTIME)))
+        repo.insert(native, id)
+        sql("UPDATE rrInterval SET synced=1,tsSuspect=0 WHERE ts=100")
+        val cursor = query("SELECT max(rowid) FROM rrInterval") { it.getLong(1) }.single()
+        assertTrue(read().isEmpty())
+        val standard = StreamBatch(rr = listOf(RrRow(100, 800, RrSourceChannel.WHOOP5_STANDARD)))
+        assertEquals(0, repo.insert(standard, id, markPostBackfillDebt = true).rr)
+        assertEquals(listOf(800), read().map { it.rrMs })
+        val exported = query("SELECT rowid,* FROM rrInterval WHERE deviceId=:d AND rowid>:cursor ORDER BY rowid",
+            mapOf("d" to id, "cursor" to cursor)) {
+            listOf(it.getLong("rowid"), it.getLong("ts"), it.getLong("rrMs"), it.getLong("seq"),
+                it.getLong("ord"), it.getLong("srcChannel"), it.getLong("synced"), it.getLong("tsSuspect"))
+        }
+        assertEquals(1, exported.size)
+        assertEquals(listOf(100L, 800L, 0L, 0L, 7L, 1L, 0L), exported.single().drop(1))
+        val tokens = query("SELECT token FROM syncJob ORDER BY kind") { it.getString(1) }
+        assertTrue(tokens.isNotEmpty())
+        for (batch in listOf(standard, native)) assertEquals(0, repo.insert(batch, id, markPostBackfillDebt = true).rr)
+        assertEquals(tokens, query("SELECT token FROM syncJob ORDER BY kind") { it.getString(1) })
+        assertEquals(exported.single().first(), query("SELECT rowid FROM rrInterval WHERE ts=100") { it.getLong(1) }.single())
+        assertEquals(2, query("SELECT count(*) FROM rrInterval") { it.getInt(1) }.single())
     }
 
     @Test fun receiptOnlySourceWitnessDoesNotOverrideKnownDeviceFamily() = runBlocking {

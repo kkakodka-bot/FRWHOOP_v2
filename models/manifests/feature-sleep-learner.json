@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "model_id": "feature-sleep-learner",
-  "purpose": "LightGBM feature baseline with duration-aware smoothing to be trained on participant-disjoint PSG",
+  "purpose": "Local multinomial softmax feature learner with duration smoothing; requires participant-disjoint PSG training",
   "publication_mode": "shadow",
   "canonical_outputs_allowed": false,
   "operational_status": "metadata_only",
@@ -9,14 +9,15 @@
     "path": "scoring-service/inference",
     "evidence": "alternative_compact_softmax_not_lightgbm_synthetic_functional",
     "activation_status": "blocked_pending_separate_rights_inputs_and_environment_qualification",
-    "implementation_sha256": "b4a73a764a99ed00386af4bb3dd6a99a3baf9ee72b76aaed54366c28d4c0e77e",
+    "implementation_sha256": "6fb1623116d9df9589d18b1719483908db35bcadec14e79e6977b73a21e9a5fb",
     "details": "scoring-service/inference/README.md"
   },
   "code": {
-    "repository": "https://github.com/microsoft/LightGBM",
-    "revision": "a0afb85496b1f483710d2a861330321eab794fff",
+    "repository": "https://github.com/kkakodka-bot/naraWhoop",
+    "revision": "5250912e5647108c548afa31b048ee4f4f6df133",
+    "path": "scoring-service/inference/physiology_inference/feature_sleep.py",
     "revision_checked_at": "2026-09-18",
-    "verification": "git ls-remote HEAD; wav2sleep also matches pinned specification revision"
+    "verification": "Local source unchanged from pinned original implementation; runtime adapter hash separately covers repairs"
   },
   "checkpoint": {
     "repository_or_file": null,
@@ -27,9 +28,9 @@
   "weights_required": true,
   "licenses": {
     "code": {
-      "identifier": "MIT",
+      "identifier": "PolyForm-Noncommercial-1.0.0",
       "status": "declared_upstream",
-      "evidence_url": "https://github.com/microsoft/LightGBM/blob/a0afb85496b1f483710d2a861330321eab794fff/LICENSE"
+      "evidence_url": "https://github.com/kkakodka-bot/naraWhoop/blob/5250912e5647108c548afa31b048ee4f4f6df133/LICENSE"
     },
     "weights": {
       "identifier": null,
@@ -44,25 +45,29 @@
   },
   "input_contract": {
     "channels": [
-      "HR",
-      "IBI",
-      "qualified_HRV",
+      "hr_mean",
+      "log_rmssd",
+      "sdnn",
       "motion",
-      "timing",
-      "missingness"
+      "time_sin",
+      "time_cos"
     ],
     "channel_semantics": "must be verified from original acquisition, never inferred from field names",
     "sample_rate_hz": null,
     "samples_per_epoch": null,
-    "epoch_seconds": null,
-    "mode": "to_be_selected_and_audited",
+    "epoch_seconds": 30,
+    "mode": "causal_or_retrospective",
     "missingness": "abstain across acquisition gaps; no synthetic continuity",
-    "units": "must be frozen with the actual adapter",
-    "orientation": "aligned axes required where accelerometry is consumed"
+    "units": "Frozen feature-softmax-duration-1 feature schema; qualified HRV metrics remain distinct",
+    "orientation": "aligned axes required where accelerometry is consumed",
+    "allowed_modes": [
+      "causal",
+      "retrospective"
+    ]
   },
   "preprocessing_sha256": "f74cf6619b37e3cb21d1e0a8b4ca66403b4f34de0237e1df576b276d0416f016",
   "quality_policy_sha256": "e64720d20239277443f6c6e837f0f29095037e910c2e14b7a48ef48a183600ad",
-  "adapter_sha256": "b4a73a764a99ed00386af4bb3dd6a99a3baf9ee72b76aaed54366c28d4c0e77e",
+  "adapter_sha256": "6fb1623116d9df9589d18b1719483908db35bcadec14e79e6977b73a21e9a5fb",
   "resource_limits": {
     "maximum_concurrency": 1,
     "threads": 1,
@@ -77,5 +82,6 @@
     "Checkpoint hashes and separate applicable weight/data rights must be verified.",
     "Synchronized target-device reference data and frozen promotion policy are absent.",
     "Actual target resource benchmark and locked-phone overnight soak are absent."
-  ]
+  ],
+  "preprocessing_source": "scoring-service/inference/physiology_inference/feature_sleep.py"
 }

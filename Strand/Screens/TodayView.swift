@@ -2619,7 +2619,7 @@ struct TodayView: View {
             // so a WHOOP figure (or an older night) is never silently shown as "last night" with no
             // provenance; fall back to the card's static description when there's no banked sleep.
             pinnedCardRow(icon: card.icon, tint: tint, title: card.title,
-                          subtitle: sleepSourceSubtitle(displayDay) ?? card.subtitle,
+                          subtitle: serverVitalSubtitle(card) ?? sleepSourceSubtitle(displayDay) ?? card.subtitle,
                           value: dashboardValue(card), route: .sleep)
         case .hydration:
             pinnedCardRow(icon: card.icon, tint: tint, title: card.title, subtitle: card.subtitle,
@@ -2665,6 +2665,7 @@ struct TodayView: View {
         case .hrv: metric = .hrv
         case .restingHr: metric = .restingHR
         case .respiratory: metric = .respiratory
+        case .sleep: metric = .sleep
         default: return nil
         }
         return ServerVitalSelection.resolve(metric, serverEnabled: serverScoringEnabled,
@@ -2674,7 +2675,9 @@ struct TodayView: View {
     private func serverVitalSubtitle(_ card: DashboardCard) -> String? {
         guard let selection = serverVitalSelection(card, localValue: nil), selection.fromServer else { return nil }
         let label = String(localized: "Server · \(selection.day) · \(selection.status ?? "unavailable")")
-        return selection.stale ? String(localized: "Stale · \(label)") : label
+        let source = card == .sleep ? [selection.deviceId, selection.algorithmVersion].compactMap { $0 }.joined(separator: " · ") : ""
+        let caption = source.isEmpty ? label : "\(label) · \(source)"
+        return selection.stale ? String(localized: "Stale · \(caption)") : caption
     }
 
     /// Resolve a dashboard card's CURRENT display value from the values Today already loads, with its unit
@@ -5204,12 +5207,9 @@ struct TodayView: View {
     }
 
     private func sleepValue(_ d: DailyMetric?) -> String {
-        if let server = ServerScoreDisplay.sleepTotalMin(day: selectedDayKey, overlay: serverOverlay) {
-            let h = Int(server) / 60, mm = Int(server) % 60
-            return String(localized: "\(h)h \(mm)m")
-        }
-        guard let m = d?.totalSleepMin else { return "—" }
-        let h = Int(m) / 60, mm = Int(m) % 60
+        guard let minutes = serverVitalSelection(.sleep, localValue: d?.totalSleepMin)?.value else { return "—" }
+        let total = Int(minutes.rounded())
+        let h = total / 60, mm = total % 60
         return String(localized: "\(h)h \(mm)m")
     }
 
@@ -5236,7 +5236,7 @@ struct TodayView: View {
     /// VALUE before #248 moved the Rest score there. Falls back to the efficiency read-out when no
     /// duration is banked, and to nil so the tile shows no caption line at all when neither exists.
     private func restCaption(_ d: DailyMetric?) -> String? {
-        if d?.totalSleepMin != nil { return sleepValue(d) }
+        if serverScoringEnabled || d?.totalSleepMin != nil { return sleepValue(d) }
         return d?.efficiency.map { String(format: String(localized: "%.0f%% eff"), locale: AppLanguage.activeLocale, $0) }
     }
 

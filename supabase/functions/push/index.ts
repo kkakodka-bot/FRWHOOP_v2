@@ -31,6 +31,7 @@ import { createSupabaseRest, restConfigFromEnv } from '../_shared/rest.ts';
 import { createS3 } from '../_shared/s3.ts';
 import { pushConfig, defaultReceiverStateId } from '../_shared/config.ts';
 import { IdentityError, resolvePushUser, createIngestTokenStore } from '../_shared/tokens.ts';
+import { createDeviceRegistrar } from '../_shared/devices.ts';
 
 const MAX_BODY_BYTES = 4 * 1024 * 1024 + 64 * 1024;
 
@@ -61,10 +62,7 @@ const pushUpsertRows = (table: string, rows: unknown[], opts: { onConflict: stri
   if (!rest.configured) return Promise.resolve([]);
   return rest.upsert(table, rows, opts);
 };
-const pushEnsureDevice = (row: Record<string, unknown>) => {
-  if (!rest.configured) return Promise.resolve([]);
-  return rest.upsert('devices', row, { onConflict: 'id' });
-};
+const pushEnsureDevice = createDeviceRegistrar(rest);
 const pushIngest = createPushIngest({
   walStore: pushWalStore!,
   archiveObject: (args: unknown) => pushArchive.archiveObject(args),

@@ -2883,4 +2883,14 @@
     <string name="physiology_hrv_percent">%1$s%%</string>
     <string name="server_vitals_local_history">Local and imported history. Open HRV or respiratory rate for the selected server result.</string>
     <string name="server_vitals_local_recovery_day">Local recovery inputs · %1$s</string>
+    <string name="server_scoring_title">Server scoring</string>
+    <string name="server_scoring_description">Account and source for server sleep, HRV and respiratory rate.</string>
+    <string name="server_scoring_use_server">Use server scores</string>
+    <string name="server_scoring_mode_detail">Turn off to use local and imported results.</string>
+    <string name="server_scoring_sign_in">Sign in</string>
+    <string name="server_scoring_signed_in">Signed in to server physiology.</string>
+    <string name="server_scoring_email">Email</string>
+    <string name="server_scoring_password">Password</string>
+    <string name="server_scoring_signing_in">Signing in…</string>
+    <string name="server_scoring_sign_out">Sign out</string>
 </resources>

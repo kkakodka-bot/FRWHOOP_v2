@@ -1,6 +1,7 @@
 package com.noop.analytics
 
 import com.noop.data.HrSample
+import com.noop.data.GravitySample
 import org.json.JSONArray
 import org.junit.Assert.*
 import org.junit.Test
@@ -54,5 +55,35 @@ class SleepEvidenceTest {
         assertEquals(1, result.sleepSessions.size)
         assertEquals("manual_boundary", result.sleepSessions.first().boundaryProvenance)
         assertEquals(59.0, result.daily.totalSleepMin!!, 1e-9)
+    }
+
+    @Test fun invalidHrAndGravityDoNotCreateEvidenceInEitherStager() {
+        val hr=(0L until 3600L).map { HrSample("test",it,listOf(0,-1,241)[(it%3).toInt()]) }
+        val gravity=(0L until 3600L).map { GravitySample("test",it,
+            listOf(0.0,Double.NaN,Double.POSITIVE_INFINITY,Double.MAX_VALUE)[(it%4).toInt()],0.0,0.0) }
+        for(v2 in listOf(false,true)) {
+            val stages=if(v2) SleepStagerV2.stageSession(0,3600,gravity,hr,emptyList(),emptyList())
+                else SleepStager.stageSession(0,3600,gravity,hr,emptyList(),emptyList())
+            assertEquals(3600L,stages.sumOf { it.end-it.start })
+            assertTrue(stages.all { it.state=="state_unknown" && it.evidenceCoverage==0.0 })
+        }
+    }
+
+    @Test fun invalidPlaceholdersCannotChangeSparseFeaturesOrCachedResults() {
+        val hr=(0L until 3600L step 5).map { HrSample("test",it,55) }
+        val gravity=hr.map { GravitySample("test",it.ts,0.0,0.0,1.0) }
+        val placeholders=(0L until 3600L).filter { it%5!=0L }
+        val dirtyHr=(hr+placeholders.map { HrSample("test",it,0) }).sortedBy { it.ts }
+        val dirtyGravity=(gravity+placeholders.map { GravitySample("test",it,
+            if(it%2==0L) Double.NaN else 0.0,0.0,0.0) }).sortedBy { it.ts }
+        for(v2 in listOf(false,true)) {
+            fun stage(h: List<HrSample>,g: List<GravitySample>)=if(v2)
+                SleepStagerV2.stageSession(0,3600,g,h,emptyList(),emptyList())
+                else SleepStager.stageSession(0,3600,g,h,emptyList(),emptyList())
+            val clean=stage(hr,gravity)
+            assertEquals(clean,stage(dirtyHr,dirtyGravity))
+            assertEquals(clean,stage(hr,gravity))
+            if(v2) assertTrue(clean.all { it.state=="state_unknown" && it.evidenceCoverage==0.2 })
+        }
     }
 }

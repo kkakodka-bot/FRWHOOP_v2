@@ -16,6 +16,26 @@ async function digest(bytes: Uint8Array): Promise<string> {
   return [...new Uint8Array(await crypto.subtle.digest('SHA-256', new Uint8Array(bytes)))].map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
+Deno.test('append gzip reconciliation uses the original stored-byte digest and rejects changed bytes', async () => {
+  const decoded = new TextEncoder().encode('{"fixture":"append archive"}\n');
+  const encoded = new Uint8Array(await new Response(new Blob([decoded]).stream().pipeThrough(new CompressionStream('gzip'))).arrayBuffer());
+  const changed = encoded.slice(); changed[changed.length - 1] ^= 1;
+  const rows = ['pending', 'uploaded', 'changed'].map(id => ({
+    id, object_key: id, status: id === 'pending' ? 'pending' : 'uploaded', user_id: USER,
+    sha256: '', object_class: 'raw', format: 'ndjson_gzip_noop_push_v1', compression: 'gzip',
+    compressed_bytes: encoded.length,
+  }));
+  for (const row of rows) row.sha256 = await digest(encoded);
+  const rest = await memRest(rows);
+  const report = await reconcileObjects({ rest: rest as any, verifyChecksums: true,
+    objectStore: { head: async () => ({ exists: true, contentLength: encoded.length }),
+      getObject: async (key: string) => ({ body: key === 'changed' ? changed : encoded }) } as any });
+  assertEquals(report.marked_ready, 2);
+  assertEquals(report.checksum_unverified, 0);
+  assertEquals(report.checksum_mismatch, 1);
+  assertEquals([...rest.manifests.values()].find((r: any) => r.id === 'changed')?.status, 'corrupt');
+});
+
 Deno.test('raw gzip checksum covers decoded NPB1 content and unsupported zstd stays unverified', async () => {
   const decoded = new TextEncoder().encode('NPB1 synthetic raw compression contract fixture');
   const encoded = new Uint8Array(await new Response(new Blob([decoded]).stream().pipeThrough(new CompressionStream('gzip'))).arrayBuffer());

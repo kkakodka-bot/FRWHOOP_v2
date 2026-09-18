@@ -2853,4 +2853,14 @@
     <string name="physiology_hrv_percent">%1$s%%</string>
     <string name="server_vitals_local_history">Historique local et importé. Ouvrez la VFC ou la fréquence respiratoire pour voir le résultat sélectionné du serveur.</string>
     <string name="server_vitals_local_recovery_day">Données locales de récupération · %1$s</string>
+    <string name="server_scoring_title">Calcul sur le serveur</string>
+    <string name="server_scoring_description">Compte et source du sommeil, de la VFC et de la fréquence respiratoire du serveur.</string>
+    <string name="server_scoring_use_server">Utiliser les résultats du serveur</string>
+    <string name="server_scoring_mode_detail">Désactivez pour utiliser les résultats locaux et importés.</string>
+    <string name="server_scoring_sign_in">Se connecter</string>
+    <string name="server_scoring_signed_in">Connecté aux données physiologiques du serveur.</string>
+    <string name="server_scoring_email">E-mail</string>
+    <string name="server_scoring_password">Mot de passe</string>
+    <string name="server_scoring_signing_in">Connexion…</string>
+    <string name="server_scoring_sign_out">Se déconnecter</string>
 </resources>

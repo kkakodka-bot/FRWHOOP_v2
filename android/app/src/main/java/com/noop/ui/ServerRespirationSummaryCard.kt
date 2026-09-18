@@ -32,7 +32,7 @@ fun ServerRespirationSummaryCard(vm: AppViewModel) {
     val signedIn by vm.serverScores.signedIn.collectAsStateWithLifecycle()
     val fetched by vm.serverScores.lastFetchedAtMs.collectAsStateWithLifecycle()
     val error by vm.serverScores.lastError.collectAsStateWithLifecycle()
-    val cache = remember(day, ready, signedIn, fetched) { if (ready && signedIn) vm.serverScores.overlay(day) else null }
+    val cache = fetched.let { if (ready && signedIn) vm.serverScores.overlay(day) else null }
     val feature = cache?.features?.get("respiration")
     val summary = remember(cache, day) { ServerRespirationSummary.project(cache, day) }
     LaunchedEffect(day, ready, signedIn) { vm.serverScores.refreshDay(day) }

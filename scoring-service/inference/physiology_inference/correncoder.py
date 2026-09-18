@@ -5,6 +5,8 @@ The released script uses MSE. This adapter does not label that training objectiv
 """
 
 from .contracts import Abstain, canonical_hash
+import math
+import re
 
 
 def model():
@@ -28,9 +30,22 @@ def train(segments, training_participants, development_participants, epochs=80, 
     if not 1 <= epochs <= 1000 or not 1 <= batch_size <= 256:
         raise Abstain("training_limits_invalid")
     seen = set(); lengths = set(); rates = set()
+    source_owners = {}; source_hashes = {}; hash_owners = {}
     for row in segments:
         if row.get("participant") not in set(training_participants) | set(development_participants):
             raise Abstain("unassigned_training_participant")
+        source = row.get("source_recording_id")
+        source_hash = row.get("source_sha256")
+        if not isinstance(source, str) or not source.strip() or not isinstance(source_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", source_hash):
+            raise Abstain("correncoder_original_acquisition_identity_missing")
+        participant = row["participant"]
+        if source_owners.get(source, participant) != participant or hash_owners.get(source_hash, participant) != participant:
+            raise Abstain("correncoder_original_acquisition_participant_overlap")
+        if source_hashes.get(source, source_hash) != source_hash:
+            raise Abstain("correncoder_original_acquisition_hash_conflict")
+        source_owners[source] = participant; source_hashes[source] = source_hash; hash_owners[source_hash] = participant
+        if not all(isinstance(row.get(k), (int, float)) and not isinstance(row[k], bool) and math.isfinite(row[k]) for k in ("start", "end")) or row["end"] <= row["start"]:
+            raise Abstain("correncoder_sample_timing_invalid")
         if row.get("reference_source") not in ("capnography", "airflow", "respiratory_effort") or row.get("rights_reviewed") is not True:
             raise Abstain("reference_or_dataset_rights_unverified")
         if row.get("preprocessing") != "upstream_presegmented_standardized" or row.get("observed_complete") is not True:
@@ -39,7 +54,7 @@ def train(segments, training_participants, development_participants, epochs=80, 
                 (row["end"] - row["start"]) * row["sample_rate_hz"] - len(row["ppg"])) > 1e-6:
             raise Abstain("correncoder_sample_timing_invalid")
         rates.add(row["sample_rate_hz"])
-        key = (row["participant"], row["recording"], row["start"])
+        key = (source_hash, row["start"], row["end"])
         if key in seen or len(row["ppg"]) != len(row["reference"]) or len(row["ppg"]) < 175:
             raise Abstain("correncoder_segment_invalid")
         seen.add(key); lengths.add(len(row["ppg"]))
@@ -73,6 +88,7 @@ def train(segments, training_participants, development_participants, epochs=80, 
     return candidate, {"experiment": "correncoder-released-mse-participant-split-1", "loss": "MSE", "seed": seed,
                        "training_participants": sorted(training_participants), "development_participants": sorted(development_participants),
                        "input_hash": canonical_hash(segments), "development_mse": history, "publication_mode": "shadow",
+                       "original_acquisition_owners": source_owners, "original_acquisition_sha256": source_hashes,
                        "target_reference_validation": "not_run", "released_checkpoint_claimed": False,
                        "sample_rate_hz": next(iter(rates)), "samples_per_segment": next(iter(lengths))}
 

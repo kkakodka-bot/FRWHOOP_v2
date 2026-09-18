@@ -5,7 +5,7 @@ data class ServerVitalSelection(
     val value: Double?, val fromServer: Boolean, val day: String, val status: String?, val stale: Boolean,
     val sourceFeature: String? = null, val deviceId: String? = null, val algorithmVersion: String? = null,
 ) {
-    enum class Metric { HRV, RESTING_HR, RESPIRATORY }
+    enum class Metric { HRV, RESTING_HR, RESPIRATORY, SLEEP }
 
     companion object {
         /** [overlay] must already be owner scoped and configuration/authentication qualified. */
@@ -18,6 +18,7 @@ data class ServerVitalSelection(
                 Metric.HRV -> overlay.daily?.hrvRmssdMs to "hrv"
                 Metric.RESTING_HR -> overlay.daily?.restingHrBpm?.toDouble() to "hrv"
                 Metric.RESPIRATORY -> overlay.daily?.respRateBpm to "respiration"
+                Metric.SLEEP -> overlay.daily?.sleepTotalMin to "sleep"
             }
             val feature = overlay.features[featureKey]
             val status = feature?.status ?: "unavailable"

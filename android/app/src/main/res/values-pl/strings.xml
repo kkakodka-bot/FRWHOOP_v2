@@ -2858,4 +2858,14 @@
     <string name="physiology_hrv_percent">%1$s%%</string>
     <string name="server_vitals_local_history">Historia lokalna i zaimportowana. Otwórz HRV lub częstość oddechów, aby zobaczyć wybrany wynik z serwera.</string>
     <string name="server_vitals_local_recovery_day">Lokalne dane regeneracji · %1$s</string>
+    <string name="server_scoring_title">Obliczenia serwera</string>
+    <string name="server_scoring_description">Konto i źródło danych serwera o śnie, HRV i częstości oddechów.</string>
+    <string name="server_scoring_use_server">Używaj wyników serwera</string>
+    <string name="server_scoring_mode_detail">Wyłącz, aby używać wyników lokalnych i importowanych.</string>
+    <string name="server_scoring_sign_in">Zaloguj się</string>
+    <string name="server_scoring_signed_in">Zalogowano do danych fizjologicznych serwera.</string>
+    <string name="server_scoring_email">E-mail</string>
+    <string name="server_scoring_password">Hasło</string>
+    <string name="server_scoring_signing_in">Logowanie…</string>
+    <string name="server_scoring_sign_out">Wyloguj się</string>
 </resources>

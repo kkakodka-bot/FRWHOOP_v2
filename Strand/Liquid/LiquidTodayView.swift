@@ -202,7 +202,9 @@ struct LiquidTodayView: View {
         let selection = ServerVitalSelection.resolve(metric, serverEnabled: true,
             selectedDay: selectedDayKey, overlay: serverOverlay, localValue: nil)
         let label = String(localized: "Server · \(selection.day) · \(selection.status ?? "unavailable")")
-        return selection.stale ? String(localized: "Stale · \(label)") : label
+        let source = metric == .sleep ? [selection.deviceId, selection.algorithmVersion].compactMap { $0 }.joined(separator: " · ") : ""
+        let caption = source.isEmpty ? label : "\(label) · \(source)"
+        return selection.stale ? String(localized: "Stale · \(caption)") : caption
     }
     /// The DailyMetric shown for the selected day — read from the cache resolved in load() (was an
     /// O(days) `.last(where:)` scan referenced ~23× per body pass; now O(1)).
@@ -1044,8 +1046,9 @@ struct LiquidTodayView: View {
             cardLink(.metricSourced(key: caloriesDetailKey, source: caloriesDetailSource), title: card.title, sub: card.subtitle,
                      value: intText(caloriesCount), tint: StrandPalette.metricAmber, frac: fracOver(caloriesCount, 800))
         case .sleep:
-            cardLink(.sleep, title: card.title, sub: card.subtitle,
-                     value: sleepText, tint: StrandPalette.restColor, frac: fracOver(displayDay?.totalSleepMin, 480))
+            cardLink(.sleep, title: card.title, sub: serverVitalCaption(.sleep) ?? card.subtitle,
+                     value: sleepText, tint: StrandPalette.restColor,
+                     frac: fracOver(serverVital(.sleep, local: displayDay?.totalSleepMin), 480))
         case .hydration:
             // #989: was hardcoded "–". `HydrationGoal.cardValueString` is unit-tested and byte-identical to
             // the Android twin, but classic TodayView was its only caller — so on the DEFAULT screen a
@@ -1972,8 +1975,9 @@ struct LiquidTodayView: View {
     private var stressText: String { stress.map { String(Int($0.rounded())) } ?? String(localized: "Calibrating") }
 
     private var sleepText: String {
-        guard let m = displayDay?.totalSleepMin else { return "–" }
-        return "\(Int(m) / 60)h \(Int(m) % 60)m"
+        guard let m = serverVital(.sleep, local: displayDay?.totalSleepMin) else { return "–" }
+        let total = Int(m.rounded())
+        return "\(total / 60)h \(total % 60)m"
     }
 
     private var stepsText: String {

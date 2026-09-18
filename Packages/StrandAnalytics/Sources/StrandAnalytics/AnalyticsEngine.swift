@@ -630,12 +630,10 @@ public enum AnalyticsEngine {
         // this SAME group (the seam below passes the same `gapBridgeMaxMin`), so #525 does not regress.
         let knownCandidates = matched.indices.filter { matched[$0].hasKnownState }
         let candidates = knownCandidates.isEmpty ? Array(matched.indices) : knownCandidates
-        var mainGroupIdx = (SleepStageTotals.mainNightGroupIndices(
+        let mainGroupIdx = useFullDaySleepOpportunities ? SleepOpportunityDetector.mainSleepGroupIndices(
+            matched, offsetSeconds: tzOffsetSeconds, habitualMidsleepSec: habitualMidsleepSec) : (SleepStageTotals.mainNightGroupIndices(
             candidates.map { SleepStageTotals.NightBlock(start: matched[$0].start, end: matched[$0].end) },
             offsetSec: tzOffsetSeconds, habitualMidsleepSec: habitualMidsleepSec) ?? []).map { candidates[$0] }
-        if useFullDaySleepOpportunities && mainGroupIdx.reduce(0, { total,index in
-            total+matched[index].stages.filter(SleepStageSemantics.isSleep).reduce(0) { $0+$1.end-$1.start }
-        }) < SleepOpportunityDetector.minimumMainSleepSeconds { mainGroupIdx = [] }
         // Grouping establishes an estimated opportunity, not sleep in its interruptions. Retain
         // observed wake/off-body epochs there; missing and sub-threshold candidate runs stay unknown.
         // This precedes server manual overrides, whose explicit bounds must never be extended.

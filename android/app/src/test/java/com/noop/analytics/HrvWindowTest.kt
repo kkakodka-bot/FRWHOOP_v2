@@ -11,7 +11,8 @@ internal fun hrvEvidence(start: Int = 0, count: Int = 300, pattern: List<Double>
     var time = start + offset
     val rows = mutableListOf<PhysiologyQuality.IntervalObservation>()
     for (i in 0 until count) {
-        val value = pattern[i % pattern.size]; val end = time + value / 1000
+        val value = if (mode == "boundary" && i == 0) 2000.0 else pattern[i % pattern.size]
+        val end = time + value / 1000
         var row = PhysiologyQuality.IntervalObservation(originalId = "i$i", deviceId = deviceId, deviceFirmware = firmware,
             source = if (mode == "source_switch" && i >= 150) "other" else "test", modality = if (mode == "sdnn") "sdnn" else "ecg_nn",
             eventTime = time, originalRRMs = value, startBeatId = if (mode == "legacy") null else "b$i",
@@ -46,6 +47,7 @@ class HrvWindowTest {
             assertEquals(id, c.getDouble("coverage"), r.observedTimeFraction, 1e-9)
             assertEquals(id, c.getDouble("gap"), r.maximumGapSeconds, 1e-9)
             if (c.has("rmssd")) assertEquals(id, c.getDouble("rmssd"), r.observedRMSSD!!, 1e-9) else assertNull(id, r.observedRMSSD)
+            if (c.has("sdnn")) assertEquals(id, c.getDouble("sdnn"), r.sdnn!!, 1e-9)
             if (c.has("corrected")) {
                 assertEquals(id, c.getDouble("corrected"), r.correctedRMSSD!!, 1e-9)
                 assertEquals(2, r.correctionEventCount); assertEquals(1 / 300.0, r.correctionFraction, 1e-12)

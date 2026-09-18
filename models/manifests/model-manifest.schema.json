@@ -15,6 +15,7 @@
     "licenses": {"type": "object", "required": ["code", "weights", "training_data"], "properties": {"code": {"$ref": "#/$defs/rights"}, "weights": {"$ref": "#/$defs/rights"}, "training_data": {"$ref": "#/$defs/rights"}}},
     "input_contract": {"type": "object", "required": ["channels", "sample_rate_hz", "samples_per_epoch", "mode", "missingness", "units"]},
     "preprocessing_sha256": {"$ref": "#/$defs/nullableHash"},
+    "preprocessing_source": {"type": "string", "minLength": 1, "description": "Repository-relative Python source path whose exact bytes are hashed by preprocessing_sha256."},
     "quality_policy_sha256": {"$ref": "#/$defs/nullableHash"},
     "adapter_sha256": {"$ref": "#/$defs/nullableHash"},
     "resource_limits": {"type": "object", "required": ["maximum_concurrency", "threads", "timeout_seconds", "maximum_rss_bytes", "numerical_tolerance"]},

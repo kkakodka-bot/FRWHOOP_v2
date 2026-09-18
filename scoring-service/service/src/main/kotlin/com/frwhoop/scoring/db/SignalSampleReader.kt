@@ -125,7 +125,7 @@ class SignalSampleReader(private val db: PostgresClient) : ScoreInputProvider {
         conn.prepareStatement("""
             with latest_days as (
               select distinct on(r.period_day) r.* from public.server_physiology_results r
-              join public.scoring_work_items q on q.user_id=r.user_id and q.device_id=r.device_id and q.day=r.period_day
+              join public.physiology_work_items q on q.user_id=r.user_id and q.device_id=r.device_id and q.day=r.period_day
               where r.user_id=? and r.device_id=? and r.algorithm_version=? and r.measurement_revision=q.measurement_revision
                 and r.period_day between to_timestamp(?)::date-1 and to_timestamp(?)::date+1
               order by r.period_day,r.input_revision desc

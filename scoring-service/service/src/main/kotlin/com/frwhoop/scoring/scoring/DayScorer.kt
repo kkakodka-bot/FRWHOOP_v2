@@ -6,7 +6,6 @@ import com.noop.analytics.DayResult
 import com.noop.analytics.HrvSeries
 import com.noop.analytics.PhysiologyQuality
 import com.noop.analytics.SleepStageSemantics
-import com.noop.analytics.SleepStageTotals
 import com.noop.analytics.RespirationEstimator
 import com.noop.protocol.DeviceFamily
 import com.frwhoop.scoring.signals.PhysiologyShadowRunner
@@ -23,8 +22,10 @@ class DayScorer(private val physiology: PhysiologyShadowRunner = PhysiologyShado
         // A retrospective method may inspect later evidence only within this acquisition snapshot.
         // A beat spanning the cutoff is omitted intact, never truncated into invented timing proof.
         val snapshot=inputs.copy(
-            hr=inputs.hr.filter { it.ts<=cutoff }, rr=inputs.rr.filter { it.ts<=cutoff },
-            resp=inputs.resp.filter { it.ts<=cutoff }, gravity=inputs.gravity.filter { it.ts<=cutoff },
+            hr=inputs.hr.filter { it.ts<=cutoff && com.noop.analytics.SleepSignalValidity.heartRate(it) },
+            rr=inputs.rr.filter { it.ts<=cutoff },
+            resp=inputs.resp.filter { it.ts<=cutoff },
+            gravity=inputs.gravity.filter { it.ts<=cutoff && com.noop.analytics.SleepSignalValidity.gravity(it) },
             steps=inputs.steps.filter { it.ts<=cutoff }, events=inputs.events.filter { it.ts<=cutoff },
             bandSleepState=inputs.bandSleepState.filter { it.first<=cutoff },
             hrvObservations=inputs.hrvObservations?.filter { row ->
@@ -109,14 +110,8 @@ class DayScorer(private val physiology: PhysiologyShadowRunner = PhysiologyShado
                 session.copy(stages=stages,efficiency=com.noop.analytics.SleepStager.efficiency(session.start,session.end,stages))
             })
         if(inputs.sleepOverrides.isNotEmpty()) {
-            val candidates=result.sleepSessions.indices.filter { result.sleepSessions[it].hasKnownState }
-                .ifEmpty { result.sleepSessions.indices.toList() }
-            val candidateGroup=SleepStageTotals.mainNightGroupIndices(candidates.map {
-                SleepStageTotals.NightBlock(result.sleepSessions[it].start,result.sleepSessions[it].end)
-            },inputs.tzOffsetSeconds).orEmpty().map { candidates[it] }.toSet()
-            val group=if(candidateGroup.sumOf { i -> result.sleepSessions[i].stages
-                .filter(SleepStageSemantics::isSleep).sumOf { it.end-it.start } } >=
-                com.noop.analytics.SleepOpportunityDetector.MINIMUM_MAIN_SLEEP_SECONDS) candidateGroup else emptySet()
+            val group=com.noop.analytics.SleepOpportunityDetector.mainSleepGroupIndices(
+                result.sleepSessions,inputs.tzOffsetSeconds).toSet()
             val episodes=result.sleepSessions.mapIndexed { index,s -> s.copy(
                 episodeType=if(!s.hasKnownState) "uncertain" else if(index in group) "main_sleep" else "nap") }
             val context=episodes.flatMap { PhysiologyQuality.contextFromSleep(it.stages,it.start,it.end,it.episodeType) }

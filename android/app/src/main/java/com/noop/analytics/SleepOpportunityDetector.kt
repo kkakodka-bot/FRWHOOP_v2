@@ -5,6 +5,16 @@ import com.noop.data.HrSample
 import com.noop.data.StepSample
 import kotlin.math.sqrt
 
+/** Shared engineering input domain; rejected raw samples remain in storage, never feature coverage. */
+object SleepSignalValidity {
+    fun heartRate(sample: HrSample): Boolean = sample.bpm in 25..240
+    fun gravity(sample: GravitySample): Boolean {
+        val magnitudeSquared = sample.x * sample.x + sample.y * sample.y + sample.z * sample.z
+        return sample.x.isFinite() && sample.y.isFinite() && sample.z.isFinite() &&
+            magnitudeSquared.isFinite() && magnitudeSquared > 1e-12
+    }
+}
+
 /** Full-day binary candidate detector. Engineering shadow policy, not calibrated sleep truth. */
 object SleepOpportunityDetector {
     const val VERSION = "full-day-binary-shadow-1"
@@ -13,6 +23,23 @@ object SleepOpportunityDetector {
                       val maximumRelativeHr: Double = 0.9, val maximumMeanOrientationChange: Double = 0.03)
     data class Result(val epochs: List<StageSegment>, val episodes: List<DetectedSleep>, val referenceHr: Double?)
 
+    /** Qualify complete groups before ranking so an ineligible nap cannot hide eligible main sleep. */
+    fun mainSleepGroupIndices(sessions: List<DetectedSleep>, offsetSeconds: Long,
+                              habitualMidsleepSec: Long? = null): List<Int> {
+        val candidates = sessions.indices.filter { sessions[it].hasKnownState }
+        val blocks = candidates.map { SleepStageTotals.NightBlock(sessions[it].start, sessions[it].end) }
+        val groups = SleepStageTotals.bridgedNightGroups(blocks, offsetSeconds).map { group ->
+            group.indices.map { candidates[it] }
+        }.filter { group ->
+            group.sumOf { i -> SleepStageSemantics.normalized(sessions[i].stages, sessions[i].start, sessions[i].end)
+                .filter(SleepStageSemantics::isSleep).sumOf { it.end - it.start } } >= MINIMUM_MAIN_SLEEP_SECONDS
+        }
+        val spans = groups.map { group -> SleepStageTotals.NightBlock(
+            group.minOf { sessions[it].start }, group.maxOf { sessions[it].end }) }
+        val winner = SleepStageTotals.mainNightIndex(spans, offsetSeconds, habitualMidsleepSec) ?: return emptyList()
+        return groups[winner]
+    }
+
     /** No clock-of-day gate. Missing HR/motion and ambiguous stillness remain unknown, not sleep. */
     fun detect(start: Long, end: Long, hr: List<HrSample>, gravity: List<GravitySample>,
                steps: List<StepSample> = emptyList(), context: List<SleepContextSpan> = emptyList(),
@@ -20,9 +47,8 @@ object SleepOpportunityDetector {
         require(end > start && end - start <= 76 * 3600 && policy.minimumSleepSeconds in 300..14400)
         require(policy.minimumFeatureBinCoverage in 0.5..1.0 && policy.maximumRelativeHr in 0.5..0.99 &&
             policy.maximumMeanOrientationChange in 0.001..0.2)
-        val h = hr.filter { it.ts in start until end && it.bpm in 25..240 }.distinctBy { it.ts }.sortedBy { it.ts }
-        val g = gravity.filter { it.ts in start until end && it.x.isFinite() && it.y.isFinite() && it.z.isFinite() &&
-            it.x * it.x + it.y * it.y + it.z * it.z > 1e-12 }.distinctBy { it.ts }.sortedBy { it.ts }
+        val h = hr.filter { it.ts in start until end && SleepSignalValidity.heartRate(it) }.distinctBy { it.ts }.sortedBy { it.ts }
+        val g = gravity.filter { it.ts in start until end && SleepSignalValidity.gravity(it) }.distinctBy { it.ts }.sortedBy { it.ts }
         // Per-minute medians prevent dense bursts from dominating the retrospective reference.
         val reference = h.groupBy { Math.floorDiv(it.ts,60) }.values.map { rows ->
             rows.map { it.bpm }.sorted().let { (it[(it.size-1)/2]+it[it.size/2])/2.0 }

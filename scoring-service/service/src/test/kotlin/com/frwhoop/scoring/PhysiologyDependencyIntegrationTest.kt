@@ -100,7 +100,7 @@ class PhysiologyDependencyIntegrationTest {
     @Test fun derivedOnlyRefreshKeepsHistoryAvailableAndDoesNotCascade() {
         val first=claim(sourceDay); publish(payload(first,windowStart)); assertTrue(queue.markDone(first,1))
         val later=claim(sourceDay.plusDays(20)); publish(payload(later)); assertTrue(queue.markDone(later,1))
-        val directRevision=number("select measurement_revision from scoring_work_items where user_id='$user' and day='$sourceDay'")
+        val directRevision=number("select measurement_revision from physiology_work_items where user_id='$user' and day='$sourceDay'")
         sql("select scoring_enqueue_dependency('$user','$device','$sourceDay')")
         assertEquals(1,available(sourceDay))
         val baselineOnly=claim(sourceDay,false)
@@ -109,7 +109,7 @@ class PhysiologyDependencyIntegrationTest {
         nextPayload.put("computed_at","2026-08-02T03:04:05Z")
         publish(nextPayload)
         assertEquals(later.inputRevision,revision(sourceDay.plusDays(20)))
-        assertEquals(directRevision,number("select measurement_revision from scoring_work_items where user_id='$user' and day='$sourceDay'"))
+        assertEquals(directRevision,number("select measurement_revision from physiology_work_items where user_id='$user' and day='$sourceDay'"))
         assertEquals(1,available(sourceDay))
     }
 
@@ -142,9 +142,9 @@ class PhysiologyDependencyIntegrationTest {
         sql("insert into devices(id,user_id) values('$otherUsersDevice','$otherUser')")
         queue.dirtyWorkItem(otherUser,otherUsersDevice,sourceDay.plusDays(7).toString())
         publish(payload(claim(sourceDay),windowStart))
-        assertEquals(1,number("select input_revision from scoring_work_items where user_id='$user' and device_id='$otherDevice'").toInt())
-        assertEquals(1,number("select input_revision from scoring_work_items where user_id='$otherUser'").toInt())
-        assertEquals(1,number("select count(*) from scoring_work_items where user_id='$user' and device_id='$device'").toInt())
+        assertEquals(1,number("select input_revision from physiology_work_items where user_id='$user' and device_id='$otherDevice'").toInt())
+        assertEquals(1,number("select input_revision from physiology_work_items where user_id='$otherUser'").toInt())
+        assertEquals(1,number("select count(*) from physiology_work_items where user_id='$user' and device_id='$device'").toInt())
         val today=db.withConnection { c -> c.createStatement().use { s -> s.executeQuery("select (clock_timestamp() at time zone 'UTC')::date").use { r -> r.next(); LocalDate.parse(r.getString(1)) } } }
         val yesterday=today.minusDays(1)
         val future=claim(today.plusDays(1))
@@ -234,7 +234,7 @@ class PhysiologyDependencyIntegrationTest {
                     }
                 } }
                 awaitAdvisoryWait(app)
-                assertEquals(0,number("select count(*) from scoring_work_items where user_id='$user' and day='$laterDay'").toInt())
+                assertEquals(0,number("select count(*) from physiology_work_items where user_id='$user' and day='$laterDay'").toInt())
                 c.commit(); creation.get(10,TimeUnit.SECONDS)
             }
             assertEquals(1,available(sourceDay))
@@ -268,7 +268,7 @@ class PhysiologyDependencyIntegrationTest {
 
     private fun claim(day: LocalDate,dirty: Boolean=true): ScoringWorkQueue.WorkItem {
         if(dirty) queue.dirtyWorkItem(user,device,day.toString())
-        sql("update scoring_work_items set next_attempt_at=clock_timestamp() where user_id='$user' and device_id='$device' and day='$day'")
+        sql("update physiology_work_items set next_attempt_at=clock_timestamp() where user_id='$user' and device_id='$device' and day='$day'")
         return queue.claimOne(user,device,day.toString())!!
     }
     private fun measurement(item: ScoringWorkQueue.WorkItem,start: Long)=JSONObject()
@@ -292,10 +292,10 @@ class PhysiologyDependencyIntegrationTest {
             p.setString(1,payload.toString()); p.execute()
         }
     }
-    private fun available(day: LocalDate)=number("select count(distinct r.period_day) from server_physiology_results r join scoring_work_items q "+
+    private fun available(day: LocalDate)=number("select count(distinct r.period_day) from server_physiology_results r join physiology_work_items q "+
         "on q.user_id=r.user_id and q.device_id=r.device_id and q.day=r.period_day "+
         "where r.user_id='$user' and r.device_id='$device' and r.period_day='$day' and r.measurement_revision=q.measurement_revision").toInt()
-    private fun revision(day: LocalDate)=number("select input_revision from scoring_work_items where user_id='$user' and device_id='$device' and day='$day'")
+    private fun revision(day: LocalDate)=number("select input_revision from physiology_work_items where user_id='$user' and device_id='$device' and day='$day'")
     private fun sql(query: String) { db.withConnection { c -> c.createStatement().use { it.execute(query) } } }
     private fun number(query: String)=db.withConnection { c -> c.createStatement().use { s -> s.executeQuery(query).use { r -> r.next(); r.getLong(1) } } }
     private fun expectStale(operation: () -> Unit) {

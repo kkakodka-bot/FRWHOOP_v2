@@ -78,4 +78,21 @@ class ServerVitalSelectionTest {
             }
         }
     }
+    @Test fun sleepUsesSelectedDaySourceAndPreservesZeroWithoutLocalFallback() {
+        for (minutes in listOf(0.0, 480.0)) {
+            val overlay = cache(daily = ServerScoreDailyCache(sleepTotalMin = minutes), statuses = mapOf("sleep" to "stale"))
+            val selected = ServerVitalSelection.resolve(ServerVitalSelection.Metric.SLEEP, true, day, overlay, 120.0)
+            assertEquals(minutes, selected.value!!, 0.0); assertEquals("sleep", selected.sourceFeature)
+            assertTrue(selected.stale); assertTrue(selected.fromServer)
+            assertEquals(overlay.features["sleep"]?.deviceId, selected.deviceId)
+            assertEquals(overlay.features["sleep"]?.algorithmVersion, selected.algorithmVersion)
+        }
+        val absent = cache(daily = ServerScoreDailyCache(), statuses = mapOf("sleep" to "available"))
+        assertNull(ServerVitalSelection.resolve(ServerVitalSelection.Metric.SLEEP, true, day, absent, 120.0).value)
+        val unknown = cache(daily = ServerScoreDailyCache(sleepTotalMin = 480.0), statuses = mapOf("sleep" to "unavailable"))
+        assertNull(ServerVitalSelection.resolve(ServerVitalSelection.Metric.SLEEP, true, day, unknown, 120.0).value)
+        val local = ServerVitalSelection.resolve(ServerVitalSelection.Metric.SLEEP, false, day, unknown, 120.0)
+        assertEquals(120.0, local.value!!, 0.0); assertFalse(local.fromServer)
+    }
+
 }

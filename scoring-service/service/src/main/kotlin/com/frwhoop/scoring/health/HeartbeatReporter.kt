@@ -4,7 +4,7 @@ import com.frwhoop.scoring.db.PostgresClient
 import org.slf4j.LoggerFactory
 import java.util.UUID
 
-/** Records scorer liveness in the singleton scoring_service_heartbeats row. */
+/** Records scorer liveness in the singleton physiology_service_heartbeats row. */
 class HeartbeatReporter(
     private val db: PostgresClient,
     private val version: String,
@@ -15,7 +15,7 @@ class HeartbeatReporter(
         db.withConnection { conn ->
             conn.prepareStatement(
                 """
-                update public.scoring_service_heartbeats
+                update public.physiology_service_heartbeats
                 set last_poll_at = now(), version = ?, last_error = null
                 where id = 1
                 """.trimIndent(),
@@ -30,7 +30,7 @@ class HeartbeatReporter(
         db.withConnection { conn ->
             conn.prepareStatement(
                 """
-                update public.scoring_service_heartbeats
+                update public.physiology_service_heartbeats
                 set last_score_at = now(), version = ?, last_error = null
                 where id = 1
                 """.trimIndent(),
@@ -46,7 +46,7 @@ class HeartbeatReporter(
         db.withConnection { conn ->
             conn.prepareStatement(
                 """
-                update public.scoring_service_heartbeats
+                update public.physiology_service_heartbeats
                 set last_error = ?
                 where id = 1
                 """.trimIndent(),

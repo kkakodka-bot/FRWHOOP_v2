@@ -219,7 +219,7 @@ public enum HrvWindow {
             algorithmVersion: algorithmVersion, qualityVersion: policy.version, metric: "rmssd", unit: "ms",
             observedRMSSD: reason == nil ? rms(observedDifferences) : nil,
             correctedRMSSD: reason == nil && hasCorrection && correctedDifferences.count >= policy.minimumPairs ? rms(correctedDifferences) : nil,
-            sdnn: reason == nil ? HRVAnalyzer.sdnnRaw(rows.filter(originalAccepted).map(\.originalRRMs)) : nil,
+            sdnn: reason == nil ? HRVAnalyzer.sdnnRaw(rows.filter { originalAccepted($0) && inside($0) }.map(\.originalRRMs)) : nil,
             researchObservedRMSSD: users.count == 1 && devices.count == 1 && sources.count == 1 && modalities.count == 1 &&
                 ["ppg_ibi", "ecg_nn"].contains(rows.first?.modality ?? "") && !conflict ? rms(observedDifferences) : nil,
             originalIds: rows.map(\.originalId), pairMask: pairMask, correctedPairMask: correctedPairMask,

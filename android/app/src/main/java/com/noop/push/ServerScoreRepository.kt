@@ -24,6 +24,20 @@ class ServerScoreRepository(
     private fun currentOwnerId() = CloudAuthClient.storedSession(appContext)?.userId?.lowercase()
     private var pollJob: Job? = null
 
+    private val _enabled = MutableStateFlow(ServerScoringSettings.isEnabled(appContext))
+    val enabled: StateFlow<Boolean> = _enabled.asStateFlow()
+
+    fun setEnabled(enabled: Boolean) {
+        ServerScoringSettings.setEnabled(appContext, enabled)
+        _enabled.value = enabled
+        if (enabled) startPolling(pollingDay ?: java.time.LocalDate.now().toString()) else stopPolling()
+    }
+
+    suspend fun refreshVisibleDays() {
+        if (visibleDays.isEmpty()) visibleDays.add(pollingDay ?: java.time.LocalDate.now().toString())
+        for (day in visibleDays.sorted()) refreshDay(day)
+    }
+
     private val _lastError = MutableStateFlow<String?>(null)
     val lastError: StateFlow<String?> = _lastError.asStateFlow()
     private val _sleepEditMessage = MutableStateFlow<String?>(null)

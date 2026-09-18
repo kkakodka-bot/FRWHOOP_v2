@@ -574,11 +574,13 @@ class WhoopRepository(
         })
         val rrRows = assignRrSeq(deviceId, streams.rr)
         val rrIds = if (rrRows.isEmpty()) emptyList() else dao.insertRr(rrRows)
+        var rrSourcesPromoted = 0
         for ((index, row) in rrRows.withIndex()) {
             if (rrIds[index] == -1L && (row.srcChannel == RrSourceChannel.WHOOP5_HISTORICAL.code ||
                     row.srcChannel == RrSourceChannel.WHOOP5_STANDARD.code)) {
-                // Counts stay separate; the canonical observation owns this key's order and provenance.
-                dao.promoteWhoop5RrSource(row.deviceId, row.ts, row.rrMs, row.seq, row.ord!!, row.srcChannel)
+                // Preserve natural beat identity and insertion counts. A new rowid re-exports the
+                // changed provenance, and the separate mutation count creates durable scoring debt.
+                rrSourcesPromoted += dao.promoteWhoop5RrSource(row.deviceId, row.ts, row.rrMs, row.seq, row.ord!!, row.srcChannel)
             }
         }
         val evIds = if (streams.events.isEmpty()) emptyList() else
@@ -692,7 +694,8 @@ class WhoopRepository(
         // The debt rows are in THIS Room transaction with the raw rows. A process death can therefore
         // expose either both or neither; it can never leave an ACKed productive chunk with no rescore debt.
         // Battery-only chunks do not affect scoring and deliberately create no post-offload work.
-        val productiveForScoring = shouldMarkPostBackfillDebt(counts, sleepStateIds.countInserted()) || packetIds.countInserted() > 0
+        val productiveForScoring = shouldMarkPostBackfillDebt(counts, sleepStateIds.countInserted()) ||
+            packetIds.countInserted() > 0 || rrSourcesPromoted > 0
         if (markPostBackfillDebt && productiveForScoring) {
             val now = System.currentTimeMillis() / 1000L
             SyncDrainPolicy.stageOrder.forEach { kind ->

@@ -3,7 +3,7 @@ import Foundation
 /// Chooses one explicit mode for a Today vital. A missing server value never borrows local history.
 /// The caller supplies an owner-scoped overlay only after configuration and authentication checks.
 public struct ServerVitalSelection: Equatable {
-    public enum Metric: CaseIterable { case hrv, restingHR, respiratory }
+    public enum Metric: CaseIterable { case hrv, restingHR, respiratory, sleep }
     public let value: Double?
     public let fromServer: Bool
     public let day: String
@@ -29,6 +29,7 @@ public struct ServerVitalSelection: Equatable {
         case .hrv: value = overlay.daily?.hrvRmssdMs; featureKey = "hrv"
         case .restingHR: value = overlay.daily?.restingHrBpm.map(Double.init); featureKey = "hrv"
         case .respiratory: value = overlay.daily?.respRateBpm; featureKey = "respiration"
+        case .sleep: value = overlay.daily?.sleepTotalMin; featureKey = "sleep"
         }
         let feature = overlay.features[featureKey]
         let status = feature?.status ?? "unavailable"

@@ -139,6 +139,9 @@ public enum RespirationEstimator {
         let denom = acf[lag - 1] - 2 * acf[lag] + acf[lag + 1]
         let shift = abs(denom) > 1e-12 ? min(0.5, max(-0.5, 0.5 * (acf[lag - 1] - acf[lag + 1]) / denom)) : 0
         acfRate = 60 * rate / (Double(lag) + shift); acfStrength = acf[lag]
+        guard acfRate!.isFinite, acfRate! >= policy.minimumRate, acfRate! <= maximumRate else {
+            return result("out_of_supported_range")
+        }
         let harmonic = [Double(peak) / 2, Double(peak) * 2].contains { bin in
             let k = Int(bin.rounded())
             return (firstBin...highestBin).contains(k) && abs(k - peak) > 2 && power[k] >= power[peak] * policy.harmonicPowerRatio
@@ -147,7 +150,11 @@ public enum RespirationEstimator {
         guard abs(acfRate! - spectralRate!) <= policy.maximumDisagreement else { return result("spectral_autocorrelation_disagreement") }
         cycles = duration * coverage * acfRate! / 60
         guard cycles! >= policy.minimumCycles else { return result("insufficient_cycles") }
-        return result(nil, (spectralRate! + acfRate!) / 2)
+        let estimate = (spectralRate! + acfRate!) / 2
+        guard estimate.isFinite, estimate >= policy.minimumRate, estimate <= maximumRate else {
+            return result("out_of_supported_range")
+        }
+        return result(nil, estimate)
     }
 
     /// Resampling is restricted to adjacent verified original spans. Coarse packet time is ineligible.
@@ -242,13 +249,14 @@ public enum RespirationEstimator {
     /// Overlapping strides contribute duration once; sleep and awake-rest summaries remain separate.
     public static func summarize(_ results: [Result], start: Double, end: Double, context: String) -> Summary {
         precondition(end > start && ["qualified_sleep", "qualified_awake_rest"].contains(context))
-        let accepted = results.filter { $0.reason == nil && $0.breathsPerMinute != nil && $0.start >= start && $0.end <= end }
+        let inPeriod = results.filter { $0.start >= start && $0.end <= end }
+        let accepted = inPeriod.filter { $0.reason == nil && $0.breathsPerMinute != nil }
         let values = accepted.compactMap(\.breathsPerMinute).sorted()
         let spans = accepted.flatMap(\.acceptedSpans)
         let seconds = PhysiologyQuality.union(spans, start: start, end: end).reduce(0.0) { $0 + $1.end - $1.start }
         let median = values.isEmpty ? nil : (values[(values.count - 1) / 2] + values[values.count / 2]) / 2
         return Summary(median: median, mean: values.isEmpty ? nil : values.reduce(0, +) / Double(values.count),
             acceptedSeconds: seconds, coverage: seconds / (end - start), acceptedWindows: accepted.count,
-            totalWindows: results.count, context: context, distributionBpm: values)
+            totalWindows: inPeriod.count, context: context, distributionBpm: values)
     }
 }

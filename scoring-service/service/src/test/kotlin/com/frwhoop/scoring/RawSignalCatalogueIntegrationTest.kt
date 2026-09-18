@@ -49,18 +49,18 @@ class RawSignalCatalogueIntegrationTest {
     @Test fun repeatedActualHashAndDecodeDoesNotContinuouslyRedirtyTheQueue() {
         var fetches = 0
         val catalogue = catalogue { fetches++; encoded }
-        assertEquals(0L, number("select count(*) from scoring_work_items where user_id='$user'"))
+        assertEquals(0L, number("select count(*) from physiology_work_items where user_id='$user'"))
         val first = catalogue.discover(user, device, start, start + 60).single()
         val decoded = catalogue.verify(first)
         assertEquals(listOf(-32768, 0, 32767), decoded.records.single().columns)
         assertFalse(decoded.channelSemanticsVerified)
-        assertEquals(2L, number("select count(*) from scoring_work_items where user_id='$user'"))
-        val revisions = string("select jsonb_object_agg(day,input_revision)::text from scoring_work_items where user_id='$user'")
+        assertEquals(2L, number("select count(*) from physiology_work_items where user_id='$user'"))
+        val revisions = string("select jsonb_object_agg(day,input_revision)::text from physiology_work_items where user_id='$user'")
         val timestamps = string("select jsonb_build_array(verified_at,decode_verified_at)::text from object_manifests where id='$objectId'")
         val second = catalogue.discover(user, device, start, start + 60).single()
         assertEquals(decoded.digest, catalogue.verify(second).digest)
         assertEquals(2, fetches)
-        assertEquals(revisions, string("select jsonb_object_agg(day,input_revision)::text from scoring_work_items where user_id='$user'"))
+        assertEquals(revisions, string("select jsonb_object_agg(day,input_revision)::text from physiology_work_items where user_id='$user'"))
         assertEquals(timestamps, string("select jsonb_build_array(verified_at,decode_verified_at)::text from object_manifests where id='$objectId'"))
         assertEquals(VerifiedRawObjectReader.VERSION, string("select decoder_version from object_manifests where id='$objectId'"))
     }
@@ -76,7 +76,7 @@ class RawSignalCatalogueIntegrationTest {
         catch (failure: IllegalArgumentException) { assertEquals("raw_digest_mismatch", failure.message) }
         assertEquals("client_claimed", string("select sha256_source from object_manifests where id='$objectId'"))
         assertEquals(0L, number("select count(*) from object_manifests where id='$objectId' and decode_verified_at is not null"))
-        assertEquals(0L, number("select count(*) from scoring_work_items where user_id='$user'"))
+        assertEquals(0L, number("select count(*) from physiology_work_items where user_id='$user'"))
     }
 
     @Test fun decodingContractChangedDuringFetchCannotAcquireVerificationProof() {
@@ -92,7 +92,7 @@ class RawSignalCatalogueIntegrationTest {
             assertEquals(0L, number("select count(*) from object_manifests where id='$objectId' and decode_verified_at is not null"))
             sql("update object_manifests set $column=$restored where id='$objectId'")
         }
-        assertEquals(0L, number("select count(*) from scoring_work_items where user_id='$user'"))
+        assertEquals(0L, number("select count(*) from physiology_work_items where user_id='$user'"))
     }
 
     @Test fun decodingContractChangesRevokeOldProofAndDirtyItsConsumers() {
@@ -100,12 +100,12 @@ class RawSignalCatalogueIntegrationTest {
         for ((column, changed, restored) in listOf(Triple("compression", "'zstd'", "'gzip'"),
                 Triple("format", "'unsupported_format'", "'bin_gzip_noop_push_v1'"), Triple("sample_count", "2", "1"))) {
             catalogue.verify(catalogue.discover(user, device, start, start + 60).single())
-            val revision = number("select input_revision from scoring_work_items where user_id='$user' and day='2026-08-01'")
+            val revision = number("select input_revision from physiology_work_items where user_id='$user' and day='2026-08-01'")
             sql("update object_manifests set $column=$changed where id='$objectId'")
             assertEquals("client_claimed", string("select sha256_source from object_manifests where id='$objectId'"))
             assertEquals(0L, number("select count(*) from object_manifests where id='$objectId' and " +
                 "(verified_at is not null or decode_verified_at is not null or decoder_version is not null)"))
-            assertEquals(revision + 1, number("select input_revision from scoring_work_items where user_id='$user' and day='2026-08-01'"))
+            assertEquals(revision + 1, number("select input_revision from physiology_work_items where user_id='$user' and day='2026-08-01'"))
             sql("update object_manifests set $column=$restored where id='$objectId'")
         }
     }

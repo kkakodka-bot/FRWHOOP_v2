@@ -9,11 +9,13 @@ import com.noop.analytics.UserProfile
 import com.noop.data.GravitySample
 import com.noop.data.HrSample
 import com.noop.protocol.DeviceFamily
+import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Test
 import java.time.Instant
 import java.time.ZoneOffset
 import java.util.UUID
+import java.io.File
 import kotlin.math.PI
 import kotlin.math.sin
 
@@ -60,9 +62,39 @@ class DayScorerPhysiologyIntegrationTest {
         val summary=payload.getJSONObject("daily").getJSONObject("respiration_summary")
         assertTrue(summary.getDouble("coverage")>0.9)
         assertEquals("resp-spectrum-acf-1",summary.getString("method_version"))
+        val main=score.result.sleepSessions.filter { it.episodeType=="main_sleep" }
+        val lo=main.minOf { it.start }; val hi=main.maxOf { it.end }
+        assertEquals(score.physiologyShadow!!.windows.count { it.start>=lo && it.end<=hi },summary.getInt("total_windows"))
         assertTrue(payload.getBoolean("period_closed"))
         assertEquals("provisional",payload.getString("publication_status"))
         assertFalse(payload.getJSONObject("shadow").getBoolean("canonical_outputs_allowed"))
+    }
+
+    @Test fun actualScorerSerializationMatchesBothClientFixtures() {
+        val score=DayScorer().score(input(true),CanonicalScorePayload.ALGORITHM_VERSION,"42",Instant.parse("2026-09-18T00:00:00Z"))
+        val payload=CanonicalScorePayload.build(score)
+        // The read RPC preserves these generated fields and attaches per-feature selection
+        // metadata. This fixture is a synthetic read envelope, not an activation/promotion.
+        val features=JSONObject()
+        for (feature in listOf("sleep","hrv","respiration")) features.put(feature,JSONObject()
+            .put("status","available").put("device_id",score.deviceId)
+            .put("algorithm_version",score.algorithmVersion).put("input_revision",42).put("required_revision",42))
+        val envelope=JSONObject().put("server_scoring",JSONObject()
+            .put("schema_version",2).put("user_id",score.userId.toString()).put("day",score.day)
+            .put("algorithm_version",score.algorithmVersion).put("computed_at",score.computedAt.toString())
+            .put("stale",false).put("features",features).put("daily",payload.getJSONObject("daily"))
+            .put("nights",payload.getJSONArray("nights")).put("measurements",payload.getJSONArray("measurements")))
+        val repository=generateSequence(File(System.getProperty("user.dir"))) { it.parentFile }
+            .first { File(it,"android/app/src/test/resources").isDirectory }
+        val files=listOf(File(repository,"android/app/src/test/resources/server_scored_sleep_snapshot.json"),
+            File(repository,"Packages/WhoopStore/Tests/WhoopStoreTests/Resources/server_scored_sleep_snapshot.json"))
+        if (System.getenv("UPDATE_SCORED_CLIENT_FIXTURE")=="1") {
+            for(file in files) file.writeText(CanonicalScorePayload.encode(envelope)+"\n")
+        }
+        for(file in files) assertEquals(file.path,CanonicalScorePayload.encode(envelope),file.readText().trim())
+        assertEquals(files[0].readText(),files[1].readText())
+        assertEquals("main_sleep",envelope.getJSONObject("server_scoring").getJSONObject("daily")
+            .getJSONObject("respiration_summary").getString("context"))
     }
 
     @Test fun preservedBeatIdentitiesWithoutClockProofCannotPublishRespirationOrQualifiedHrv() {

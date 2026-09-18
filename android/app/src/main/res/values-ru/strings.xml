@@ -2737,4 +2737,14 @@
     <string name="physiology_hrv_percent">%1$s%%</string>
     <string name="server_vitals_local_history">Локальная и импортированная история. Откройте ВСР или частоту дыхания, чтобы увидеть выбранный результат сервера.</string>
     <string name="server_vitals_local_recovery_day">Локальные данные восстановления · %1$s</string>
+    <string name="server_scoring_title">Расчёт на сервере</string>
+    <string name="server_scoring_description">Аккаунт и источник серверных данных о сне, ВСР и частоте дыхания.</string>
+    <string name="server_scoring_use_server">Использовать результаты сервера</string>
+    <string name="server_scoring_mode_detail">Выключите для использования локальных и импортированных результатов.</string>
+    <string name="server_scoring_sign_in">Войти</string>
+    <string name="server_scoring_signed_in">Вход в серверные физиологические данные выполнен.</string>
+    <string name="server_scoring_email">Электронная почта</string>
+    <string name="server_scoring_password">Пароль</string>
+    <string name="server_scoring_signing_in">Вход…</string>
+    <string name="server_scoring_sign_out">Выйти</string>
 </resources>

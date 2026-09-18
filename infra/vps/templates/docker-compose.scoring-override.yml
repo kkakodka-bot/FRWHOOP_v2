@@ -1,8 +1,8 @@
 # Merge into /opt/frwhoop/supabase-docker/docker/docker-compose.yml on the VPS.
 # Requires secrets: DATABASE_URL (pooler), INGEST_SECRET, SUPABASE_URL, SERVICE_ROLE_KEY, WORKER_SECRET.
 services:
-  scoring:
-    image: frwhoop/scoring-service:latest
+  scoring-shadow:
+    image: frwhoop/scoring-service:physiology-v2
     build:
       context: ../../..
       dockerfile: scoring-service/Dockerfile
@@ -19,7 +19,7 @@ services:
       SUPABASE_SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY}
       WORKER_SECRET: ${WORKER_SECRET}
       SCORING_POLL_SECONDS: ${SCORING_POLL_SECONDS:-8}
-      # v2 writes shadow snapshots; per-feature defaults stay on the preserved baseline.
+      # Separate from the retained scoring service; it must continue baseline computation.
       SCORING_ALGORITHM_VERSION: frwhoop-physiology-2
       B2_BUCKET: ${B2_BUCKET_NAME:-FRWHOOP}
       DERIVED_RETENTION_DAYS: ${DERIVED_RETENTION_DAYS:-90}

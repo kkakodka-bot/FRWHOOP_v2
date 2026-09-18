@@ -165,7 +165,7 @@ object HrvWindow {
         return Result(start, start + SECONDS, users.singleOrNull(), devices.singleOrNull(), firmware.singleOrNull(), sources.singleOrNull(), modalities.singleOrNull(),
             inputRevision, computationMode, ALGORITHM_VERSION, policy.version, "rmssd", "ms", if (reason == null) rms(observedDifferences) else null,
             if (reason == null && affected > 0 && correctedDifferences.size >= policy.minimumPairs) rms(correctedDifferences) else null,
-            if (reason == null) HrvAnalyzer.sdnnRaw(rows.filter(::originalAccepted).map { it.originalRRMs }) else null,
+            if (reason == null) HrvAnalyzer.sdnnRaw(rows.filter { originalAccepted(it) && inside(it) }.map { it.originalRRMs }) else null,
             if (users.size == 1 && devices.size == 1 && sources.size == 1 && modalities.size == 1 &&
                 rows.firstOrNull()?.modality in listOf("ppg_ibi", "ecg_nn") && !conflict) rms(observedDifferences) else null,
             rows.map { it.originalId }, pairMask, correctedPairMask, pairReasons, duration / 300, spans, acceptedDuration, validFraction,

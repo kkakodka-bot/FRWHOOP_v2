@@ -215,6 +215,7 @@ val kernelTestFiles = listOf(
 /** Test resources the scoped tests load from the classpath. */
 val kernelTestResourceFiles = listOf(
     "sleep_evidence_oracle.json",
+    "sleep_group_selection_oracle.json",
     "hrv_window_oracle.json",
     "respiration_oracle.json",
     "local_day_windows_oracle.json",

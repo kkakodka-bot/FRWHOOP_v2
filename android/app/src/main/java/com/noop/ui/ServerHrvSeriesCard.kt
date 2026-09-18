@@ -41,7 +41,7 @@ internal fun ServerHrvSeriesCard(vm: AppViewModel) {
     val signedIn by vm.serverScores.signedIn.collectAsStateWithLifecycle()
     val fetched by vm.serverScores.lastFetchedAtMs.collectAsStateWithLifecycle()
     val error by vm.serverScores.lastError.collectAsStateWithLifecycle()
-    val cache = remember(day, ready, signedIn, fetched) { if (ready && signedIn) vm.serverScores.overlay(day) else null }
+    val cache = fetched.let { if (ready && signedIn) vm.serverScores.overlay(day) else null }
     val series = remember(cache, day) { ServerHrvSeries.from(cache, day) }
     val scope = rememberCoroutineScope()
     LaunchedEffect(day, ready, signedIn) { if (ready && signedIn) vm.serverScores.refreshDay(day) }

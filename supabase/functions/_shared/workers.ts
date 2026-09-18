@@ -10,8 +10,9 @@ import { allUserPrefixes, isUuid } from './keys.ts';
 
 const STALE_PENDING_MS = 60 * 60 * 1000;
 
-/** Raw NPB1 digests cover decoded content; derived archive digests cover stored bytes. */
+/** NPB1 digests cover decoded content; append and derived digests cover stored bytes. */
 async function checksumBytes(row: any, bytes: Uint8Array): Promise<Uint8Array> {
+  if (row.object_class === 'raw' && row.format === 'ndjson_gzip_noop_push_v1' && row.compression === 'gzip') return bytes;
   const rawFormats = ['bin_gzip_noop_push_v1', 'bin_zstd_noop_push_v1', 'protobuf_zstd_noop_push_v1'];
   if (rawFormats.includes(row.format)) {
     // zstd decoding belongs to the bounded JVM verifier, never hash its compressed bytes as raw content.

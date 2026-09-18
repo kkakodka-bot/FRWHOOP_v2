@@ -75,7 +75,7 @@ class RrPacketProvenanceIntegrationTest {
 
     private fun sql(statement: String) = db.withConnection { c -> c.createStatement().use { it.execute(statement) } }
     private fun revision(): Long = db.withConnection { c -> c.createStatement().use { s ->
-        s.executeQuery("select coalesce(max(input_revision),0) from scoring_work_items where user_id='$user' and day='$day'")
+        s.executeQuery("select coalesce(max(input_revision),0) from physiology_work_items where user_id='$user' and day='$day'")
             .use { it.next(); it.getLong(1) }
     } }
 }

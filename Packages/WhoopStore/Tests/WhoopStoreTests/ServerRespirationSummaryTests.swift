@@ -2,6 +2,31 @@ import XCTest
 @testable import WhoopStore
 
 final class ServerRespirationSummaryTests: XCTestCase {
+    func testActualScorerSnapshotSurvivesNativeReadbackAndSQLite() async throws {
+        let url = try XCTUnwrap(Bundle.module.url(forResource: "server_scored_sleep_snapshot", withExtension: "json"))
+        let bytes = try Data(contentsOf: url)
+        let owner = "11111111-1111-1111-1111-111111111111"
+        let day = "2026-09-17"
+        let cache = try ServerScoreCacheCodec.parseSnapshot(bytes, day: day, ownerId: owner)
+        let store = try await WhoopStore.inMemory()
+        let persistence = ServerScoreCacheStore(db: store.registryWriter)
+        try persistence.upsert(cache)
+        let loaded = try XCTUnwrap(persistence.load(ownerId: owner, day: day))
+        let summary = try XCTUnwrap(ServerRespirationSummary.project(loaded, day: day))
+        XCTAssertEqual(try XCTUnwrap(summary.breathsPerMinute), 12, accuracy: 0.1)
+        XCTAssertEqual(summary.context, "main_sleep")
+        XCTAssertEqual(summary.method, "resp-spectrum-acf-1")
+        XCTAssertGreaterThan(try XCTUnwrap(summary.coverage), 0.9)
+        XCTAssertEqual(summary.acceptedWindows, summary.totalWindows)
+        XCTAssertNil(summary.reason)
+        XCTAssertEqual(loaded.nights.count, 2)
+        XCTAssertTrue(loaded.nights.flatMap(\.stages).contains { $0.state == "sleep_unstaged" })
+        XCTAssertEqual(loaded.features["sleep"]?.inputRevision, 42)
+        XCTAssertNotNil(loaded.daily?.hrvRmssdMs)
+        XCTAssertNil(try persistence.load(ownerId: "another-owner", day: day))
+        XCTAssertThrowsError(try ServerScoreCacheCodec.parseSnapshot(bytes, day: day, ownerId: "another-owner"))
+    }
+
     private func cache(version: String = "frwhoop-physiology-2", status: String = "available",
                        scalar: Any = 16.0, context: String = "main_sleep", median: Any = 16.0,
                        coverage: Any = 0.5) throws -> ServerScoreDayCache {

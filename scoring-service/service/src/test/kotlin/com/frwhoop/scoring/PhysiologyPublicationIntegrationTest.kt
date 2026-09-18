@@ -31,7 +31,11 @@ class PhysiologyPublicationIntegrationTest {
         sql("insert into profiles(id,timezone) values ('$user','UTC')")
         sql("insert into devices(id,user_id) values ('$device','$user')")
     }
-    @After fun close() { if (::db.isInitialized) db.close() }
+    @After fun close() { if (::db.isInitialized) {
+        sql("update physiology_feature_qualifications set qualification='shadow',policy_sha256=null,evaluation_sha256=null," +
+            "signed_policy=null,signed_evaluation=null,reviewed_by=null,reviewed_at=null where algorithm_version='frwhoop-physiology-2'")
+        db.close()
+    } }
 
     @Test fun publicationIsImmutableAndReplacesTheWholeGeneratedEpisodeSet() {
         val first = claim()
@@ -114,11 +118,10 @@ class PhysiologyPublicationIntegrationTest {
     }
 
     @Test fun selectedRevisionFreshnessDoesNotExpireHistoricalResultsByWallClockAge() {
-        val version="frwhoop-server-1"
+        val version="frwhoop-physiology-2"
+        selectSyntheticQualifiedV2()
         val claim=claim()
         publish(payload(claim).put("algorithm_version",version).put("publication_status","final"))
-        sql("insert into physiology_source_selection(user_id,feature,device_id,algorithm_version) " +
-            "select '$user',feature,'$device','$version' from physiology_feature_defaults")
         fun read(): JSONObject = db.withConnection { c ->
             c.createStatement().use { s ->
                 s.execute("grant usage on schema auth to authenticated")
@@ -140,7 +143,8 @@ class PhysiologyPublicationIntegrationTest {
 
     @Test fun freshUnavailableCalendarResultRetainsReasonWithoutClaimingStaleOrAvailable() {
         val item=claim()
-        publish(payload(item).put("algorithm_version","frwhoop-server-1")
+        selectSyntheticQualifiedV2()
+        publish(payload(item).put("algorithm_version","frwhoop-physiology-2")
             .put("unavailable_reason","calendar_date_has_no_owned_time"))
         db.withConnection { c -> c.createStatement().use { s ->
             s.execute("grant usage on schema auth to authenticated")
@@ -219,7 +223,8 @@ class PhysiologyPublicationIntegrationTest {
 
     @Test fun readbackShowsLiveOverrideRevisionAndArchiveStateWithoutAnotherPublication() {
         val item=claim()
-        publish(payload(item).put("algorithm_version","frwhoop-server-1"))
+        selectSyntheticQualifiedV2()
+        publish(payload(item).put("algorithm_version","frwhoop-physiology-2"))
         val id=UUID.randomUUID()
         db.withConnection { c -> c.createStatement().use { s ->
             s.execute("grant usage on schema auth to authenticated")
@@ -238,7 +243,7 @@ class PhysiologyPublicationIntegrationTest {
                     val sleep=read.getJSONObject("features").getJSONObject("sleep")
                     assertEquals("pending",sleep.getString("archive_status"))
                     assertEquals("UTC",sleep.getString("timezone_id"))
-                    assertFalse(sleep.getBoolean("supports_boundary_overrides"))
+                    assertTrue(sleep.getBoolean("supports_boundary_overrides"))
                     assertTrue(read.getBoolean("stale"))
                 }
             } finally { s.execute("reset role") }
@@ -246,9 +251,22 @@ class PhysiologyPublicationIntegrationTest {
         assertEquals(1L,count("server_physiology_results"))
     }
 
+    /** Disposable fixture qualification exercises selected readback; it is not scientific evidence. */
+    private fun selectSyntheticQualifiedV2() {
+        sql("update physiology_feature_qualifications set qualification='reference_qualified'," +
+            "policy_sha256=repeat('a',64),evaluation_sha256=repeat('b',64)," +
+            "signed_policy=jsonb_build_object('payload',jsonb_build_object('metric_family',feature)," +
+            "'signature',jsonb_build_object('algorithm','HMAC-SHA256'))," +
+            "signed_evaluation=jsonb_build_object('payload',jsonb_build_object('policy_sha256',repeat('a',64))," +
+            "'signature',jsonb_build_object('algorithm','HMAC-SHA256')),reviewed_by='disposable-test',reviewed_at=now() " +
+            "where algorithm_version='frwhoop-physiology-2'")
+        sql("insert into physiology_source_selection(user_id,feature,device_id,algorithm_version) " +
+            "select '$user',feature,'$device','frwhoop-physiology-2' from physiology_feature_defaults")
+    }
+
     private fun claim(selectedDevice: UUID = device): ScoringWorkQueue.WorkItem {
         queue.dirtyWorkItem(user,selectedDevice,day)
-        sql("update scoring_work_items set next_attempt_at=clock_timestamp() where user_id='$user' and device_id='$selectedDevice'")
+        sql("update physiology_work_items set next_attempt_at=clock_timestamp() where user_id='$user' and device_id='$selectedDevice'")
         return queue.claimOne(user,selectedDevice,day)!!
     }
 

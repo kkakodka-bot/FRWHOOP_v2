@@ -397,7 +397,7 @@ fun TodayScreen(
     }
     val context = LocalContext.current
     val serverSignedIn by viewModel.serverScores.signedIn.collectAsStateWithLifecycle()
-    val serverEnabled = com.noop.push.ServerScoringSettings.isEnabled(context)
+    val serverEnabled by viewModel.serverScores.enabled.collectAsStateWithLifecycle()
     val serverReady = com.noop.push.ServerScoringSettings.ready(context)
     // Observe refreshes, but re-read the inexpensive owner-scoped cache instead of memoizing an owner.
     val serverOverlay = viewModel.serverScores.lastFetchedAtMs.collectAsStateWithLifecycle().value.let {
@@ -3779,7 +3779,7 @@ private fun dashboardCardFraction(
             val steps = (day?.steps ?: importedStepsForDay ?: estimatedStepsForDay)?.toDouble()
             over(steps, 10000.0)
         }
-        DashboardCard.SLEEP -> over(vd?.totalSleepMin, 480.0)
+        DashboardCard.SLEEP -> over(dashboardServerVital(card, serverEnabled, selectedDayKey, serverOverlay, vd?.totalSleepMin)?.value, 480.0)
         DashboardCard.COUPLED -> 0.6
         DashboardCard.COACH -> 0.5
         // Not wired to a real read yet — an EMPTY vessel (not half-full) so it doesn't imply a reading.
@@ -3795,6 +3795,7 @@ private fun dashboardServerVital(card: DashboardCard, serverEnabled: Boolean, da
         DashboardCard.HRV -> com.noop.push.ServerVitalSelection.Metric.HRV
         DashboardCard.RESTING_HR -> com.noop.push.ServerVitalSelection.Metric.RESTING_HR
         DashboardCard.RESPIRATORY -> com.noop.push.ServerVitalSelection.Metric.RESPIRATORY
+        DashboardCard.SLEEP -> com.noop.push.ServerVitalSelection.Metric.SLEEP
         else -> return null
     }
     return com.noop.push.ServerVitalSelection.resolve(metric, serverEnabled, day, overlay, localValue)
@@ -3804,7 +3805,9 @@ private fun dashboardServerVitalSubtitle(card: DashboardCard, serverEnabled: Boo
     overlay: com.noop.push.ServerScoreDayCache?): String? {
     val selection = dashboardServerVital(card, serverEnabled, day, overlay, null)?.takeIf { it.fromServer } ?: return null
     val label = uiString(R.string.server_vital_source_day_status, selection.day, selection.status ?: "unavailable")
-    return if (selection.stale) uiString(R.string.server_sleep_stale, label) else label
+    val source = if (card == DashboardCard.SLEEP) listOfNotNull(selection.deviceId, selection.algorithmVersion).joinToString(" · ") else ""
+    val caption = if (source.isEmpty()) label else "$label · $source"
+    return if (selection.stale) uiString(R.string.server_sleep_stale, caption) else caption
 }
 
 /** Missing selected-day server vitals stay unavailable; local mode retains its per-field carry. */
@@ -3891,7 +3894,8 @@ private fun dashboardCardValue(
                     ?.let { com.noop.analytics.SkinTempDisplay.formatReading(it, fahrenheit = fahrenheit) }
                     ?: NO_DATA
             }
-        DashboardCard.SLEEP -> sleepValue(vd)
+        DashboardCard.SLEEP -> dashboardServerVital(card, serverEnabled, selectedDayKey, serverOverlay, vd?.totalSleepMin)?.value
+            ?.roundToInt()?.let { "${it / 60}h ${it % 60}m" } ?: NO_DATA
         DashboardCard.STEPS -> {
             val real = day?.steps?.let { intStringGrouped(it.toDouble()) }
                 ?: importedStepsForDay?.let { intStringGrouped(it.toDouble()) }

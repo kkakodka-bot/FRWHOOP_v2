@@ -47,8 +47,16 @@ fi
 if [[ -f "$repo_dir/supabase/migrations/20260918070000_physiology_legacy_boundary_continuation.sql" ]]; then
   "${psql_cmd[@]}" -f "$repo_dir/supabase/migrations/20260918070000_physiology_legacy_boundary_continuation.sql" >>"$pg_test_dir/migrations.log"
 fi
+for migration in "$repo_dir"/supabase/migrations/20260918[1-9]*.sql; do
+  [[ -f "$migration" ]] || continue
+  if [[ "$(basename "$migration")" == 20260918100000_physiology_independent_work.sql ]]; then
+    "${psql_cmd[@]}" -f "$service_dir/service/src/test/resources/physiology_queue_isolation_fixture.sql" >>"$pg_test_dir/migrations.log"
+  fi
+  "${psql_cmd[@]}" -f "$migration" >>"$pg_test_dir/migrations.log"
+done
 cd "$service_dir"
 ./gradlew :service:test --tests com.frwhoop.scoring.ScoringWorkQueueIntegrationTest \
+  --tests com.frwhoop.scoring.IndependentScoringWorkIntegrationTest \
   --tests com.frwhoop.scoring.PhysiologyPublicationIntegrationTest \
   --tests com.frwhoop.scoring.PhysiologyDependencyIntegrationTest \
   --tests com.frwhoop.scoring.RrPacketProvenanceIntegrationTest \
@@ -66,4 +74,5 @@ cp "$service_dir/service/build/test-results/test/TEST-com.frwhoop.scoring.Physio
 cp "$service_dir/service/build/test-results/test/TEST-com.frwhoop.scoring.RawSignalCatalogueIntegrationTest.xml" "$pg_test_dir/"
 cp "$service_dir/service/build/test-results/test/TEST-com.frwhoop.scoring.LegacySleepContinuationIntegrationTest.xml" "$pg_test_dir/"
 cp "$service_dir/service/build/test-results/test/TEST-com.frwhoop.scoring.SignalInventoryIntegrationTest.xml" "$pg_test_dir/"
+cp "$service_dir/service/build/test-results/test/TEST-com.frwhoop.scoring.IndependentScoringWorkIntegrationTest.xml" "$pg_test_dir/"
 printf 'Disposable PostgreSQL queue evidence: %s\n' "$pg_test_dir"

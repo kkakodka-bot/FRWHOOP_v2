@@ -88,8 +88,8 @@ object SleepStagerV2 {
         // already establishes) so the binary-search bounds are correct even if a caller violates the
         // already-sorted-by-ts contract; the clip itself is a single O(log n) lower/upper-bound sublist, not
         // a linear filter.
-        val gravC = clipSorted(grav.sortedBy { it.ts }, start - PAD_LO, end + PAD_HI) { it.ts }
-        val hrC = clipSorted(hr.sortedBy { it.ts }, start - PAD_LO, end + PAD_HI) { it.ts }
+        val gravC = clipSorted(grav.filter(SleepSignalValidity::gravity).sortedBy { it.ts }, start - PAD_LO, end + PAD_HI) { it.ts }
+        val hrC = clipSorted(hr.filter(SleepSignalValidity::heartRate).sortedBy { it.ts }, start - PAD_LO, end + PAD_HI) { it.ts }
         val rrC = clipSorted(rr.sortedBy { it.ts }, start - PAD_LO, end + PAD_HI) { it.ts }
 
         val key = StagerCache.fingerprint(StagerCache.Version.V2, start, end, gravC, hrC, rrC)

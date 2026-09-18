@@ -168,7 +168,7 @@ private fun ServerSleepScreen(vm: AppViewModel) {
     var editError by remember { mutableStateOf<String?>(null) }
     var saving by remember { mutableStateOf(false) }
     val ready = com.noop.push.ServerScoringSettings.ready(context)
-    val cache = remember(fetched, signedIn, day, ready) { if (ready && signedIn) vm.serverScores.overlay(day) else null }
+    val cache = fetched.let { if (ready && signedIn) vm.serverScores.overlay(day) else null }
     val episodes = remember(cache, day) { serverSleepEpisodes(cache, day) }
     LaunchedEffect(day, signedIn, ready) { vm.serverScores.refreshDay(day) }
     LaunchedEffect(signedIn) { if(!signedIn) { editing=null; editError=null } }
@@ -354,7 +354,8 @@ fun SleepScreen(
     vm: AppViewModel,
     onOpenJournal: () -> Unit = {},
 ) {
-    if (com.noop.push.ServerScoringSettings.isEnabled(LocalContext.current)) {
+    val serverEnabled by vm.serverScores.enabled.collectAsStateWithLifecycle()
+    if (serverEnabled) {
         ServerSleepScreen(vm)
         return
     }

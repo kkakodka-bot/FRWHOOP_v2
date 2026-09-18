@@ -43,6 +43,8 @@ def sleepecg_compare(job, checkpoint, package_hash):
 
 def walch_compare(job, source_root, package_hash):
     """Use upstream feature/label assembly with a serial logistic comparator, no published-score claim."""
+    if job.get("mode") != "retrospective":
+        raise Abstain("noncausal_model_requires_retrospective_mode")
     import numpy as np
     from sklearn.linear_model import LogisticRegression
     from sklearn.pipeline import make_pipeline

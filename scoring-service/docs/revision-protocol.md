@@ -9,7 +9,10 @@ affected device/day and following wake day. Bulk projection statements coalesce 
 affected device/day; changing only arrival metadata does not trigger a new revision. A one-time
 migration scan catches existing projection rows missed by the former polling watermark.
 
-The queue retains its `(user_id, device_id, day)` primary key. Each revision has an independent
+Migration `20260918100000` moves v2 debt to `physiology_work_items`, retaining its
+`(user_id, device_id, day)` primary key. Baseline debt remains independently in
+`scoring_work_items`; migration `20260918120000` requires its token-aware baseline worker.
+[Algorithm isolation](algorithm-work-isolation.md) describes migration and rollback prerequisites. Each revision has an independent
 failure budget. Successful runs reset failures; the eighth consecutive failure exhausts that
 revision. Retry delay doubles from five seconds to one hour. New input resets the budget and is
 debounced for two seconds. Waiting for absent inputs retries after five minutes without consuming
@@ -44,7 +47,9 @@ waiting arrivals see committed history. Tests cover DST, same-day travel, skippe
 
 Migration `20260918030000` separates direct measurement revisions from baseline-only refreshes.
 Forward HRV dependents include the earliest prior-night window's full 28-day history, not only the
-current day's midnight. Migration `20260918060000` invalidates persistent wrist-state influence
+current day's midnight. Migration `20260918100000` checks actual owned calendar intervals when refreshing HRV
+dependents, including precreated days whose original queue timezone predates date-line travel.
+Migration `20260918060000` invalidates persistent wrist-state influence
 through the next wrist transition, including transitions preceding the raw reader lower bound.
 Neither path creates an unbounded future job series.
 

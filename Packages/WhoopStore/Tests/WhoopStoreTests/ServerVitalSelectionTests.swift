@@ -91,4 +91,21 @@ final class ServerVitalSelectionTests: XCTestCase {
             }
         }
     }
+    func testSleepUsesSelectedDaySourceAndPreservesZeroWithoutLocalFallback() throws {
+        for minutes in [0.0, 480.0] {
+            let overlay = try cache(daily: .init(sleepTotalMin: minutes), statuses: ["sleep": "stale"])
+            let selected = ServerVitalSelection.resolve(.sleep, serverEnabled: true, selectedDay: day, overlay: overlay, localValue: 120)
+            XCTAssertEqual(selected.value, minutes); XCTAssertEqual(selected.sourceFeature, "sleep")
+            XCTAssertTrue(selected.stale); XCTAssertTrue(selected.fromServer)
+            XCTAssertEqual(selected.deviceId, overlay.features["sleep"]?.deviceId)
+            XCTAssertEqual(selected.algorithmVersion, overlay.features["sleep"]?.algorithmVersion)
+        }
+        let absent = try cache(daily: .init(), statuses: ["sleep": "available"])
+        XCTAssertNil(ServerVitalSelection.resolve(.sleep, serverEnabled: true, selectedDay: day, overlay: absent, localValue: 120).value)
+        let unknown = try cache(daily: .init(sleepTotalMin: 480), statuses: ["sleep": "unavailable"])
+        XCTAssertNil(ServerVitalSelection.resolve(.sleep, serverEnabled: true, selectedDay: day, overlay: unknown, localValue: 120).value)
+        let local = ServerVitalSelection.resolve(.sleep, serverEnabled: false, selectedDay: day, overlay: unknown, localValue: 120)
+        XCTAssertEqual(local.value, 120); XCTAssertFalse(local.fromServer)
+    }
+
 }

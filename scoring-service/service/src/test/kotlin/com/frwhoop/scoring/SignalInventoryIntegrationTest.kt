@@ -30,7 +30,7 @@ class SignalInventoryIntegrationTest {
 
     @Test fun occupiedBinsAreScopedAndNeverClaimContinuousAcquisitionOrMutateWork() {
         hr(device, start); hr(device, start + 1); hr(device, start + 60); hr(otherDevice, start + 2)
-        val revision = scalar("select jsonb_object_agg(day,input_revision)::text from scoring_work_items where user_id='$user' and device_id='$device'")
+        val revision = scalar("select jsonb_object_agg(day,input_revision)::text from physiology_work_items where user_id='$user' and device_id='$device'")
         val report = SignalInventoryReader(db).report(user, device, "2026-08-18", start to start + 60)
         assertTrue(report.getBoolean("read_only"))
         assertFalse(report.getBoolean("signal_values_exported"))
@@ -44,7 +44,7 @@ class SignalInventoryIntegrationTest {
         assertTrue(hr.isNull("sample_rate_hz"))
         assertTrue(hr.isNull("timing_uncertainty_seconds"))
         assertEquals(60, report.getJSONObject("signals").getJSONObject("rr_intervals").getInt("maximum_empty_second_run"))
-        assertEquals(revision, scalar("select jsonb_object_agg(day,input_revision)::text from scoring_work_items where user_id='$user' and device_id='$device'"))
+        assertEquals(revision, scalar("select jsonb_object_agg(day,input_revision)::text from physiology_work_items where user_id='$user' and device_id='$device'"))
     }
 
     @Test fun ownershipAndCalendarBoundsCannotBorrowAnotherPeriod() {

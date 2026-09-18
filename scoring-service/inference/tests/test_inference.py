@@ -41,6 +41,44 @@ def rows(participant="train"):
 
 
 class ContractsTest(unittest.TestCase):
+    def test_noncausal_walch_rejects_online_modes_before_importing_or_reading_assets(self):
+        from physiology_inference.comparators import walch_compare
+        for mode in ("causal", "windowed"):
+            with self.assertRaisesRegex(Abstain, "noncausal_model_requires_retrospective_mode"):
+                walch_compare({"mode": mode}, Path("/nonexistent/walch"), "unused")
+
+    def test_inventory_hashes_bind_runtime_and_preprocessing_source_bytes(self):
+        repo = Path(__file__).resolve().parents[3]
+        runtime_hash = implementation_hash()
+        manifests = [path for path in (repo / "models/manifests").glob("*.json")
+                     if path.name != "model-manifest.schema.json"]
+        self.assertEqual(len(manifests), 8)
+        for path in manifests:
+            with self.subTest(model=path.stem):
+                manifest = json.loads(path.read_text())
+                source = (repo / manifest["preprocessing_source"]).resolve()
+                self.assertTrue(source.is_relative_to(repo))
+                self.assertEqual(manifest["preprocessing_sha256"], sha256(source.read_bytes()).hexdigest())
+                self.assertEqual(manifest["adapter_sha256"], runtime_hash)
+                self.assertEqual(manifest["implementation"]["implementation_sha256"], runtime_hash)
+                self.assertEqual(manifest["operational_status"], "metadata_only")
+                self.assertEqual(manifest["publication_mode"], "shadow")
+                self.assertIs(manifest["canonical_outputs_allowed"], False)
+
+    def test_feature_inventory_identifies_actual_local_softmax_and_feature_contract(self):
+        from physiology_inference.feature_sleep import FEATURES
+        repo = Path(__file__).resolve().parents[3]
+        manifest = json.loads((repo / "models/manifests/feature-sleep-learner.json").read_text())
+        self.assertIn("softmax", manifest["purpose"].lower())
+        self.assertEqual(manifest["code"]["repository"], "https://github.com/kkakodka-bot/naraWhoop")
+        self.assertEqual(manifest["code"]["path"], "scoring-service/inference/physiology_inference/feature_sleep.py")
+        self.assertEqual(manifest["preprocessing_source"], manifest["code"]["path"])
+        self.assertEqual(manifest["licenses"]["code"]["identifier"], "PolyForm-Noncommercial-1.0.0")
+        self.assertIn("PolyForm Noncommercial License 1.0.0", (repo / "LICENSE").read_text())
+        self.assertEqual(manifest["input_contract"]["channels"], list(FEATURES))
+        self.assertEqual(manifest["input_contract"]["epoch_seconds"], 30)
+        self.assertEqual(manifest["input_contract"]["allowed_modes"], ["causal", "retrospective"])
+
     def test_job_hash_covers_model_options_and_features(self):
         request = job([signal()], epochs=2)
         validate_job(request)
@@ -331,10 +369,38 @@ class ActualNeuroKitTest(unittest.TestCase):
 
 @unittest.skipUnless(importlib.util.find_spec("torch"), "pinned Torch unavailable")
 class CorrEncoderTest(unittest.TestCase):
+    def test_acquisition_aliases_hash_conflicts_and_duplicate_exports_fail_before_training(self):
+        from physiology_inference.correncoder import train
+        rows = [{"participant": participant, "recording": "export", "start": 0, "end": 10,
+                 "source_recording_id": "acquisition-" + participant,
+                 "source_sha256": sha256(participant.encode()).hexdigest(), "sample_rate_hz": 20,
+                 "ppg": [0.0] * 200, "reference": [0.0] * 200, "reference_source": "capnography",
+                 "rights_reviewed": True, "preprocessing": "upstream_presegmented_standardized",
+                 "observed_complete": True} for participant in ("train", "dev")]
+        cases = []
+        same_id = copy.deepcopy(rows)
+        same_id[1]["source_recording_id"] = same_id[0]["source_recording_id"]
+        cases.append(("same_source_id_different_hash", same_id, "participant_overlap"))
+        same_hash = copy.deepcopy(rows)
+        same_hash[1]["source_sha256"] = same_hash[0]["source_sha256"]
+        cases.append(("same_hash_different_source_id", same_hash, "participant_overlap"))
+        hash_conflict = copy.deepcopy(rows) + [copy.deepcopy(rows[0])]
+        hash_conflict[-1].update(source_sha256="a" * 64, start=10, end=20)
+        cases.append(("same_owner_source_hash_changed", hash_conflict, "hash_conflict"))
+        duplicate = copy.deepcopy(rows) + [copy.deepcopy(rows[0])]
+        duplicate[-1].update(recording="renamed-export", source_recording_id="renamed-acquisition")
+        cases.append(("duplicate_span_renamed_export", duplicate, "segment_invalid"))
+        for name, segments, reason in cases:
+            with self.subTest(case=name), patch("physiology_inference.correncoder.model") as build_model:
+                with self.assertRaisesRegex(Abstain, reason):
+                    train(segments, ["train"], ["dev"], epochs=1)
+                build_model.assert_not_called()
+
     def test_one_epoch_reproduction_is_deterministic_and_participant_disjoint(self):
         import torch
         from physiology_inference.correncoder import train
         segments = [{"participant": p, "recording": "synthetic", "start": 0, "end": 10,
+                     "source_recording_id": f"synthetic-{p}", "source_sha256": sha256(p.encode()).hexdigest(),
                      "sample_rate_hz": 20,
                      "ppg": [math.sin(i / 10) for i in range(200)], "reference": [math.sin(i / 30) for i in range(200)],
                      "reference_source": "capnography", "rights_reviewed": True,
@@ -351,6 +417,17 @@ class CorrEncoderTest(unittest.TestCase):
             self.assertEqual(len(restored["respiratory_waveform"]), 200)
             self.assertIsNone(restored["breaths_per_minute"])
         with self.assertRaisesRegex(Abstain, "overlap"): train(segments, ["train"], ["train"], epochs=1)
+        for alias_kind in ("same_original_id", "same_content_hash"):
+            aliased = copy.deepcopy(segments)
+            aliased[1]["source_sha256"] = aliased[0]["source_sha256"]
+            if alias_kind == "same_original_id":
+                aliased[1]["source_recording_id"] = aliased[0]["source_recording_id"]
+            with self.assertRaisesRegex(Abstain, "original_acquisition_participant_overlap"):
+                train(aliased, ["train"], ["dev"], epochs=1)
+        missing = copy.deepcopy(segments)
+        del missing[0]["source_sha256"]
+        with self.assertRaisesRegex(Abstain, "original_acquisition_identity_missing"):
+            train(missing, ["train"], ["dev"], epochs=1)
 
 
 if __name__ == "__main__":

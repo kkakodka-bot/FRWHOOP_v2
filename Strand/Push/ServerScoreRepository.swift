@@ -7,15 +7,41 @@ import WhoopStore
 final class ServerScoreRepository: ObservableObject {
     @Published private(set) var lastError: String?
     @Published private(set) var lastFetchedAt: Date?
-    @Published private(set) var signedIn: Bool = CloudAuthClient.storedSession() != nil
+    @Published private(set) var signedIn: Bool
     @Published private(set) var sleepEditMessage: String?
+
+    struct Dependencies {
+        var ownerId: () -> String?
+        var clearSession: () -> Void
+        var clearIfCurrent: (String, String) -> Bool
+        var signIn: (String, String) async throws -> Void
+        var fetch: (String, String) async throws -> ServerScoreDayCache
+        var enabled: () -> Bool
+        var ready: () -> Bool
+        var automaticPolling = true
+
+        static let live = Dependencies(
+            ownerId: { CloudAuthClient.storedSession()?.userId },
+            clearSession: { CloudAuthClient.clearSession() },
+            clearIfCurrent: { CloudAuthClient.clearSession(ifAccessToken: $0, ownerId: $1) },
+            signIn: { _ = try await CloudAuthClient.signIn(email: $0, password: $1) },
+            fetch: { try await ServerScoreClient.fetchDaySnapshot(day: $0, ownerId: $1) },
+            enabled: { ServerScoringSettings.isEnabled }, ready: { ServerScoringSettings.ready })
+    }
+
+    private let dependencies: Dependencies
+    init(dependencies: Dependencies = .live) {
+        self.dependencies = dependencies
+        signedIn = dependencies.ownerId() != nil
+        session.activate(ownerId: dependencies.ownerId())
+    }
 
     private var pollTask: Task<Void, Never>?
     private var cacheStore: ServerScoreCacheStore?
     private var session = ServerScoreSessionState()
     private var visibleDays = Set<String>()
     private var pollingDay: String?
-    private var currentOwnerId: String? { CloudAuthClient.storedSession()?.userId.lowercased() }
+    private var currentOwnerId: String? { dependencies.ownerId()?.lowercased() }
 
     func wire(store: WhoopStore) {
         cacheStore = ServerScoreCacheStore(db: store.registryWriter)
@@ -26,14 +52,14 @@ final class ServerScoreRepository: ObservableObject {
 
     func signIn(email: String, password: String) async {
         stopPolling()
-        CloudAuthClient.clearSession()
+        dependencies.clearSession()
         session.activate(ownerId: nil)
         signedIn = false
         lastFetchedAt = nil
         sleepEditMessage = nil
         let attempt = session.generation
         do {
-            _ = try await CloudAuthClient.signIn(email: email, password: password)
+            try await dependencies.signIn(email, password)
             guard attempt == session.generation else { return }
             session.activate(ownerId: currentOwnerId)
             signedIn = true
@@ -49,7 +75,7 @@ final class ServerScoreRepository: ObservableObject {
     }
 
     func signOut() {
-        CloudAuthClient.clearSession()
+        dependencies.clearSession()
         signedIn = false
         stopPolling()
         session.activate(ownerId: nil)
@@ -59,7 +85,7 @@ final class ServerScoreRepository: ObservableObject {
     }
 
     func overlay(for day: String) -> ServerScoreDayCache? {
-        guard ServerScoringSettings.isEnabled else { return nil }
+        guard dependencies.enabled() else { return nil }
         synchronizeOwner()
         visibleDays.insert(day)
         return session.overlay(day: day, currentOwnerId: currentOwnerId)
@@ -67,7 +93,7 @@ final class ServerScoreRepository: ObservableObject {
 
     func startPolling(todayKey: String) {
         pollingDay = todayKey
-        guard ServerScoringSettings.ready, signedIn else { return }
+        guard dependencies.ready(), signedIn, dependencies.automaticPolling else { return }
         stopPolling()
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
@@ -85,7 +111,7 @@ final class ServerScoreRepository: ObservableObject {
     /// Writes only the authenticated server override, never a local sleep row or local score.
     func saveSleepOverride(_ target: ServerSleepEditTarget, start: Int, end: Int, tombstone: Bool) async -> Bool {
         synchronizeOwner()
-        guard ServerScoringSettings.ready, target.ownerId == session.ownerId,
+        guard dependencies.ready(), target.ownerId == session.ownerId,
               let cache = session.overlay(day: target.day, currentOwnerId: currentOwnerId),
               cache.features["sleep"]?.deviceId == target.deviceId,
               cache.features["sleep"]?.supportsBoundaryOverrides == true else {
@@ -105,7 +131,7 @@ final class ServerScoreRepository: ObservableObject {
             synchronizeOwner()
             guard !Task.isCancelled, session.isCurrentRequest(day: key, generation: generation, currentOwnerId: currentOwnerId, request: request) else { return false }
             if case ServerScoreClient.FetchError.unauthorized(let token) = error,
-               CloudAuthClient.clearSession(ifAccessToken: token, ownerId: target.ownerId) {
+               dependencies.clearIfCurrent(token, target.ownerId) {
                 synchronizeOwner()
                 lastError = "Session expired — sign in again"
             } else if case ServerScoreClient.FetchError.conflict = error {
@@ -120,7 +146,7 @@ final class ServerScoreRepository: ObservableObject {
     }
 
     func refreshVisibleDays(todayKey: String? = nil) async {
-        guard ServerScoringSettings.ready, signedIn else { return }
+        guard dependencies.ready(), signedIn else { return }
         if let todayKey {
             visibleDays.insert(todayKey)
         }
@@ -134,14 +160,14 @@ final class ServerScoreRepository: ObservableObject {
         let generation = session.generation
         let request = session.beginRequest(day: day)
         do {
-            let cache = try await ServerScoreClient.fetchDaySnapshot(day: day, ownerId: owner)
+            let cache = try await dependencies.fetch(day, owner)
             guard !Task.isCancelled, session.accept(cache, generation: generation, currentOwnerId: currentOwnerId, request: request) else { return }
             try cacheStore?.upsert(cache)
             lastFetchedAt = cache.fetchedAt
             lastError = nil
         } catch ServerScoreClient.FetchError.unauthorized(let token) {
             guard !Task.isCancelled, session.isCurrentRequest(day: day, generation: generation, currentOwnerId: currentOwnerId, request: request),
-                  CloudAuthClient.clearSession(ifAccessToken: token, ownerId: owner) else { return }
+                  dependencies.clearIfCurrent(token, owner) else { return }
             signedIn = false
             session.activate(ownerId: nil)
             lastError = "Session expired — sign in again"

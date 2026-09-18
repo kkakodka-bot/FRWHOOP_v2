@@ -45,7 +45,7 @@ class CalendarOwnershipIntegrationTest {
         assertEquals(2, input.hr.size)
         assertTrue(own.dayIntervals.any { epoch("2026-09-18T05:00:00Z") in it.first until it.second })
         assertEquals(epoch("2026-09-18T07:00:00Z") - 1, input.dayHi)
-        assertEquals("UTC", string("select timezone_id from scoring_work_items where user_id='$user' and day='2026-09-17'"))
+        assertEquals("UTC", string("select timezone_id from physiology_work_items where user_id='$user' and day='2026-09-17'"))
     }
 
     @Test fun disjointOwnershipExcludesSamplesInAnInterveningDifferentDate() {
@@ -79,7 +79,7 @@ class CalendarOwnershipIntegrationTest {
             .put("end", epoch("2026-08-18T04:00:00Z"))
         sql("select scoring_dirty_hrv_dependents('$user','$device','2026-08-17','[$measurement]'::jsonb)")
         assertEquals(before + 1, revision("2026-08-18"))
-        assertEquals("UTC", string("select timezone_id from scoring_work_items where user_id='$user' and day='2026-08-18'"))
+        assertEquals("UTC", string("select timezone_id from physiology_work_items where user_id='$user' and day='2026-08-18'"))
         assertEquals(epoch("2026-08-18T07:00:00Z"), ownership("2026-08-18").dayLo)
     }
 
@@ -144,7 +144,7 @@ class CalendarOwnershipIntegrationTest {
                 connection.commit(); insert.get(5, TimeUnit.SECONDS)
             }
             assertEquals(1L, revision("2026-09-17"))
-            assertEquals(0L, number("select count(*) from scoring_work_items where user_id='$user' and day='2026-09-19'"))
+            assertEquals(0L, number("select count(*) from physiology_work_items where user_id='$user' and day='2026-09-19'"))
         } finally { pool.shutdownNow() }
     }
 
@@ -181,7 +181,7 @@ class CalendarOwnershipIntegrationTest {
     private fun hr(at: String) = sql("insert into noop_hr_samples(user_id,device_id,source_id,ts,bpm,batch_id) " +
         "values('$user','$device','${UUID.randomUUID()}',${epoch(at)},60,'${UUID.randomUUID()}')")
     private fun epoch(value: String) = Instant.parse(value).epochSecond
-    private fun revision(day: String) = number("select input_revision from scoring_work_items where user_id='$user' and day='$day'")
+    private fun revision(day: String) = number("select input_revision from physiology_work_items where user_id='$user' and day='$day'")
     private fun sql(value: String) = db.withConnection { connection -> connection.createStatement().use { it.execute(value) }; Unit }
     private fun string(value: String) = db.withConnection { connection -> connection.createStatement().use { statement ->
         statement.executeQuery(value).use { rows -> check(rows.next()); rows.getString(1) }

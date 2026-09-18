@@ -1806,11 +1806,13 @@ object SleepStager {
         hr: List<HrSample>, rr: List<RrInterval>, resp: List<RespSample>,
         hrvObservations: List<PhysiologyQuality.IntervalObservation> = emptyList(),
     ): List<StageSegment> {
-        if (hrvObservations.isNotEmpty()) return stageSessionUncached(start, end, grav, hr, rr, resp,
+        val validGravity = grav.filter(SleepSignalValidity::gravity)
+        val validHr = hr.filter(SleepSignalValidity::heartRate)
+        if (hrvObservations.isNotEmpty()) return stageSessionUncached(start, end, validGravity, validHr, rr, resp,
             HrvSeries.windows(start.toInt(), end.toInt(), hrvObservations))
-        val key = StagerCache.fingerprint(StagerCache.Version.V1, start, end, grav, hr, rr, resp)
+        val key = StagerCache.fingerprint(StagerCache.Version.V1, start, end, validGravity, validHr, rr, resp)
         StagerCache.get(key)?.let { return StagerCache.copyOf(it) }
-        val segments = stageSessionUncached(start, end, grav, hr, rr, resp)
+        val segments = stageSessionUncached(start, end, validGravity, validHr, rr, resp)
         StagerCache.put(key, segments)
         return StagerCache.copyOf(segments)
     }

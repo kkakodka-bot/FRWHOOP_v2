@@ -7,7 +7,8 @@ func hrvEvidence(start: Int = 0, count: Int = 300, pattern: [Double] = [1000], o
     var time = Double(start) + offset
     var rows: [PhysiologyQuality.IntervalObservation] = []
     for i in 0..<count {
-        let value = pattern[i % pattern.count], end = time + value / 1000
+        let value = mode == "boundary" && i == 0 ? 2000 : pattern[i % pattern.count]
+        let end = time + value / 1000
         var row = PhysiologyQuality.IntervalObservation(originalId: "i\(i)", deviceId: deviceId,
             source: mode == "source_switch" && i >= 150 ? "other" : "test", modality: mode == "sdnn" ? "sdnn" : "ecg_nn",
             eventTime: time, originalRRMs: value, startBeatId: mode == "legacy" ? nil : "b\(i)",
@@ -30,7 +31,7 @@ final class HrvWindowTests: XCTestCase {
     private struct Goldens: Decodable {
         struct Case: Decodable {
             let id: String; let count: Int; let pattern: [Double]; let offset: Double?; let mode: String?; let context: String?
-            let pairs: Int; let coverage: Double; let gap: Double; let rmssd: Double?; let corrected: Double?; let reason: String?; let baseline: Bool
+            let pairs: Int; let coverage: Double; let gap: Double; let rmssd: Double?; let sdnn: Double?; let corrected: Double?; let reason: String?; let baseline: Bool
         }
         let cases: [Case]
     }
@@ -48,6 +49,7 @@ final class HrvWindowTests: XCTestCase {
             XCTAssertEqual(r.maximumGapSeconds, c.gap, accuracy: 1e-9, c.id)
             if let value = c.rmssd { XCTAssertEqual(try XCTUnwrap(r.observedRMSSD, c.id), value, accuracy: 1e-9, c.id) }
             else { XCTAssertNil(r.observedRMSSD, c.id) }
+            if let value = c.sdnn { XCTAssertEqual(try XCTUnwrap(r.sdnn, c.id), value, accuracy: 1e-9, c.id) }
             if let value = c.corrected {
                 XCTAssertEqual(try XCTUnwrap(r.correctedRMSSD), value, accuracy: 1e-9, c.id)
                 XCTAssertEqual(r.correctionEventCount, 2); XCTAssertEqual(r.correctionFraction, 1 / 300.0, accuracy: 1e-12)

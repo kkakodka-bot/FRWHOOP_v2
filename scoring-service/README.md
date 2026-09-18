@@ -5,6 +5,8 @@ Scores HRV/RR, sleep and qualified respiration on arrival. It writes immutable o
 snapshots via `engine_publish_physiology` under `algorithm_version = frwhoop-physiology-2`.
 This version remains shadow by default; readback selection retains the v1 baseline. Starting the
 service does not promote its outputs. This build refuses to impersonate the v1 algorithm version.
+Canonical v1 runs in the separately built [frozen baseline worker](legacy-baseline/README.md),
+with its original numerical kernel and the required fenced transport patch.
 
 ## Layout
 
@@ -60,15 +62,17 @@ All progress survives container restarts (`kill -9` → clean resume):
 
 | Table | Purpose |
 |---|---|
-| `scoring_work_items` | Device/day debt, input and measurement revisions, renewable run/lease tokens, waiting/failure state |
+| `physiology_work_items` | Independent v2 shadow debt, input/measurement revisions, renewable leases and retry state |
+| `scoring_work_items` | Independent v1 debt; migration `20260918120000` requires the patched baseline transport |
 | `scoring_timezone_history` | Prospective event-time IANA ownership segments |
-| `scoring_service_heartbeats` | Singleton liveness row (`last_poll_at`, `last_score_at`) |
+| `scoring_service_heartbeats` / `physiology_service_heartbeats` | Separate v1/v2 liveness records |
 | `server_physiology_results` | Immutable version/revision snapshots, including the complete generated episode set |
 | `physiology_sleep_overrides` | Owner-scoped optimistic corrections and tombstones |
 | `physiology_archive_outbox` | Independent retries of the exact committed payload |
 | `physiology_feature_qualifications` / `physiology_source_selection` | Human-reviewed feature gates and explicit owner/device/version selection |
 
-The old `server_daily_scores` and `server_sleep_nights` remain readable for rollback. See
+The old `server_daily_scores` and `server_sleep_nights` remain preserved. Both workers publish
+immutable version-scoped snapshots and independently retryable archive debt. See
 [revision-protocol.md](docs/revision-protocol.md) for actual transaction and dependency behavior.
 
 The scorer **never** writes `daily_metrics` or `sleep_nights` (device-pushed tables).
@@ -81,7 +85,9 @@ Build from **repo root** (kernel syncs from `../android`):
 docker build -t frwhoop/scoring-service:latest -f scoring-service/Dockerfile .
 ```
 
-See `infra/vps/templates/docker-compose.scoring-override.yml`.
+See `infra/vps/templates/docker-compose.scoring-override.yml`. It adds `scoring-shadow`;
+keep the separately built, patched v1 worker running as the canonical baseline. Read
+[algorithm-work-isolation.md](docs/algorithm-work-isolation.md) before applying the transport migration.
 
 ## Scoped kernel (Locked #3)
 
@@ -112,7 +118,8 @@ v3/derived/users/{user}/devices/{device}/days/{day}/{algorithm}/revisions/{revis
 ```
 
 Requires the same B2 env as Edge (`B2_KEY_ID`, `B2_APPLICATION_KEY`, `B2_BUCKET_NAME`, …) — the
-VPS compose override loads `/opt/frwhoop/b2.env`. Postgres scores remain readable when B2 fails;
+VPS compose override loads `/opt/frwhoop/b2.env`. For baseline-only operation, this build can run `--archive-only` to drain both versions
+without claiming or computing physiology work. Postgres scores remain readable when B2 fails;
 `physiology_archive_outbox` retains the independent status/retry debt. A client hash or HEAD response
 does not verify raw content. Changed decode metadata revokes old proof, while identical repeat
 verification does not endlessly dirty scores. Raw-uncompressed and derived-compressed digest
@@ -123,8 +130,9 @@ conventions remain distinct.
 Per-feature source selection rejects unqualified shadow versions. The offline benchmark gate only
 returns eligibility for human review; it never changes production selection. Preserve additive
 migrations and immutable snapshots during rollback. Select the retained `frwhoop-server-1` feature
-and use its actual retained binary/image if old computation must resume. Changing this build's version
-string, dropping tables or rewriting user data is not rollback.
+and use the separately built baseline image containing the original pinned numerical kernel
+plus the fenced transport patch. The unpatched baseline binary is rejected after migration
+`20260918120000`. Changing this build's version string, dropping tables or rewriting user data is not rollback.
 
 See the [implementation ledger](../docs/physiology-v2/implementation-plan.md),
 [acquisition contract](../docs/physiology-v2/acquisition.md), [HRV contract](../docs/physiology-v2/hrv.md),

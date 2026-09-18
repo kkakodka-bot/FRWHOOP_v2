@@ -9,7 +9,7 @@
     "path": "scoring-service/inference",
     "evidence": "local_checkpoint_adapter_contract_tests_only",
     "activation_status": "blocked_pending_separate_rights_inputs_and_environment_qualification",
-    "implementation_sha256": "b4a73a764a99ed00386af4bb3dd6a99a3baf9ee72b76aaed54366c28d4c0e77e",
+    "implementation_sha256": "6fb1623116d9df9589d18b1719483908db35bcadec14e79e6977b73a21e9a5fb",
     "details": "scoring-service/inference/README.md"
   },
   "code": {
@@ -55,9 +55,9 @@
     "units": "must be frozen with the actual adapter",
     "orientation": "aligned axes required where accelerometry is consumed"
   },
-  "preprocessing_sha256": "825f0a855693c8003fa0aefba330c5df6f9f3819111f4215988d8e83b2a5a69c",
+  "preprocessing_sha256": "73bfd7402886a1b14929b1a251b23dec691799844bfa9b45ee64dbb6fcd0b564",
   "quality_policy_sha256": "e64720d20239277443f6c6e837f0f29095037e910c2e14b7a48ef48a183600ad",
-  "adapter_sha256": "b4a73a764a99ed00386af4bb3dd6a99a3baf9ee72b76aaed54366c28d4c0e77e",
+  "adapter_sha256": "6fb1623116d9df9589d18b1719483908db35bcadec14e79e6977b73a21e9a5fb",
   "resource_limits": {
     "maximum_concurrency": 1,
     "threads": 1,
@@ -73,5 +73,6 @@
     "Synchronized target-device reference data and frozen promotion policy are absent.",
     "Actual target resource benchmark and locked-phone overnight soak are absent.",
     "ECG-trained outputs require PPG-IBI transfer validation; no deep/light distinction is supplied."
-  ]
+  ],
+  "preprocessing_source": "scoring-service/inference/physiology_inference/comparators.py"
 }

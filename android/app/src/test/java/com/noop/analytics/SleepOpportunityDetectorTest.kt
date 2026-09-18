@@ -2,6 +2,7 @@ package com.noop.analytics
 
 import com.noop.data.GravitySample
 import com.noop.data.HrSample
+import org.json.JSONArray
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -72,5 +73,36 @@ class SleepOpportunityDetectorTest {
             assertEquals(12600L,epochs.filter(SleepStageSemantics::isSleep).sumOf { it.end-it.start })
             assertTrue(result.hrvMeasurements.filter { it.start>=gap.first && it.end<=gap.last+1 }.none { it.context=="sleep" })
         }
+    }
+
+    @Test fun sharedFullDayGroupingOracleQualifiesBeforeRanking() {
+        val fixtures=JSONArray(javaClass.getResource("/sleep_group_selection_oracle.json")!!.readText())
+        for(index in 0 until fixtures.length()) {
+            val fixture=fixtures.getJSONObject(index)
+            val ranges=fixture.getJSONArray("sleep_ranges").let { rows -> (0 until rows.length()).map {
+                val row=rows.getJSONArray(it); day+row.getLong(0) until day+row.getLong(1)
+            } }
+            val expected=fixture.getJSONArray("main_indices").let { rows -> (0 until rows.length()).map(rows::getInt) }
+            for(v2 in listOf(false,true)) {
+                val result=AnalyticsEngine.analyzeDay("2026-09-17",hr=hr(ranges),gravity=gravity(),profile=UserProfile(),
+                    useFullDaySleepOpportunities=true,useSleepStagerV2=v2)
+                assertEquals(fixture.getString("name"),ranges.size,result.sleepSessions.size)
+                assertEquals(fixture.getString("name"),expected,result.sleepSessions.indices.filter {
+                    result.sleepSessions[it].episodeType=="main_sleep"
+                })
+                if(expected.isEmpty()) assertNull(result.daily.totalSleepMin)
+                else assertEquals(expected.sumOf { ranges[it].last+1-ranges[it].first }/60.0,
+                    result.daily.totalSleepMin!!,0.0)
+            }
+        }
+    }
+
+    @Test fun mainGroupQualificationCountsSleepRatherThanEditedOpportunityDuration() {
+        val longUncertain=DetectedSleep(day+3600,day+5*3600,0.0,listOf(
+            StageSegment(day+3600,day+2*3600,"light"),
+            SleepStageSemantics.unknown(day+2*3600,day+5*3600)),null,null)
+        val shift=DetectedSleep(day+13*3600,day+15*3600,1.0,
+            listOf(StageSegment(day+13*3600,day+15*3600,"light")),null,null)
+        assertEquals(listOf(1),SleepOpportunityDetector.mainSleepGroupIndices(listOf(longUncertain,shift),0))
     }
 }

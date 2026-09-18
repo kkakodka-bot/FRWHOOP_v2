@@ -206,6 +206,21 @@
       "gap": 0,
       "rmssd": 0,
       "baseline": true
+    },
+    {
+      "id": "boundary_intervals_excluded_from_sdnn",
+      "count": 301,
+      "pattern": [
+        1000
+      ],
+      "offset": -1.5,
+      "mode": "boundary",
+      "pairs": 298,
+      "coverage": 1,
+      "gap": 0,
+      "rmssd": 0,
+      "sdnn": 0,
+      "baseline": true
     }
   ]
 }

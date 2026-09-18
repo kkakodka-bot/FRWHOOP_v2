@@ -83,6 +83,8 @@ class CanonicalScorePayloadTest {
             .getJSONObject("daily").getJSONObject("respiration_summary")
         assertEquals(listOf(12.0,18.0),encoded.getJSONArray("distribution_bpm").toList())
         assertEquals("sorted_accepted_window_estimates",encoded.getString("distribution_kind"))
+        assertEquals("main_sleep",encoded.getString("context"))
+        assertEquals("qualified_sleep",encoded.getString("measurement_context"))
         val empty=com.noop.analytics.RespirationEstimator.summarize(emptyList(),0.0,300.0,"qualified_sleep")
         val unavailable=CanonicalScorePayload.build(bundle(emptyList()).copy(respirationSummary=empty))
             .getJSONObject("daily").getJSONObject("respiration_summary")

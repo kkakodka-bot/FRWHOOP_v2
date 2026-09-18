@@ -70,7 +70,7 @@ class PhysiologyWearDependencyIntegrationTest {
         "values('$user','$device','${UUID.randomUUID()}',$ts,'$kind','{}','${UUID.randomUUID()}')"
     private fun sql(query:String)=db.withConnection { c -> c.createStatement().use { it.execute(query) };Unit }
     private fun revision(day:String)=db.withConnection { c -> c.createStatement().use { s ->
-        s.executeQuery("select input_revision from scoring_work_items where user_id='$user' and device_id='$device' and day='$day'")
+        s.executeQuery("select input_revision from physiology_work_items where user_id='$user' and device_id='$device' and day='$day'")
             .use { it.next();it.getLong(1) }
     } }
 }

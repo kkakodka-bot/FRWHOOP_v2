@@ -66,8 +66,8 @@ class ScoringWorkQueue(
     fun dirtyWorkItem(userId: UUID, deviceId: UUID, day: String): Long = db.withConnection { conn ->
         conn.prepareStatement(
             """
-            select public.scoring_enqueue_day(?, ?, ?::date,
-              coalesce((select timezone_id from public.scoring_work_items
+            select public.physiology_enqueue_day(?, ?, ?::date,
+              coalesce((select timezone_id from public.physiology_work_items
                 where user_id=? and device_id=? and day=?::date),
                 public.scoring_timezone_at(?, ?::date::timestamp at time zone 'UTC')), 0)
             """.trimIndent(),

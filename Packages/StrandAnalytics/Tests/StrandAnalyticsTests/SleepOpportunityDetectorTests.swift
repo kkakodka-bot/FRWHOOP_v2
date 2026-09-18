@@ -75,4 +75,37 @@ final class SleepOpportunityDetectorTests: XCTestCase {
             XCTAssertFalse(result.hrvMeasurements.filter { $0.start >= gap.lowerBound && $0.end <= gap.upperBound }.contains { $0.context == "sleep" })
         }
     }
+
+    func testSharedFullDayGroupingOracleQualifiesBeforeRanking() throws {
+        struct Fixture: Decodable {
+            let name: String
+            let sleep_ranges: [[Int]]
+            let main_indices: [Int]
+        }
+        let url = try XCTUnwrap(Bundle.module.url(forResource: "sleep_group_selection_oracle", withExtension: "json", subdirectory: "Resources"))
+        let fixtures = try JSONDecoder().decode([Fixture].self, from: Data(contentsOf: url))
+        let profile = UserProfile(weightKg: 70,heightCm: 170,age: 30,sex: "nonbinary")
+        for fixture in fixtures {
+            let ranges = fixture.sleep_ranges.map { (day+$0[0])..<(day+$0[1]) }
+            for v2 in [false,true] {
+                let result = AnalyticsEngine.analyzeDay(day: "2026-09-17",hr: hr(ranges),gravity: gravity(),
+                    profile: profile,useSleepStagerV2: v2,useFullDaySleepOpportunities: true)
+                XCTAssertEqual(result.sleepSessions.count,ranges.count,fixture.name)
+                XCTAssertEqual(result.sleepSessions.indices.filter { result.sleepSessions[$0].episodeType == "main_sleep" },
+                               fixture.main_indices,fixture.name)
+                if fixture.main_indices.isEmpty { XCTAssertNil(result.daily.totalSleepMin) }
+                else { XCTAssertEqual(result.daily.totalSleepMin,
+                    Double(fixture.main_indices.reduce(0) { $0+ranges[$1].count })/60) }
+            }
+        }
+    }
+
+    func testMainGroupQualificationCountsSleepRatherThanEditedOpportunityDuration() {
+        let longUncertain = SleepSession(start: day+3600,end: day+5*3600,efficiency: 0,stages: [
+            StageSegment(start: day+3600,end: day+2*3600,stage: "light"),
+            SleepStageSemantics.unknown(start: day+2*3600,end: day+5*3600)],restingHR: nil,avgHRV: nil)
+        let shift = SleepSession(start: day+13*3600,end: day+15*3600,efficiency: 1,stages: [
+            StageSegment(start: day+13*3600,end: day+15*3600,stage: "light")],restingHR: nil,avgHRV: nil)
+        XCTAssertEqual(SleepOpportunityDetector.mainSleepGroupIndices([longUncertain,shift],offsetSeconds: 0),[1])
+    }
 }

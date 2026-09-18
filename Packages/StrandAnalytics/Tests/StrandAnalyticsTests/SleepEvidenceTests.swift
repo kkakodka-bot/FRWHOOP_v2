@@ -56,4 +56,35 @@ final class SleepEvidenceTests: XCTestCase {
         XCTAssertEqual(result.sleepSessions.first?.boundaryProvenance, "manual_boundary")
         XCTAssertEqual(result.daily.totalSleepMin, 59)
     }
+
+    func testInvalidHrAndGravityDoNotCreateEvidenceInEitherStager() {
+        let hr = (0..<3600).map { HRSample(ts: $0,bpm: [0,-1,241][$0%3]) }
+        let gravity = (0..<3600).map { GravitySample(ts: $0,
+            x: [0,Double.nan,Double.infinity,Double.greatestFiniteMagnitude][$0%4],y: 0,z: 0) }
+        for v2 in [false,true] {
+            let stages = v2 ? SleepStagerV2.stageSession(start: 0,end: 3600,grav: gravity,hr: hr,rr: [],resp: [])
+                : SleepStager.stageSession(start: 0,end: 3600,grav: gravity,hr: hr,rr: [],resp: [])
+            XCTAssertEqual(stages.reduce(0) { $0+$1.end-$1.start },3600)
+            XCTAssertTrue(stages.allSatisfy { $0.state == "state_unknown" && $0.evidenceCoverage == 0 })
+        }
+    }
+
+    func testInvalidPlaceholdersCannotChangeSparseFeaturesOrCachedResults() {
+        let hr = stride(from: 0,to: 3600,by: 5).map { HRSample(ts: $0,bpm: 55) }
+        let gravity = hr.map { GravitySample(ts: $0.ts,x: 0,y: 0,z: 1) }
+        let placeholders = (0..<3600).filter { $0%5 != 0 }
+        let dirtyHr = (hr+placeholders.map { HRSample(ts: $0,bpm: 0) }).sorted { $0.ts < $1.ts }
+        let dirtyGravity = (gravity+placeholders.map { GravitySample(ts: $0,
+            x: $0%2 == 0 ? Double.nan : 0,y: 0,z: 0) }).sorted { $0.ts < $1.ts }
+        for v2 in [false,true] {
+            func stage(_ h: [HRSample],_ g: [GravitySample]) -> [StageSegment] {
+                v2 ? SleepStagerV2.stageSession(start: 0,end: 3600,grav: g,hr: h,rr: [],resp: [])
+                    : SleepStager.stageSession(start: 0,end: 3600,grav: g,hr: h,rr: [],resp: [])
+            }
+            let clean = stage(hr,gravity)
+            XCTAssertEqual(stage(dirtyHr,dirtyGravity),clean)
+            XCTAssertEqual(stage(hr,gravity),clean)
+            if v2 { XCTAssertTrue(clean.allSatisfy { $0.state == "state_unknown" && $0.evidenceCoverage == 0.2 }) }
+        }
+    }
 }
