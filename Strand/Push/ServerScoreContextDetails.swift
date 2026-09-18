@@ -9,9 +9,12 @@ struct ServerScoreIllness: Codable, Equatable, Sendable {
     let wellnessOnly: Bool
     let firedSignals: [String]?
     let copy: String?
+    let distanceDeviatingFeatures: Int?
+    let distanceUsedDiagonalFallback: Bool?
     func validate() throws {
         try ServerScoreEvidenceLimit.check(strings: [level, copy] + suppressedBy.map(Optional.some) + (firedSignals ?? []).map(Optional.some))
         guard signalCount >= 0, signalCount <= 32, suppressedBy.count <= 32, (firedSignals?.count ?? 0) <= 32,
+              distanceDeviatingFeatures.map({ (0...4).contains($0) }) ?? true,
               !distanceIsAlertGate, wellnessOnly else { throw ServerScoreDecodeError.invalid }
     }
 }

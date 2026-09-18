@@ -43,6 +43,22 @@ enum ServerScoreContextPresentation {
             signalCount: value.signalCount, copy: copy)
     }
 
+    /// Independent of illness-score ownership. The distance result is evidence, never an alert gate.
+    /// Legacy partial evidence stays unavailable; neither feature count nor fallback can be inferred.
+    static func illnessDistance(day: String, state: ServerScoreViewState) -> IllnessDistance.Result? {
+        guard let snapshot = supported(.illnessDistance, day: day, state: state),
+              snapshot.schemaVersion == 2,
+              let reading = snapshot.metrics?[ServerScoreMetric.illnessDistance.rawValue],
+              reading.unit == "dimensionless", reading.method == "IllnessDistance_identity_correlation",
+              reading.status == nil || reading.status == "available",
+              let distance = reading.value, distance.isFinite, distance >= 0,
+              let value = snapshot.details?.illness, value.wellnessOnly, !value.distanceIsAlertGate,
+              let count = value.distanceDeviatingFeatures, (0...4).contains(count),
+              let fallback = value.distanceUsedDiagonalFallback else { return nil }
+        return .init(distance: distance, deviatingFeatures: count, fires: value.distanceFires,
+                     usedDiagonalFallback: fallback)
+    }
+
     private static func supported(_ metric: ServerScoreMetric, day: String,
                                   state: ServerScoreViewState) -> ServerScoreSnapshot? {
         guard let snapshot = ServerScoreDisplay.detailSnapshot(metric, day: day, state: state),
