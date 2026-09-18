@@ -89,6 +89,13 @@ No agent may modify another owner's files. Server and Edge changes use separate 
 
 ## Requirement ledger
 
+### Versioned Swift fixture checkpoints, 2026-09-18 07:25 local
+
+- `fd0f7aa` checkpoints the evidence validator/runbook and prior integration ledger only. Subsequent broader ops review found two fail-closed/correlation defects and two measurement-series/freshness gaps; these are being repaired with offline synthetic runner tests. The bounded eight-migration check remains verified; no broad readiness claim follows from that commit.
+- The original three-file actual-Swift exporter and14 immutable v1 corpus files are retained as historical evidence, including the diagnosed synthetic raw1/state1 contradiction. This is not a passing JVM parity corpus. Root's211-test run includes byte-for-byte actual Swift replay of all13 historical default results, while separate old current-source hash gates intentionally remain stale at the three additive APIs. The versioned v2 corpus corrects the synthetic input before native execution and preserves every expected result.
+- The dedicated v2 JVM gate was deliberately stopped with TERM to its verified test-worker PID after **10m46s** (exit143, `root-w4-v2-whole-day-jvm-parity.log`), not reported as a test pass or semantic mismatch. Captured thread evidence shows quadratic test-only identity lookup over28,800 rows; a separate canonical-RR query also consumed substantial CPU. Root is repairing the lookup with linear, exact-identity indexing and negative controls; the production query is independently under review. Frozen expected values, comparison tolerances and source selection policy are unchanged.
+- Root's latest standalone readback run passes101 tests plus4 settings tests and decodes/round-trips the current actual JVM-produced synthetic snapshot (`root-current-context-readback.log`). This does not establish all-field visible consumer acceptance.
+
 ### Integrated native follow-up, 2026-09-18 07:18 local
 
 - Root's fresh macOS app build succeeds; actual app-host execution passes **146 tests, zero failures/skips, 28.170 seconds** (`root-context-publication-app-tests.log/.xcresult`). This includes runtime replacement8, receipt28, queue30, IMU13, generic capture12, retained drain3, consent capacity19/relay10, context adapters5/app publication7, W1 account isolation5 and IMU retirement2. The runtime constructor-race repair immediately publishes an ownerless presentation while retaining the original writer. Separate iOS conditional-path and physical lifecycle acceptance remain open.
