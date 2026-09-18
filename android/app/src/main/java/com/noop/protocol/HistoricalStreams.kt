@@ -542,7 +542,7 @@ private fun decodeWhoop5Historical(frame: ByteArray): Map<String, Any?>? {
  * (`burst_index`, NOT a channel id; PR#553) is carried beside the waveform
  * so durable rows retain their burst boundaries. The footer after [75] remains intentionally unmapped.
  */
-private data class V26Record(val unix: Long, val samples: List<Int>, val burstIndex: Int?)
+private data class V26Record(val unix: Long, val samples: List<Int>, val burstIndex: Int?, val recordIndex: Long?)
 
 private fun decodeWhoop5HistoricalV26(frame: ByteArray): V26Record? {
     if (frame.histU8(8) != PacketType.HISTORICAL_DATA.rawValue) return null
@@ -560,7 +560,7 @@ private fun decodeWhoop5HistoricalV26(frame: ByteArray): V26Record? {
     if (samples.isEmpty()) return null
     val rawBurstIndex = frame.histU8(21)
     return V26Record(unix = unix, samples = samples,
-        burstIndex = rawBurstIndex?.takeIf { it > 0 })
+        burstIndex = rawBurstIndex?.takeIf { it > 0 }, recordIndex = frame.histU32(11))
 }
 
 /**
@@ -805,10 +805,8 @@ fun extractHistoricalStreams(
     val gravity = ArrayList<GravityRow>()
     val events = ArrayList<EventEntry>()
     val battery = ArrayList<BatteryRow>()
-    // v26 PPG samples accumulate across the chunk, then get turned into HR after the loop (#156).
-    val ppgSamples = ArrayList<PpgHr.Sample>()
-    // The RAW v26 waveform kept PER RECORD (one row per strap-second) for durable storage (#156
-    // follow-up) — the same (ts, samples) the estimator above consumes, but grouped per second so it
+    // The RAW v26 waveform kept PER RECORD for durable storage (#156
+    // follow-up) — these exact records feed the estimator, preserving same-second encounter order so it
     // persists as its own `ppgWaveformSample` stream rather than being flattened into the HR buffer.
     val ppgWaveform = ArrayList<PpgWaveformRow>()
     // Every remaining v18 per-second field the decoder produces and this funnel used to discard.
@@ -834,12 +832,11 @@ fun extractHistoricalStreams(
                         // bad-clock strap can't seed the derived-HR estimator with garbage-timestamped samples.
                         val baseTs = correctedWall(rec.unix)
                         if (baseTs != null) {
-                            for (v in rec.samples) ppgSamples.add(PpgHr.Sample(ts = baseTs, value = v))
                             // Persist the raw waveform itself too (#156 follow-up), keyed on the record's
                             // corrected wall-second. Guard on non-empty so a truncated frame that decoded
                             // zero samples never banks an empty row (mirrors the Swift `!samples.isEmpty`).
                             if (rec.samples.isNotEmpty()) {
-                                ppgWaveform.add(PpgWaveformRow(baseTs, rec.samples, rec.burstIndex))
+                                ppgWaveform.add(PpgWaveformRow(baseTs, rec.samples, rec.burstIndex, rec.recordIndex))
                             }
                         }
                     }
@@ -854,6 +851,8 @@ fun extractHistoricalStreams(
                 // the u32 the decoder just carried in the unsigned domain, sending a post-2038 record
                 // negative and straight into the #547 drop below — silently, on Android only. See [histU32].
                 val ts = p.longOrNull("unix")?.let { correctedWall(it) } ?: continue
+                val scalarProvenance = if (family == DeviceFamily.WHOOP5 && p.intOrNull("hist_version") == 18)
+                    com.noop.data.ScalarProvenance.v18(frame, frame.histU32(11)) else null
 
                 // skip startup hr=0 (matches Swift `bpm != 0`).
                 p.intOrNull("heart_rate")?.let { bpm -> if (bpm != 0) hr.add(HrRow(ts, bpm)) }
@@ -887,7 +886,7 @@ fun extractHistoricalStreams(
                 // APPROXIMATE — @57 semantics unverified vs the official app (see decodeWhoop5Historical). (#78)
                 // activity_class@63 (0=still/1=walk/2=run) rides on the same record — null when invalid/absent.
                 p.intOrNull("step_motion_counter")?.let { c ->
-                    steps.add(StepRow(ts, c, activityClass = p.intOrNull("activity_class")))
+                    steps.add(StepRow(ts, c, activityClass = p.intOrNull("activity_class"), provenanceJSON = scalarProvenance))
                 }
                 // Band sleep_state (#175): the strap's OWN @81 high-nibble state (0 wake/1 still/2 asleep/3
                 // up), decoded but DROPPED here until now, so the whole band-state chain (persist → the H7
@@ -900,7 +899,7 @@ fun extractHistoricalStreams(
                 // interpretation at all yet. `state` is unchanged, so #175 / the H7 guard / the Deep
                 // Timeline track are bit-identical.
                 p.intOrNull("sleep_state")?.let { st ->
-                    sleepState.add(SleepStateRow(ts, st, rawByte = p.intOrNull("sleep_state_byte")))
+                    sleepState.add(SleepStateRow(ts, st, rawByte = p.intOrNull("sleep_state_byte"), provenanceJSON = scalarProvenance))
                 }
                 p.intOrNull("resp_rate_raw")?.let { raw -> resp.add(RespRow(ts, raw)) }
                 // `dynAccel` is the strap's OWN gravity-removed motion magnitude
@@ -1063,8 +1062,14 @@ fun extractHistoricalStreams(
 
     // Derive HR from the accumulated v26 PPG waveform (8 s / 24 Hz autocorrelation, conf>=0.3). Empty
     // unless the strap sent v26 records; falls back gracefully (no rows) on noise (#156).
-    val ppgHr = PpgHr.estimate(ppgSamples, subLagInterp = ppgHrSubLagInterp)
-        .map { PpgHrRow(ts = it.ts, bpm = it.bpm, conf = it.conf) }
+    val ppgHr = PpgHr.estimateRecords(ppgWaveform.map { PpgHr.Record(it.ts, it.recordIndex, it.samples) },
+        subLagInterp = ppgHrSubLagInterp).map { selected ->
+            val estimate = selected.estimate
+            PpgHrRow(ts = estimate.ts, bpm = estimate.bpm, conf = estimate.conf,
+                provenanceJSON = com.noop.data.ScalarProvenance.derivedPpg(
+                    selected.records.map { com.noop.data.ScalarProvenance.PpgInput(it.ts, it.recordIndex, it.samples) },
+                    PpgHr.SAMPLE_RATE_HZ, PpgHr.WINDOW_SECONDS, ppgHrSubLagInterp))
+        }
 
     return StreamBatch(
         hr = hr, rr = rr, events = events, battery = battery,
