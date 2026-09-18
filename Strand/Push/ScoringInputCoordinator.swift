@@ -95,8 +95,8 @@ enum ScoringInputRPC {
 final class ScoringInputCoordinator: ObservableObject {
     typealias AdmissionCheck = @Sendable () -> Bool
     struct Dependencies: Sendable {
-        let isCurrent: @MainActor @Sendable (AccountSessionContext) -> Bool
-        let canUpload: @MainActor @Sendable () -> Bool
+        var isCurrent: @MainActor @Sendable (AccountSessionContext) -> Bool
+        var canUpload: @MainActor @Sendable () -> Bool
         var openJournal: @Sendable (AccountStorageLayout, StoreWriteFence) async throws -> ScoringInputJournal = {
             try ScoringInputJournal(layout: $0, fence: $1)
         }
@@ -126,6 +126,8 @@ final class ScoringInputCoordinator: ObservableObject {
     private var operationID: UUID?
     private var active = true
     private var reconcileRequested = false
+    private var preferenceAdmissionBusy = false
+    private var preferenceAdmissionWaiters: [CheckedContinuation<Void, Never>] = []
     private(set) var preparationWaiterCount = 0
 
     init(context: AccountSessionContext, layout: AccountStorageLayout, dependencies: Dependencies,
@@ -183,6 +185,65 @@ final class ScoringInputCoordinator: ObservableObject {
         guard current else { return }
         self.status = status
         reconcile()
+    }
+
+    func preferenceProjection() async throws -> ScoringPreferenceProjection {
+        let journal = try await readyJournal()
+        guard current else { throw ScoringInputJournal.Failure.retired }
+        return try await journal.committedPreferenceProjection()
+    }
+
+    enum PreferenceMaintenancePoint { case beforeCompaction, afterCompaction }
+
+    private func acquirePreferenceAdmission() async {
+        if preferenceAdmissionBusy {
+            await withCheckedContinuation { preferenceAdmissionWaiters.append($0) }
+        } else { preferenceAdmissionBusy = true }
+    }
+
+    private func releasePreferenceAdmission() {
+        if preferenceAdmissionWaiters.isEmpty { preferenceAdmissionBusy = false }
+        else { preferenceAdmissionWaiters.removeFirst().resume() }
+    }
+
+    func admitPreferenceIntent(_ intent: ScoringPreferenceIntent,
+                               allowing: @escaping @Sendable () -> Bool,
+                               at: (@Sendable (ScoringInputJournal.PreferenceCommitPoint) -> Void)? = nil,
+                               atMaintenance: ((PreferenceMaintenancePoint) async -> Void)? = nil) async throws -> ScoringPreferenceAdmission {
+        await acquirePreferenceAdmission()
+        defer { releasePreferenceAdmission() }
+        guard current, intent.context == context else { throw ScoringInputJournal.Failure.retired }
+        try Task.checkCancellation()
+        guard allowing() else { throw ScoringInputJournal.Failure.held }
+        // The caller already captured its ordered permit. Never relay and acquire a newer one here.
+        let journal = try await readyJournal()
+        guard current else { throw ScoringInputJournal.Failure.retired }
+        let allows = dependencies.allowsChange
+        let permitted: @Sendable () -> Bool = {
+            allowing() && (intent.profile.map(allows) ?? true) && (intent.config.map(allows) ?? true)
+        }
+        let receipt: ScoringPreferenceAdmission
+        do { receipt = try await journal.admitPreferenceIntent(intent, allowing: permitted, at: at) }
+        catch ScoringInputJournal.Failure.storageLimit {
+            // Try exact replay before maintenance. A failed admission has no receipt to compact.
+            await atMaintenance?(.beforeCompaction)
+            guard current else { throw ScoringInputJournal.Failure.retired }
+            try Task.checkCancellation()
+            guard permitted() else { throw ScoringInputJournal.Failure.held }
+            let removed = try await journal.compactPreferenceIntents(limit: 128)
+            await atMaintenance?(.afterCompaction)
+            guard current else { throw ScoringInputJournal.Failure.retired }
+            try Task.checkCancellation()
+            guard permitted() else { throw ScoringInputJournal.Failure.held }
+            guard removed > 0 else { throw ScoringInputJournal.Failure.storageLimit }
+            receipt = try await journal.admitPreferenceIntent(intent, allowing: permitted, at: at)
+        }
+        // A later cancellation/status refresh cannot turn a committed receipt into rejection.
+        if current {
+            if let next = try? await journal.status(), current { status = next }
+            reconcile()
+        }
+        return receipt
     }
 
     /// Called only by the owner-bound consent relay, without recursively invoking admission.
@@ -371,23 +432,38 @@ extension ScoringInputRPC.Dependencies {
     }
 }
 
-extension ScoringInputCoordinator {
-    convenience init(context: AccountSessionContext, layout: AccountStorageLayout,
+extension ScoringInputCoordinator.Dependencies {
+    static func live(context: AccountSessionContext,
                      allowsChange: @escaping @Sendable (ScoringInputChange) -> Bool = {
                          [.profile, .config, .sleepEdit].contains($0.kind)
-                     }) {
-        self.init(context: context, layout: layout, dependencies: .init(
-            isCurrent: { CloudAuthClient.isCurrent($0) }, canUpload: {
+                     }, nativePreferenceCurrent: @escaping @Sendable (AccountSessionContext) -> Bool = {
+                         CloudAuthClient.isCurrent($0)
+                     }) -> Self {
+        Self(isCurrent: { nativePreferenceCurrent($0) }, canUpload: {
                 guard CloudPushSettings.ready else { return false }
                 #if os(iOS)
                 return CloudPushNetworkPolicy.isNetworkAvailable(wifiOnly: CloudPushSettings.wifiOnly)
                 #else
                 return true
                 #endif
+            }, openJournal: { layout, fence in
+                // CloudAuthClient delegates to the NSRecursiveLock-protected identity controller.
+                // This native DB predicate must not capture a MainActor-only runtime callback.
+                try ScoringInputJournal(layout: layout, fence: fence, preferenceContext: context,
+                    isPreferenceContextCurrent: nativePreferenceCurrent)
             }, head: { try await ScoringInputRPC.head($0, context: $1, dependencies: .live(context: $1, allowsChange: allowsChange)) },
             send: { try await ScoringInputRPC.send($0, context: $1, dependencies: .live(context: $1, allowsChange: allowsChange)) }, didSettle: { _ in
                 NotificationCenter.default.post(name: ServerScoreRepository.refreshRequested, object: nil)
-            }, allowsChange: allowsChange))
+            }, allowsChange: allowsChange)
+    }
+}
+
+extension ScoringInputCoordinator {
+    convenience init(context: AccountSessionContext, layout: AccountStorageLayout,
+                     allowsChange: @escaping @Sendable (ScoringInputChange) -> Bool = {
+                         [.profile, .config, .sleepEdit].contains($0.kind)
+                     }) {
+        self.init(context: context, layout: layout, dependencies: .live(context: context, allowsChange: allowsChange))
     }
 }
 #endif
