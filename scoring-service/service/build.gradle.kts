@@ -28,7 +28,32 @@ tasks.withType<Test>().configureEach {
     useJUnit()
     // Migration-only edits must rerun the real database tests.
     inputs.files(fileTree("../../supabase/migrations") { include("*.sql") })
+    // Root's pinned actual-Swift vectors must invalidate cached JVM parity results.
+    inputs.files(fileTree("../../Tests/Fixtures") { include("context-metrics-swift-v1.json") })
+    providers.environmentVariable("W4_SWIFT_AUX_FIXTURE_DIR").orNull?.let { path ->
+        inputs.dir(path)
+        environment("W4_SWIFT_AUX_FIXTURE_DIR",path)
+    }
     maxParallelForks = 1
+}
+
+tasks.named<Test>("test") {
+    // The external Swift corpus has its own mandatory, non-skipping gate.
+    exclude("**/WholeDaySwiftParityTest.class")
+}
+
+tasks.register<Test>("wholeDaySwiftParity") {
+    group = "verification"
+    description = "Compare actual-Swift whole-day selections and outputs; missing/stale corpus fails."
+    testClassesDirs = sourceSets["test"].output.classesDirs
+    classpath = sourceSets["test"].runtimeClasspath
+    include("**/WholeDaySwiftParityTest.class")
+    val corpus = providers.environmentVariable("W4_SWIFT_DAY_FIXTURE_DIR")
+        .orElse(file("../../Tests/Fixtures/w4-whole-day-swift-v1").absolutePath)
+    environment("W4_SWIFT_DAY_FIXTURE_DIR", corpus.get())
+    inputs.files(fileTree(corpus.get()))
+    // Source hashes are checked against the current dirty Swift worktree on every invocation.
+    outputs.upToDateWhen { false }
 }
 
 tasks.named<JavaExec>("run") {
