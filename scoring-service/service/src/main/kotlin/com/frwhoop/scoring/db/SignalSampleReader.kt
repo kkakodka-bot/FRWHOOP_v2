@@ -7,12 +7,16 @@ import com.noop.data.GravitySample
 import com.noop.data.HrSample
 import com.noop.data.RespSample
 import com.noop.data.RrInterval
+import com.noop.data.StepSample
+import com.noop.data.SkinTempSample
+import com.noop.data.Spo2Sample
 import com.noop.protocol.DeviceFamily
 import java.sql.Connection
 import java.util.UUID
 
 /** Maps Postgres `noop_*` projection rows into the Kotlin twin's on-device entity shapes. */
-class SignalSampleReader(private val db: PostgresClient) : ScoreInputProvider {
+class SignalSampleReader(private val db: PostgresClient,
+                         private val auxiliaryObjects: AuxiliaryObjectReader = AuxiliaryObjectReader(null)) : ScoreInputProvider {
 
     data class DayInputs(
         val userId: UUID,
@@ -31,17 +35,44 @@ class SignalSampleReader(private val db: PostgresClient) : ScoreInputProvider {
         val events: List<EventRow>,
         val deviceFamily: DeviceFamily,
         val timezone: String = "UTC",
-    )
+        val history: HistoryInputReader.Day = HistoryInputReader.Day(),
+        val steps: List<StepSample> = emptyList(),
+        val skinTemp: List<SkinTempSample> = emptyList(),
+        val spo2: List<Spo2Sample> = emptyList(),
+        val bandSleepState: List<Pair<Long,Int>> = emptyList(),
+        val v18Aux: List<com.noop.data.V18AuxRow> = emptyList(),
+        val auxiliaryGaps: Set<String> = emptySet(),
+        val externalDeviceId: String = deviceId,
+        val skinTempAnchorRaw: Double? = null,
+        val legacyWorkouts: List<LegacyWorkoutReader.Workout> = emptyList(),
+        val scalarInputs: ScalarInputReader.Result? = null,
+    ) {
+        val isOura get()=com.noop.data.DeviceBrandCatalog.isOura(externalDeviceId)
+        val scoringResp get()=if(isOura) emptyList() else resp
+        val vendorResp get()=if(isOura) resp else emptyList()
+    }
 
-    override fun loadDay(userId: UUID, day: String, deviceId: UUID): DayInputs? =
+    override fun loadDay(userId: UUID, day: String, deviceId: UUID): DayInputs? = loadDay(userId,day,deviceId,false)
+    override fun loadHistoricalDay(userId: UUID, day: String, deviceId: UUID): DayInputs? = loadDay(userId,day,deviceId,true)
+    private fun loadDay(userId: UUID, day: String, deviceId: UUID, historical: Boolean): DayInputs? =
         db.withConnection { conn ->
             conn.transactionIsolation = Connection.TRANSACTION_REPEATABLE_READ
             conn.autoCommit = false
             try {
             val deviceIdText = deviceId.toString()
             if (!deviceExistsForUser(conn, userId, deviceId)) return@withConnection null
-            val profileRow = loadProfile(conn, userId, deviceId)
+            val history = HistoryInputReader.load(conn, userId, deviceId, day)
+            val legacyProfile = loadProfile(conn, userId, deviceId)
+            // Once a versioned profile journal exists, absence as-of D is UNKNOWN/default, not
+            // permission to borrow the mutable current profile (which may describe the future).
+            val profileRow = if (historical || history.profileJournalExists) legacyProfile.copy(
+                profile=history.effectiveProfile(),zoneId=UserDayBounds.parseZone(history.timezone)) else legacyProfile
             val bounds = UserDayBounds.forDay(day, profileRow.zoneId)
+            val scalars=ScalarInputReader.load(conn,userId,deviceId,bounds.nightLo,bounds.nightHi,historical)
+            val auxiliary = if(history.configuration.optBoolean("spo2CandidateDisplayEnabled",false) &&
+                !com.noop.data.DeviceBrandCatalog.isOura(profileRow.externalDeviceId))
+                auxiliaryObjects.load(conn,userId,deviceId,bounds.nightLo,bounds.nightHi)
+                else AuxiliaryObjectReader.Result(emptyList(),emptySet())
 
             DayInputs(
                 userId = userId,
@@ -60,6 +91,19 @@ class SignalSampleReader(private val db: PostgresClient) : ScoreInputProvider {
                 events = loadEvents(conn, userId, deviceIdText, bounds.nightLo, bounds.nightHi),
                 deviceFamily = profileRow.deviceFamily,
                 timezone = profileRow.zoneId.id,
+                history = history,
+                steps = scalars.steps,
+                skinTemp = loadSkinTemp(conn,userId,deviceId,bounds.nightLo,bounds.nightHi),
+                spo2 = loadSpo2(conn,userId,deviceId,bounds.nightLo,bounds.nightHi),
+                bandSleepState = scalars.bandState,
+                v18Aux = auxiliary.rows,
+                auxiliaryGaps = auxiliary.gaps,
+                externalDeviceId = profileRow.externalDeviceId,
+                skinTempAnchorRaw = if(historical && profileRow.deviceFamily==DeviceFamily.WHOOP4)
+                    loadSkinAnchor(conn,userId,deviceId,java.time.LocalDate.parse(day).minusDays(20).atStartOfDay(profileRow.zoneId).toEpochSecond()-30*3600,bounds.dayHi)
+                    else null,
+                legacyWorkouts = if(historical) LegacyWorkoutReader.load(conn,userId,deviceId,bounds.nightLo,bounds.dayHi) else emptyList(),
+                scalarInputs = scalars,
             )
             } finally {
                 conn.rollback()
@@ -89,10 +133,34 @@ class SignalSampleReader(private val db: PostgresClient) : ScoreInputProvider {
             }
         }
 
+    private fun <T> stream(c:Connection,query:String,owner:UUID,device:UUID,lo:Long,hi:Long,
+                           decode:(java.sql.ResultSet)->T):List<T> = c.prepareStatement(query).use { s ->
+        s.setObject(1,owner); s.setObject(2,device); s.setLong(3,lo); s.setLong(4,hi)
+        s.executeQuery().use { r -> buildList { while(r.next()) add(decode(r)) } }
+    }
+    private fun loadSkinAnchor(c:Connection,u:UUID,d:UUID,lo:Long,hi:Long):Double? = c.prepareStatement("""
+        select percentile_cont(0.5) within group(order by raw)::double precision
+        from noop_skin_temp_samples where user_id=? and device_id=? and ts between ? and ? and raw between 550 and 2040
+        having count(*)>=100
+    """.trimIndent()).use { s ->
+        s.setObject(1,u);s.setObject(2,d);s.setLong(3,lo);s.setLong(4,hi)
+        s.executeQuery().use { r -> if(r.next()) r.getDouble(1) else null }
+    }
+    private fun loadSkinTemp(c:Connection,u:UUID,d:UUID,lo:Long,hi:Long) = stream(c,
+        """select ts,raw,"aux1Raw","aux2Raw" from noop_skin_temp_samples where user_id=? and device_id=? and ts between ? and ? order by ts""",u,d,lo,hi) {
+        SkinTempSample(d.toString(),it.getLong(1),it.getInt(2),aux1Raw=it.getInt(3).let { v -> if(it.wasNull()) null else v },
+            aux2Raw=it.getInt(4).let { v -> if(it.wasNull()) null else v })
+    }
+    private fun loadSpo2(c:Connection,u:UUID,d:UUID,lo:Long,hi:Long) = stream(c,
+        "select ts,red,ir from noop_spo2_samples where user_id=? and device_id=? and ts between ? and ? order by ts",u,d,lo,hi) {
+        Spo2Sample(d.toString(),it.getLong(1),it.getInt(2),it.getInt(3))
+    }
+
     private data class ProfileRow(
         val profile: UserProfile,
         val zoneId: java.time.ZoneId,
         val deviceFamily: DeviceFamily,
+        val externalDeviceId: String,
     )
 
     private fun deviceExistsForUser(conn: Connection, userId: UUID, deviceId: UUID): Boolean =
@@ -117,7 +185,8 @@ class SignalSampleReader(private val db: PostgresClient) : ScoreInputProvider {
               coalesce(p.weight_kg, 70)::double precision as weight_kg,
               coalesce(p.height_cm, 170)::double precision as height_cm,
               coalesce(p.timezone, 'UTC') as timezone_name,
-              coalesce(d.device_family, 'whoop5') as device_family
+              coalesce(d.device_family, 'whoop5') as device_family,
+              coalesce(d.external_device_id,d.id::text) as external_device_id
             from public.profiles p
             join public.devices d on d.user_id = p.id and d.id = ?
             where p.id = ?
@@ -127,7 +196,7 @@ class SignalSampleReader(private val db: PostgresClient) : ScoreInputProvider {
             ps.setObject(2, userId)
             ps.executeQuery().use { rs ->
                 if (!rs.next()) {
-                    return ProfileRow(UserProfile(), UserDayBounds.parseZone("UTC"), DeviceFamily.WHOOP5)
+                    return ProfileRow(UserProfile(), UserDayBounds.parseZone("UTC"), DeviceFamily.WHOOP5,deviceId.toString())
                 }
                 val zoneId = UserDayBounds.parseZone(rs.getString("timezone_name"))
                 val family = when (rs.getString("device_family")?.lowercase()) {
@@ -143,6 +212,7 @@ class SignalSampleReader(private val db: PostgresClient) : ScoreInputProvider {
                     ),
                     zoneId = zoneId,
                     deviceFamily = family,
+                    externalDeviceId = rs.getString("external_device_id"),
                 )
             }
         }
@@ -185,30 +255,35 @@ class SignalSampleReader(private val db: PostgresClient) : ScoreInputProvider {
         toTs: Long,
     ): List<RrInterval> = conn.prepareStatement(
         """
-        select ts, "rrMs", seq, ord, "srcChannel", "tsSuspect"
-        from public.noop_rr_intervals r
-        where user_id = ? and device_id::text = ? and ts between ? and ?
-          and ("tsSuspect" is null or "tsSuspect" <> 1)
-          and ("srcChannel" is null or "srcChannel" <> 110)
-          and (not exists(select 1 from public.devices d where d.id=r.device_id and
-                 (lower(coalesce(d.device_family,'')) in ('whoop5','whoop5_mg','whoopmg','whoop 5.0','5.0','mg')
-                   or (d.device_family is null and exists(select 1 from public.noop_rr_intervals e
-                     where e.user_id=r.user_id and e.device_id=r.device_id and e.ts between ? and ?
-                       and e."srcChannel" in (5,6,7) and (e."tsSuspect" is null or e."tsSuspect"<>1)))))
-               or "srcChannel"=(select min(q."srcChannel") from public.noop_rr_intervals q
-                 where q.user_id=r.user_id and q.device_id=r.device_id and q.ts between ? and ?
-                   and q."srcChannel" in (5,7) and (q."tsSuspect" is null or q."tsSuspect"<>1)))
-        order by ts asc, ord asc nulls first, "rrMs" asc, seq asc
+        with rr_window as materialized (
+          select device_id, ts, "rrMs", seq, ord, "srcChannel", "tsSuspect"
+          from public.noop_rr_intervals
+          where user_id = ? and device_id::text = ? and ts between ? and ?
+            and ("tsSuspect" is null or "tsSuspect" <> 1)
+            and ("srcChannel" is null or "srcChannel" <> 2)
+        ), rr_policy as materialized (
+          select coalesce(bool_or("srcChannel" in (5,6,7)), false) as has_modern,
+                 min("srcChannel") filter (where "srcChannel" in (5,7)) as canonical
+          from rr_window
+        ), decision as materialized (
+          select p.canonical,
+                 exists(select 1 from public.devices d
+                   where d.id=(select w.device_id from rr_window w limit 1)
+                     and (lower(coalesce(d.device_family,'')) in
+                            ('whoop5','whoop5_mg','whoopmg','whoop 5.0','5.0','mg')
+                       or (d.device_family is null and p.has_modern))) as canonical_only
+          from rr_policy p
+        )
+        select r.ts, r."rrMs", r.seq, r.ord, r."srcChannel", r."tsSuspect"
+        from rr_window r cross join decision p
+        where not p.canonical_only or r."srcChannel"=p.canonical
+        order by r.ts asc, r.ord asc nulls first, r."rrMs" asc, r.seq asc
         """.trimIndent(),
     ).use { ps ->
         ps.setObject(1, userId)
         ps.setString(2, deviceId)
         ps.setLong(3, fromTs)
         ps.setLong(4, toTs)
-        ps.setLong(5, fromTs)
-        ps.setLong(6, toTs)
-        ps.setLong(7, fromTs)
-        ps.setLong(8, toTs)
         ps.executeQuery().use { rs ->
             buildList {
                 while (rs.next()) {

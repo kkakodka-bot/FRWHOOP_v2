@@ -8,4 +8,6 @@ import java.util.UUID
  */
 interface ScoreInputProvider {
     fun loadDay(userId: UUID, day: String, deviceId: UUID): SignalSampleReader.DayInputs?
+    fun loadHistoricalDay(userId: UUID, day: String, deviceId: UUID): SignalSampleReader.DayInputs? =
+        loadDay(userId,day,deviceId)
 }

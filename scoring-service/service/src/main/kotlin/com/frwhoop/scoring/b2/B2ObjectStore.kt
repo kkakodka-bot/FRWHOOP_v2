@@ -12,6 +12,7 @@ import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
+import java.util.concurrent.TimeUnit
 
 /** Minimal SigV4 PUT for B2's S3-compatible API (path-style, same as Edge `s3.ts`). */
 class B2ObjectStore(
@@ -21,8 +22,33 @@ class B2ObjectStore(
     interface PutClient {
         fun putObject(key: String, body: ByteArray, contentType: String): PutResult
     }
+    fun interface ReadClient {
+        fun readObject(bucket: String, key: String, maxBytes: Int): ByteArray
+    }
 
     data class PutResult(val etag: String?, val bytes: Int)
+
+    private val readHttp = http.newBuilder().followRedirects(false).followSslRedirects(false)
+        .callTimeout(30, TimeUnit.SECONDS).readTimeout(20, TimeUnit.SECONDS).build()
+
+    /** Only our configured bucket/endpoint; object metadata can never choose a download URL. */
+    fun readObject(bucket: String, key: String, maxBytes: Int): ByteArray {
+        require(bucket == config.bucket && maxBytes in 1..64 * 1024 * 1024)
+        require(key.isNotBlank() && !key.startsWith('/') && key.split('/').none { it == "." || it == ".." })
+        val signed = sign("GET", key, ByteArray(0), null)
+        val request = Request.Builder().url(signed.url).get().apply {
+            signed.headers.forEach { (name, value) -> header(name, value) }
+            header("Accept-Encoding", "identity")
+        }.build()
+        readHttp.newCall(request).execute().use { response ->
+            check(response.code == 200) { "candidate_object_http_${response.code}" }
+            val body = checkNotNull(response.body) { "candidate_object_body_missing" }
+            check(body.contentLength() <= maxBytes) { "candidate_object_size_limit" }
+            val bytes = body.byteStream().readNBytes(maxBytes + 1)
+            check(bytes.size <= maxBytes) { "candidate_object_size_limit" }
+            return bytes
+        }
+    }
 
     fun putObject(key: String, body: ByteArray, contentType: String): PutResult {
         val signed = signPut(key, body, contentType)
@@ -42,6 +68,10 @@ class B2ObjectStore(
     }
 
     internal fun signPut(key: String, body: ByteArray, contentType: String): SignedRequest {
+        return sign("PUT",key,body,contentType)
+    }
+
+    private fun sign(method: String, key: String, body: ByteArray, contentType: String?): SignedRequest {
         val now = Instant.now()
         val amzDate = AMZ_DATE.format(now.atOffset(ZoneOffset.UTC))
         val dateStamp = amzDate.substring(0, 8)
@@ -52,14 +82,16 @@ class B2ObjectStore(
             "host" to host,
             "x-amz-content-sha256" to payloadHash,
             "x-amz-date" to amzDate,
-            "content-type" to contentType,
-            "content-length" to body.size.toString(),
         )
+        if(contentType != null) {
+            headers["content-type"] = contentType
+            headers["content-length"] = body.size.toString()
+        }
         val signedHeaderNames = headers.keys.sorted()
         val canonicalHeaders = signedHeaderNames.map { "$it:${headers[it]}\n" }.joinToString("")
         val signedHeaders = signedHeaderNames.joinToString(";")
         val canonicalRequest = listOf(
-            "PUT",
+            method,
             uri,
             "",
             canonicalHeaders,
