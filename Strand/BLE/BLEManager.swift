@@ -1413,6 +1413,8 @@ public final class BLEManager: NSObject, ObservableObject {
         // before any BLE data arrives.
         self.collector = nil
         super.init()
+        state.selectBatteryDevice(deviceId)
+        configureCollectorFamily()
         guard startCentral else { return }
         #if DEBUG
         // Hosted regression tests must not connect to a nearby physical strap.
@@ -1478,6 +1480,7 @@ public final class BLEManager: NSObject, ObservableObject {
     }
 
     private let storeBootstrap = BackfillStoreBootstrap()
+    private var batteryHistoryStore: WhoopStore?
 
     func bootstrapStore() async {
         await storeBootstrap.run { [self] in await performBootstrapStore() }
@@ -1511,6 +1514,7 @@ public final class BLEManager: NSObject, ObservableObject {
         // crash and no behaviour change. registryWriter is nonisolated/Sendable (the Pool manages
         // its own concurrency).
         let registry = DeviceRegistryStore(dbQueue: store.registryWriter)
+        batteryHistoryStore = store
         self.registryStore = registry
         seedLastSyncFromActiveStrap(registry: registry)
         if let activeId = try? registry.activeDeviceId(), !activeId.isEmpty {
@@ -1685,24 +1689,23 @@ public final class BLEManager: NSObject, ObservableObject {
             }
         }
 
-        // Battery "~X days left" seed (#7): `LiveState.batterySamples` is fed ONLY by live BLE events, so
-        // after a reconnect the runtime estimate restarted from an empty buffer and ignored the discharge
-        // history already on disk (Android seeds from its persisted battery table over a 14-day window;
-        // iOS/macOS did not = divergence). Read the persisted SoC series for the active device over the last
-        // 14 days and seed the live buffer once the store is up. The setter de-dupes against any points
-        // already banked from live events this session, so a seed that races the first live reading is safe.
-        // nil-SoC rows are dropped here (the buffer is non-optional %); a read failure is non-fatal, the
-        // estimate just cold-starts as before.
-        let seedNow = Int(Date().timeIntervalSince1970)
-        let fourteenDays = 14 * 24 * 3600
-        if let rows = try? await store.batterySamples(
-            deviceId: deviceId, from: seedNow - fourteenDays, to: seedNow, limit: 2000) {
-            let seed = rows.compactMap { row -> (ts: Int, soc: Double)? in
-                guard let soc = row.soc else { return nil }
-                return (ts: row.ts, soc: soc)
-            }
-            state.seedBatterySamples(seed)
-        }
+        if whoopIsActiveDevice { state.selectBatteryDevice(deviceId) }
+        await refreshBatteryHistory()
+    }
+
+    private func refreshBatteryHistory() async {
+        guard whoopIsActiveDevice, let store = batteryHistoryStore,
+              state.batteryHistoryDeviceId == deviceId else { return }
+        let id = deviceId
+        let generation = state.batteryHistoryGeneration
+        let now = Int(Date().timeIntervalSince1970)
+        guard let rows = try? await store.recentBatterySamples(
+            deviceId: id, from: now - LiveState.batteryHistorySeconds, to: now,
+            limit: LiveState.maxBatterySamples),
+              deviceId == id, state.batteryHistoryDeviceId == id,
+              state.batteryHistoryGeneration == generation else { return }
+        state.seedBatterySamples(rows.compactMap { row in row.soc.map { (ts: row.ts, soc: $0) } }, now: now)
+        state.emitBatteryTrace()
     }
 
     /// Designated initializer for testing and preview use: accepts a pre-built Collector.
@@ -1712,6 +1715,8 @@ public final class BLEManager: NSObject, ObservableObject {
         self.router = FrameRouter(state: state)
         self.collector = collector
         super.init()
+        state.selectBatteryDevice(deviceId)
+        configureCollectorFamily()
         // Deliberately NOT seeded from the global key here. It belongs to whichever strap synced last,
         // which on a two-strap install is not the one the screens are scoped to — the misattribution this
         // whole change removes. `seedLastSyncFromActiveStrap` fills it from the ACTIVE strap once the
@@ -1838,11 +1843,6 @@ public final class BLEManager: NSObject, ObservableObject {
         // latency. A plain Date() assignment, no behaviour change; only read behind the .connection gate.
         connectAttemptStartedAt = Date()
         selectedModel = model
-        // Battery "~X days left" fallback (#713): a 5/MG runs far longer than a 4.0, so point the estimator's
-        // rated-life fallback at the connected family. The Today badge reads state.batteryEstimate (which uses
-        // state.batteryRatedHours); without this it always assumed WHOOP 4.0 (108h).
-        state.batteryRatedHours = model.deviceFamily == .whoop5
-            ? BatteryEstimator.ratedLifeHoursWhoop5 : BatteryEstimator.ratedLifeHoursWhoop4
         // Frame the inbound stream for the chosen family (WHOOP 4.0 CRC8 vs WHOOP 5.0 CRC16/puffin)
         // and tell the router which decoder to use. Fresh per connection so no stale bytes carry over.
         reassembler = CharacteristicReassembler(family: model.deviceFamily)
@@ -2215,12 +2215,15 @@ public final class BLEManager: NSObject, ObservableObject {
     /// path invokes it, so with one WHOOP the id stays "my-whoop" throughout.
     public func setActiveDeviceId(_ id: String) {
         guard !id.isEmpty else { return }
+        let changed = deviceId != id || state.batteryHistoryDeviceId != id
         deviceId = id
+        state.selectBatteryDevice(id)
         collector?.deviceId = id
         Task { await backfillActor?.setDeviceId(id) }
         // #1881: the alarm readback attributes through the router's own copy (#1706), which this used to
         // leave pointing at the previous device. Same field, same conflation, one more consumer.
         router.deviceId = id
+        if changed { Task { @MainActor in await self.refreshBatteryHistory() } }
     }
 
     /// Record whether a WHOOP is the active device (#1881). Called from the SAME two closures the
@@ -3180,6 +3183,9 @@ public final class BLEManager: NSObject, ObservableObject {
     /// called from connect() AND after the async store bootstrap builds the collector, so the
     /// configuration lands regardless of which finishes first.
     private func configureCollectorFamily() {
+        // Restore and scan-fallback paths also call here; connectCore alone misses both.
+        state.batteryRatedHours = selectedModel.deviceFamily == .whoop5
+            ? BatteryEstimator.ratedLifeHoursWhoop5 : BatteryEstimator.ratedLifeHoursWhoop4
         collector?.family = selectedModel.deviceFamily
         if selectedModel.deviceFamily == .whoop5 {
             let now = Int(Date().timeIntervalSince1970)
@@ -3727,6 +3733,7 @@ public final class BLEManager: NSObject, ObservableObject {
         else if consecutiveAutoContinues == 0 { consecutiveEmptyOffloads += 1 }
         if reason == "HISTORY_COMPLETE" {
             state.lastSyncedAt = Date().timeIntervalSince1970
+            Task { @MainActor in await self.refreshBatteryHistory() }
             // #77 / #91: a sync that COMPLETED but discarded records must not read as a clean
             // "History synced" — the wording distinguishes bytes saved on this Mac from bytes the
             // full archive could not preserve, so "saved" is never claimed falsely.
