@@ -27,6 +27,7 @@ xcrun swiftc -D SCORING_INPUT_NATIVE_TESTS -D ACCOUNT_PREFERENCES_NATIVE_ONLY \
   Strand/App/AccountPreferences.swift Strand/Data/Profile.swift Strand/Data/BehaviorStore.swift \
   Strand/System/Platform.swift Strand/System/MacActions.swift Strand/Screens/ProfileAvatarView.swift \
   StrandTests/ScoringPreferenceRuntimeTests.swift StrandTests/AccountAlgorithmChoicesTests.swift StrandTests/AccountPreferenceIsolationTests.swift \
+  StrandTests/ScoringPreferencePublicationFenceTests.swift \
   Tests/ScoringPreferenceRuntimeNative/Fixtures.swift Tests/ScoringPreferenceRuntimeNative/CrashProbe.swift Tests/ScoringPreferenceRuntimeNative/main.swift \
   "$runtimeStore"/GRDB.build/*.swift.o "$runtimePush"/NoopPush.build/*.swift.o \
   "$runtimeStore"/WhoopStore.build/*.swift.o "$runtimeStore"/WhoopProtocol.build/*.swift.o "$runtimeStore"/OuraProtocol.build/*.swift.o \

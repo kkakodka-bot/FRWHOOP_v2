@@ -63,6 +63,7 @@ final class ScoringPreferenceRuntime: @MainActor ObservableObject {
     @Published private(set) var pendingCount = 0
     @Published private(set) var pendingBytes = 0
     @Published private(set) var lastError: ScoringPreferenceTicket.Failure?
+    var willAccept: (() -> Void)?
     var onAccepted: ((ScoringPreferenceSnapshot, Publication) -> Void)?
     private let seed: ScoringPreferenceSnapshot
     private let inputs: ScoringInputCoordinator
@@ -168,10 +169,11 @@ final class ScoringPreferenceRuntime: @MainActor ObservableObject {
     func retire() {
         guard active else { return }
         fence.invalidate(); active = false; worker?.cancel()
+        willAccept?()
         // An in-flight transaction must report its real result, including a commit which won
         // the retirement race. It may never publish back into this retired facade.
         for entry in queue where entry.ticket !== inFlight { entry.ticket.update(.held(.retired)) }
-        queue.removeAll(); updateCounts(); acceptedStorage = nil; onAccepted = nil
+        queue.removeAll(); updateCounts(); acceptedStorage = nil; willAccept = nil; onAccepted = nil
         objectWillChange.send()
     }
 
@@ -221,6 +223,9 @@ final class ScoringPreferenceRuntime: @MainActor ObservableObject {
     }
 
     private func publish(_ snapshot: ScoringPreferenceSnapshot, reason: Publication) {
+        guard current else { return }
+        // Revoke work admitted under the previous value before observers see this publication.
+        willAccept?()
         guard current else { return }
         objectWillChange.send()
         guard current else { return }
