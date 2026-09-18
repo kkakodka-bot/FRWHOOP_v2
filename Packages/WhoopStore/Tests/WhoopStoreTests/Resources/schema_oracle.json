@@ -1,6 +1,6 @@
 {
   "_readme": "SHARED Room<->GRDB SCHEMA ORACLE (#775). Two byte-identical copies: Packages/WhoopStore/Tests/WhoopStoreTests/Resources/schema_oracle.json and android/app/src/test/resources/schema_oracle.json. SchemaOracleTests.swift compares GRDB's PRAGMA table_info/index_list against it; SchemaOracleTest.kt compares Room's exported schema JSON against it. `columns` is the iOS/GRDB shape in GRDB column order (macOS is the reference implementation); every way Android differs is spelled out in an `android` / `iosAbsent` / `androidColumnOrder` override naming a key in `divergenceReasons`. Adding a column, reordering one, or changing a type/nullability on one platform only fails both suites until it is either fixed or written down here.",
-  "roomVersion": 42,
+  "roomVersion": 44,
   "grdbMigrations": [
     "v1",
     "v2",
@@ -69,6 +69,333 @@
     "ppg-record-index-default": "Both platforms preserve device/timestamp/recordIndex identity. Room v40 declares DEFAULT -1 for the explicit unknown legacy identity; GRDB retains its deployed no-default column. Both writers bind the index explicitly, and the wire maps unknown to null."
   },
   "tables": {
+    "gpsDestinationBarrier": {
+      "platform": "android_only",
+      "reason": "Room44 bounded local control state for a fresh destination commit and checked checkpoint before GPS handoff cleanup. Its value is never a reusable durability receipt or physiological input.",
+      "columns": [
+        {
+          "name": "singleton",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "phase",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": null
+        }
+      ],
+      "primaryKey": ["singleton"],
+      "indices": []
+    },
+    "gpsWorkoutDelivery": {
+      "platform": "android_only",
+      "reason": "Room43 immutable workout-owned captured payload and exact canonical-HR projection witness. Retains ordered workout observations separately from the legacy scalar table; not a cloud receipt or proof of measured physiological provenance.",
+      "columns": [
+        {
+          "name": "deviceId",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "startTs",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "sport",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "namespace",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "projectURL",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "userID",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "capturedGeneration",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "sessionId",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "formatVersion",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "payload",
+          "affinity": "BLOB",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "payloadSha256",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "witness",
+          "affinity": "BLOB",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "witnessSha256",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "captureCount",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "witnessCount",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "retainedBytes",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": null
+        }
+      ],
+      "primaryKey": [
+        "deviceId",
+        "startTs",
+        "sport"
+      ],
+      "indices": []
+    },
+    "localCaptureResource": {
+      "platform": "android_only",
+      "reason": "Room43 local recovery index for immutable Android capture files. Swift uses its account-scoped file journal; this table is not a cloud durability receipt or permission to prune.",
+      "columns": [
+        {
+          "name": "captureId",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "projectURL",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "userID",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "sourceID",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "generation",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "deviceID",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "serverDeviceID",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "producerID",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "format",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "formatVersion",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "relativePath",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "fileSha256",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "fileBytes",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "payloadBytes",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "recordCount",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "memberCount",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": null
+        }
+      ],
+      "primaryKey": [
+        "captureId"
+      ],
+      "indices": []
+    },
+    "localCaptureMember": {
+      "platform": "android_only",
+      "reason": "Room43 exact member/projection index referencing localCaptureResource. The captured file remains authoritative across restore; Swift does not use this Android-local index.",
+      "columns": [
+        {
+          "name": "captureId",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "recordOrdinal",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "routeOrdinal",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "encounterOrdinal",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "receivedAtMs",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "namespace",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "sessionID",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "bucket",
+          "affinity": "INTEGER",
+          "notNull": false,
+          "default": null
+        },
+        {
+          "name": "payloadOffset",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "payloadBytes",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "payloadSha256",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "projectionState",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": null
+        }
+      ],
+      "primaryKey": [
+        "captureId",
+        "recordOrdinal",
+        "routeOrdinal"
+      ],
+      "indices": [
+        {
+          "name": "localCaptureMember_projection",
+          "unique": false,
+          "columns": [
+            "projectionState",
+            "captureId"
+          ]
+        }
+      ]
+    },
     "serverScoreSnapshotCache": {
       "platform": "ios_only",
       "columns": [
