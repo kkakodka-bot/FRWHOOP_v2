@@ -1,9 +1,11 @@
 import Foundation
+import NoopPush
 
 /// Phase 4: server HRV/sleep readback. Default on for this fork; toggled from Settings → Advanced.
 enum ServerScoringSettings {
     static let defaultsKey = "noop.serverScoring"
     static let authEmailKey = "noop.serverScoring.authEmail"
+    static let settingsDidChange = Notification.Name("noop.serverScores.settingsDidChange")
     static let pollIntervalSeconds = 60
     static let staleAfterSeconds = 6 * 60 * 60
     /// Foreground idle push cadence when server scoring is on (spec: 30–60 s).
@@ -11,8 +13,8 @@ enum ServerScoringSettings {
     /// During an active offload, flush push at most once per this interval (spec: ≤10 s).
     static let syncPushIntervalSeconds: TimeInterval = 10
 
-    /// When true, sync/offload must not run a local `analyzeRecent`; VPS scores HRV/sleep.
-    static var skipsSyncCoupledRescore: Bool { isEnabled }
+    /// The local pass still produces Charge/Effort/Rest and other unmigrated fields.
+    static var skipsSyncCoupledRescore: Bool { false }
 
     /// Clear any in-flight deferred rescore debt when server scoring owns the score path.
     @MainActor
@@ -31,6 +33,26 @@ enum ServerScoringSettings {
 
     static func setEnabled(_ enabled: Bool) {
         UserDefaults.standard.set(enabled, forKey: defaultsKey)
+        NotificationCenter.default.post(name: settingsDidChange, object: nil)
+    }
+
+    static func activatedMetrics(scope: AccountScope) -> Set<ServerScoreMetric> {
+        Set((UserDefaults.standard.stringArray(forKey: "noop.serverScores.activated.\(scope.namespace)") ?? [])
+            .compactMap(ServerScoreMetric.init(rawValue:)))
+    }
+
+    static func setActivated(_ metrics: Set<ServerScoreMetric>, scope: AccountScope) {
+        UserDefaults.standard.set(metrics.map(\.rawValue).sorted(), forKey: "noop.serverScores.activated.\(scope.namespace)")
+        NotificationCenter.default.post(name: settingsDidChange, object: nil)
+    }
+
+    static func knownCapabilities(scope: AccountScope) -> Set<ServerScoreMetric> {
+        Set((UserDefaults.standard.stringArray(forKey: "noop.serverScores.capabilities.\(scope.namespace)") ?? [])
+            .compactMap(ServerScoreMetric.init(rawValue:)))
+    }
+
+    static func setKnownCapabilities(_ metrics: Set<ServerScoreMetric>, scope: AccountScope) {
+        UserDefaults.standard.set(metrics.map(\.rawValue).sorted(), forKey: "noop.serverScores.capabilities.\(scope.namespace)")
     }
 
     static var authEmail: String {
@@ -41,13 +63,13 @@ enum ServerScoringSettings {
         UserDefaults.standard.set(email.trimmingCharacters(in: .whitespacesAndNewlines), forKey: authEmailKey)
     }
 
-    /// Supabase project base URL derived from the fleet push endpoint.
+    /// Readback belongs to the configured identity project, independently of permission to upload.
+    /// Auth validates its configuration; canonicalize again before exposing a destination to callers.
+    /// Pausing uploads or withholding upload consent must not restore local metrics over owned cache.
     static func supabaseProjectURL() -> URL? {
-        guard let endpoint = CloudPushSettings.enabledEndpoint()?.url else { return nil }
-        let trimmed = endpoint.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        guard trimmed.hasSuffix("/functions/v1/push") else { return nil }
-        let base = String(trimmed.dropLast("/functions/v1/push".count))
-        return URL(string: base)
+        guard let project = CloudAuthClient.identitySnapshot().projectURL,
+              let canonical = try? AccountScope.canonicalProjectURL(project) else { return nil }
+        return URL(string: canonical)
     }
 
     static func anonKey() -> String? {
