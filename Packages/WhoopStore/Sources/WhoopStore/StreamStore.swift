@@ -10,12 +10,18 @@ public struct BackfillInsertOutcome: Sendable {
     public var counts: (hr: Int, rr: Int, events: Int, battery: Int,
                         spo2: Int, skinTemp: Int, resp: Int, gravity: Int)
     public var markedJobs: Bool
+    /// Newly persisted sensor observations. Events and battery samples do not establish
+    /// historical-data progress; RR provenance is deliberately not counted separately because
+    /// it describes an RR observation already counted by `counts.rr`.
+    public var insertedHistoricalSensorRows: Int
 
     public init(counts: (hr: Int, rr: Int, events: Int, battery: Int,
                          spo2: Int, skinTemp: Int, resp: Int, gravity: Int),
-                markedJobs: Bool) {
+                markedJobs: Bool, insertedHistoricalSensorRows: Int? = nil) {
         self.counts = counts
         self.markedJobs = markedJobs
+        self.insertedHistoricalSensorRows = insertedHistoricalSensorRows
+            ?? (counts.hr + counts.rr + counts.spo2 + counts.skinTemp + counts.resp + counts.gravity)
     }
 }
 
@@ -292,7 +298,8 @@ extension WhoopStore {
         // Banked rows, accumulated across batches so the sweep does not run on every one.
         var v18Written = 0
         var ppgWaveformWritten = 0
-        let result: (counts: (Int, Int, Int, Int, Int, Int, Int, Int), markedJobs: Bool)
+        let result: (counts: (Int, Int, Int, Int, Int, Int, Int, Int), markedJobs: Bool,
+                     insertedHistoricalSensorRows: Int)
             = try syncWrite { db in
             var hr = 0, rr = 0, ev = 0, bat = 0
             var spo2 = 0, skin = 0, resp = 0, grav = 0
@@ -551,7 +558,8 @@ extension WhoopStore {
                     let blob = V18AuxCodec.pack(s)
                     if blob.isEmpty { continue }
                     try stmt.execute(arguments: [deviceId, s.ts, blob])
-                    v18Written += 1
+                    // A replayed historical frame must not consume retention or progress budget.
+                    v18Written += db.changesCount
                 }
                 try recordFrontier("v18Aux", timestamps: streams.v18Aux.map(\.ts))
             }
@@ -577,7 +585,13 @@ extension WhoopStore {
                 }
                 markedJobs = true
             }
-            return (counts: (hr, rr, ev, bat, spo2, skin, resp, grav), markedJobs: markedJobs)
+            // Preserve every independently stored sensor observation for historical progress.
+            // RR provenance and canonical-source rows are derived copies of the RR observation,
+            // so counting them again would falsely advance progress.
+            let historicalSensorRows = hr + rr + spo2 + skin + resp + grav
+                + stepsInserted + sleepStateInserted + ppgHrInserted + ppgWaveformWritten + v18Written
+            return (counts: (hr, rr, ev, bat, spo2, skin, resp, grav), markedJobs: markedJobs,
+                    insertedHistoricalSensorRows: historicalSensorRows)
         }
 
         // Rolling retention is amortised. The delete finds the Nth-newest row by rank, so it walks up to
@@ -622,7 +636,8 @@ extension WhoopStore {
                 ppgWaveformRowsSincePrune[deviceId] = 0
             }
         }
-        return BackfillInsertOutcome(counts: result.counts, markedJobs: result.markedJobs)
+        return BackfillInsertOutcome(counts: result.counts, markedJobs: result.markedJobs,
+                                     insertedHistoricalSensorRows: result.insertedHistoricalSensorRows)
     }
 
     // MARK: - Raw sensor CSV export (diagnostic)
