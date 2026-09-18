@@ -19,6 +19,10 @@ public struct ScalarProvenance: Codable, Equatable, Sendable {
         case ppgACF = "ppg-acf-v1"
         case ppgACFSubLag = "ppg-acf-sublag-v1"
     }
+    public enum InputSelection: String, Codable, Sendable {
+        case lastRecordPerSecond = "last-record-per-second-v1"
+        case concatenateRecordsPerSecond = "concat-records-per-second-v1"
+    }
     public let v: Int
     public let origin: Origin
     public let recordIndex: Int?
@@ -29,13 +33,16 @@ public struct ScalarProvenance: Codable, Equatable, Sendable {
     public let inputStartTs: Int?
     public let inputEndTs: Int?
     public let inputSHA256: String?
+    public let inputSelection: InputSelection?
 
     public init(v: Int = 1, origin: Origin, recordIndex: Int? = nil, frameSHA256: String? = nil,
                 algorithm: Algorithm? = nil, sampleRateHz: Int? = nil, windowSettingSeconds: Int? = nil,
-                inputStartTs: Int? = nil, inputEndTs: Int? = nil, inputSHA256: String? = nil) throws {
+                inputStartTs: Int? = nil, inputEndTs: Int? = nil, inputSHA256: String? = nil,
+                inputSelection: InputSelection? = nil) throws {
         self.v = v; self.origin = origin; self.recordIndex = recordIndex; self.frameSHA256 = frameSHA256
         self.algorithm = algorithm; self.sampleRateHz = sampleRateHz; self.windowSettingSeconds = windowSettingSeconds
         self.inputStartTs = inputStartTs; self.inputEndTs = inputEndTs; self.inputSHA256 = inputSHA256
+        self.inputSelection = inputSelection
         guard v == 1 else { throw ScalarProvenanceError.unsupportedShape }
         let jsonSafeLimit = 9_007_199_254_740_991
         guard [v, recordIndex, sampleRateHz, windowSettingSeconds, inputStartTs, inputEndTs]
@@ -50,7 +57,7 @@ public struct ScalarProvenance: Codable, Equatable, Sendable {
         switch origin {
         case .whoopV18, .legacyUnknown:
             guard algorithm == nil, sampleRateHz == nil, windowSettingSeconds == nil,
-                  inputStartTs == nil, inputEndTs == nil, inputSHA256 == nil else {
+                  inputStartTs == nil, inputEndTs == nil, inputSHA256 == nil, inputSelection == nil else {
                 throw ScalarProvenanceError.invalidValue
             }
             if origin == .legacyUnknown, recordIndex != nil || frameSHA256 != nil { throw ScalarProvenanceError.invalidValue }
@@ -65,7 +72,7 @@ public struct ScalarProvenance: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case v, origin, recordIndex, frameSHA256, algorithm, sampleRateHz, windowSettingSeconds
-        case inputStartTs, inputEndTs, inputSHA256
+        case inputStartTs, inputEndTs, inputSHA256, inputSelection
     }
     private struct AnyKey: CodingKey {
         let stringValue: String
@@ -90,7 +97,8 @@ public struct ScalarProvenance: Codable, Equatable, Sendable {
             windowSettingSeconds: c.decodeIfPresent(Int.self, forKey: .windowSettingSeconds),
             inputStartTs: c.decodeIfPresent(Int.self, forKey: .inputStartTs),
             inputEndTs: c.decodeIfPresent(Int.self, forKey: .inputEndTs),
-            inputSHA256: c.decodeIfPresent(String.self, forKey: .inputSHA256))
+            inputSHA256: c.decodeIfPresent(String.self, forKey: .inputSHA256),
+            inputSelection: c.decodeIfPresent(InputSelection.self, forKey: .inputSelection))
     }
 
     public func canonicalJSON() throws -> String {
@@ -144,7 +152,9 @@ public struct ScalarProvenance: Codable, Equatable, Sendable {
         append(UInt32(records.count))
         var previous: Int?
         for record in records {
-            guard previous.map({ $0 < record.ts }) ?? true,
+            // Concatenating producers preserve encounter order within one second. The framing
+            // retains every record boundary; it does not normalize their input to Swift's choice.
+            guard previous.map({ $0 <= record.ts }) ?? true,
                   record.samples.count <= Int(UInt32.max) else { throw ScalarProvenanceError.invalidValue }
             previous = record.ts
             append(Int64(record.ts))
@@ -168,7 +178,7 @@ public struct ScalarProvenance: Codable, Equatable, Sendable {
         return try? Self(origin: .whoopV26PpgDerived,
             algorithm: subLagInterp ? .ppgACFSubLag : .ppgACF, sampleRateHz: fs,
             windowSettingSeconds: windowSeconds, inputStartTs: first.ts, inputEndTs: last.ts + 1,
-            inputSHA256: digest(bytes))
+            inputSHA256: digest(bytes), inputSelection: .lastRecordPerSecond)
     }
 
     static func digest(_ bytes: Data) -> String {

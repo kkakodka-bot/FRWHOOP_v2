@@ -67,6 +67,41 @@ final class ScalarProvenanceTests: XCTestCase {
         XCTAssertEqual(interpolated.algorithm, .ppgACFSubLag)
         XCTAssertEqual(interpolated.inputSHA256, center.inputSHA256)
         XCTAssertEqual(center.algorithm, .ppgACF)
+        XCTAssertEqual(center.inputSelection, .lastRecordPerSecond)
+    }
+
+    func testSelectionIsOptionalForLegacyAndStrictlyDerivedOnly() throws {
+        let base: [String: Any] = ["v": 1, "origin": "whoop-v26-ppg-derived", "algorithm": "ppg-acf-v1",
+            "sampleRateHz": 24, "windowSettingSeconds": 8, "inputStartTs": 100, "inputEndTs": 102,
+            "inputSHA256": String(repeating: "a", count: 64)]
+        func decode(_ object: [String: Any]) throws -> ScalarProvenance? {
+            try ScalarProvenance.decodeJSON(String(decoding: JSONSerialization.data(withJSONObject: object), as: UTF8.self))
+        }
+        XCTAssertNil(try decode(base)?.inputSelection)
+        for selection in [ScalarProvenance.InputSelection.lastRecordPerSecond, .concatenateRecordsPerSecond] {
+            var value = base; value["inputSelection"] = selection.rawValue
+            XCTAssertEqual(try decode(value)?.inputSelection, selection)
+            for origin in ["whoop-v18", "legacy-unknown"] {
+                XCTAssertThrowsError(try decode(["v": 1, "origin": origin, "inputSelection": selection.rawValue]))
+            }
+        }
+        let invalidValues: [Any] = [NSNull(), 1, true, "", "unknown", ["last-record-per-second-v1"]]
+        for invalid in invalidValues {
+            var value = base; value["inputSelection"] = invalid
+            XCTAssertThrowsError(try decode(value))
+        }
+    }
+
+    func testDuplicateFramingRetainsRecordBoundariesAndEncounterOrder() throws {
+        let a = PpgWaveformSample(ts: 100, samples: [-32768, 7], recordIndex: 0)
+        let b = PpgWaveformSample(ts: 100, samples: [32767, -7], recordIndex: Int(UInt32.max))
+        let c = PpgWaveformSample(ts: 101, samples: [1])
+        let bytes = try ScalarProvenance.ppgInputBytes([a, b, c])
+        XCTAssertNotEqual(bytes, try ScalarProvenance.ppgInputBytes([b, a, c]))
+        XCTAssertNotEqual(bytes, try ScalarProvenance.ppgInputBytes([
+            PpgWaveformSample(ts: 100, samples: a.samples + b.samples), c]))
+        XCTAssertThrowsError(try ScalarProvenance.ppgInputBytes([c, a, b]))
+        XCTAssertEqual(try ScalarProvenance.ppgInputBytes([a, b, c]), bytes)
     }
 
     func testUnknownVersionFieldsInvalidTypesAndOversizeFailClosed() throws {
@@ -93,7 +128,7 @@ final class ScalarProvenanceTests: XCTestCase {
              "inputEndTs": 1, "inputSHA256": digest]
         ]
         let keys = ["v", "origin", "recordIndex", "frameSHA256", "algorithm", "sampleRateHz",
-                    "windowSettingSeconds", "inputStartTs", "inputEndTs", "inputSHA256"]
+                    "windowSettingSeconds", "inputStartTs", "inputEndTs", "inputSHA256", "inputSelection"]
         for object in objects {
             let original = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
             XCTAssertNotNil(try ScalarProvenance.decodeJSON(String(decoding: original, as: UTF8.self)))
