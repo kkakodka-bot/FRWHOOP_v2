@@ -4,19 +4,25 @@ import StrandDesign
 /// Test Centre / developer controls for server HRV/sleep readback (Phase 4).
 struct ServerScoringView: View {
     @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var serverScores: ServerScoreRepository
+    @EnvironmentObject private var repo: Repository
     @State private var enabled = ServerScoringSettings.isEnabled
     @State private var email = ServerScoringSettings.authEmail
     @State private var password = ""
     @State private var working = false
+    private var capableVitals: Set<ServerScoreMetric> { ServerScoreMetric.vitals.intersection(serverScores.state.capabilities) }
+    private var capableSleep: Set<ServerScoreMetric> { ServerScoreMetric.sleep.intersection(serverScores.state.capabilities) }
 
     var body: some View {
         ScreenScaffold(
             title: "Server scoring",
-            subtitle: "Read cached server HRV and sleep"
+            subtitle: "Read cached server scores and history"
         ) {
             VStack(alignment: .leading, spacing: NoopMetrics.sectionSpacing) {
                 settingsCard
                 authCard
+                ScoringContextSharingView()
+                ScoringInputConflictReviewView()
                 statusCard
             }
         }
@@ -26,24 +32,49 @@ struct ServerScoringView: View {
         pushSection(
             icon: "server.rack",
             title: "Display",
-            blurb: "When on, Today and Sleep show server-computed HRV and sleep totals. Live HR and graphs stay on-device."
+            blurb: "Enable readback, then choose which supported fields use server results. Live HR and unmigrated scores stay on-device."
         ) {
             pushToggle(
                 title: String(localized: "Use server scores"),
-                detail: String(localized: "On by default. Requires a Supabase account on your VPS."),
+                detail: String(localized: "Requires a Supabase account. Field ownership is selected below."),
                 isOn: enabled
             ) { requested in
                 ServerScoringSettings.setEnabled(requested)
                 enabled = requested
                 if requested {
-                    Task { await model.serverScores.refreshVisibleDays(todayKey: model.repo.today?.day) }
-                    if let day = model.repo.today?.day {
-                        model.serverScores.startPolling(todayKey: day)
-                    }
+                    serverScores.setForeground(true)
                 } else {
-                    model.serverScores.stopPolling()
+                    serverScores.stopPolling()
                 }
             }
+            pushToggle(title: "Server nightly vitals", detail: "HRV, SDNN, resting HR and respiration. Missing server values stay empty.",
+                       isOn: !capableVitals.isEmpty && capableVitals.isSubset(of: serverScores.state.activated)) {
+                serverScores.setActivated(capableVitals, enabled: $0)
+            }
+            .disabled(!serverScores.state.configured || capableVitals.isEmpty)
+            pushToggle(title: "Server sleep sessions and totals", detail: "Uses server sessions and stages. Sleep editing is unavailable until edit sync is supported.",
+                       isOn: !capableSleep.isEmpty && capableSleep.isSubset(of: serverScores.state.activated)) {
+                serverScores.setActivated(capableSleep, enabled: $0)
+            }
+            .disabled(!serverScores.state.configured || capableSleep.isEmpty)
+            extensionToggle("Server Charge", metrics: [.recovery])
+            extensionToggle("Server temperature and oxygen", metrics: ServerScoreMetric.temperatureOxygen)
+            extensionToggle("Server activity", metrics: ServerScoreMetric.activity)
+            extensionToggle("Server sleep scores and history", metrics: ServerScoreMetric.sleepHistory)
+            extensionToggle("Server fitness and vitality", metrics: ServerScoreMetric.longevity)
+            extensionToggle("Server day stress", metrics: [.stress])
+        }
+    }
+
+    @ViewBuilder
+    private func extensionToggle(_ title: String, metrics: Set<ServerScoreMetric>) -> some View {
+        let capable = metrics.intersection(serverScores.state.capabilities)
+        if !capable.isEmpty {
+            pushToggle(title: title, detail: "Uses only advertised fields. Missing values stay empty; unavailable details are not rebuilt locally.",
+                       isOn: capable.isSubset(of: serverScores.state.activated)) {
+                serverScores.setActivated(capable, enabled: $0)
+            }
+            .disabled(!serverScores.state.configured || !serverScores.state.authenticated)
         }
     }
 
@@ -66,9 +97,9 @@ struct ServerScoringView: View {
                         signIn()
                     }
                     .disabled(working || email.isEmpty || password.isEmpty)
-                    if model.serverScores.signedIn {
-                        NoopButton("Sign out", kind: .tertiary, fullWidth: true) {
-                            model.serverScores.signOut()
+                    if serverScores.signedIn || serverScores.signOutNeedsRetry {
+                        NoopButton(serverScores.signOutNeedsRetry ? "Retry sign-out" : "Sign out", kind: .tertiary, fullWidth: true) {
+                            serverScores.signOut()
                             password = ""
                         }
                     }
@@ -81,14 +112,17 @@ struct ServerScoringView: View {
         pushSection(
             icon: "clock.arrow.circlepath",
             title: "Status",
-            blurb: "Polls get_day_snapshot every \(ServerScoringSettings.pollIntervalSeconds)s; shows last-known values when stale."
+            blurb: "Reads versioned snapshots immediately and every \(ServerScoringSettings.pollIntervalSeconds)s while active."
         ) {
             VStack(alignment: .leading, spacing: NoopMetrics.space2) {
-                row("Signed in", model.serverScores.signedIn ? "Yes" : "No")
-                if let at = model.serverScores.lastFetchedAt {
+                row("Signed in", serverScores.signOutNeedsRetry ? "Stopped; sign-out not saved" : (serverScores.signedIn ? "Yes" : "No"))
+                row("Activated fields", "\(serverScores.state.activated.count)")
+                ServerScoreStatusNote(state: serverScores.state, day: serverScores.currentDay)
+                ServerScoreInputStatusNote(pending: repo.serverInputPending, hasError: repo.serverInputError != nil)
+                if let at = serverScores.lastFetchedAt {
                     row("Last fetch", at.formatted(date: .abbreviated, time: .shortened))
                 }
-                if let err = model.serverScores.lastError {
+                if let err = serverScores.lastError {
                     Text(err)
                         .font(StrandFont.footnote)
                         .foregroundStyle(StrandPalette.statusWarning)
@@ -100,7 +134,7 @@ struct ServerScoringView: View {
     private func signIn() {
         working = true
         Task {
-            await model.serverScores.signIn(email: email, password: password)
+            await serverScores.signIn(email: email, password: password)
             password = ""
             working = false
         }
