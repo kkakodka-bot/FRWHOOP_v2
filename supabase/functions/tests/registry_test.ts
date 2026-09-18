@@ -59,6 +59,10 @@ Deno.test('capabilities: the objectLane block appears only alongside the streams
 });
 
 Deno.test('negotiateProtocol picks the newest mutually-supported version or refuses', () => {
+  assert.equal(negotiateProtocol('1.3,1.2,1.1,1.0'), '1.3');
+  const caps = capabilitiesBody({ receiverStateId: 'r', protocolVersion: '1.3', streams: advertisedStreams('1.3'),
+    objectLane: { endpoint: OBJECT_LANE_PATH, maxObjectBytes: 1024, urlTtlSec: 900 } });
+  assert(caps.objectLane.streams.includes('ppgWaveformSample'));
   assert.equal(negotiateProtocol('1.2,1.1,1.0'), '1.2');
   assert.equal(negotiateProtocol('1.1,1.0'), '1.1');
   assert.equal(negotiateProtocol('1.0'), '1.0');
@@ -97,7 +101,7 @@ Deno.test('buildAck echoes the batch and ackMatchesBatch guards it', () => {
     batchId: 'b',
     stream: 'hrSample',
     deviceId: 'strap-1',
-    endCursor: { rowId: 42 },
+    endCursor: { rowId: 42, ts: 100, nested: { a: 1, b: [2, 3] } },
     recordCount: 3,
   };
   const ack = buildAck(header);
@@ -106,4 +110,7 @@ Deno.test('buildAck echoes the batch and ackMatchesBatch guards it', () => {
   assert.ok(ackMatchesBatch(ack, header));
   assert.ok(!ackMatchesBatch({ ...ack, acceptedRows: 4 }, header));
   assert.ok(!ackMatchesBatch({ ...ack, endCursor: null }, header));
+  assert.ok(ackMatchesBatch({ ...ack, endCursor: { nested: { b: [2, 3], a: 1 }, ts: 100, rowId: 42 } }, header));
+  assert.ok(!ackMatchesBatch({ ...ack, endCursor: { ...header.endCursor, rowId: '42' } }, header));
+  assert.ok(!ackMatchesBatch({ ...ack, endCursor: { ...header.endCursor, nested: { a: 1, b: [3, 2] } } }, header));
 });

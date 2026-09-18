@@ -14,6 +14,9 @@ const PROJECTION_TABLES = [
 export type IngestVerifyStage =
   | 'push_receipt'
   | 'manifest_ready'
+  | 'receipt_verified'
+  | 'signal_index'
+  | 'projection_debt'
   | 'b2_object'
   | 'projection_row';
 
@@ -33,7 +36,7 @@ export async function buildIngestVerifyReport({
     throw Object.assign(new Error('invalid day'), { code: 'invalid_day' });
   }
 
-  const [walRows, ackRows, manifestRows, dailyRows, heartbeatRows] = await Promise.all([
+  const [walRows, ackRows, manifestRows, windows, dailyRows, heartbeatRows, projectionDebt] = await Promise.all([
     rest.select(
       'noop_push_wal',
       `user_id=eq.${userId}&select=batch_id,stream,device_id,record_count,body_sha256,received_at&order=received_at.desc&limit=200`,
@@ -44,8 +47,9 @@ export async function buildIngestVerifyReport({
     ).catch(() => []),
     rest.select(
       'object_manifests',
-      `user_id=eq.${userId}&period_day=eq.${day}&select=id,object_key,status,object_kind,compressed_bytes,sha256,created_at,updated_at&order=created_at.asc`,
+      `user_id=eq.${userId}&period_day=eq.${day}&select=id,object_key,status,object_class,object_kind,format,compressed_bytes,sha256,sha256_source,durability_receipt,indexed_at,created_at,updated_at&order=created_at.asc`,
     ).catch(() => []),
+    rest.select('noop_signal_windows', `user_id=eq.${userId}&select=object_id,object_key`).catch(() => []),
     rest.select(
       'daily_metrics',
       `user_id=eq.${userId}&day=eq.${day}&select=day,computed_at,algorithm_version,provenance&limit=1`,
@@ -54,6 +58,7 @@ export async function buildIngestVerifyReport({
       'scoring_service_heartbeats',
       'id=eq.1&select=version,started_at,last_poll_at,last_score_at,last_error&limit=1',
     ).catch(() => []),
+    rest.select('noop_projection_debt', `user_id=eq.${userId}&select=object_id,state,failures,not_before&limit=2000`).catch(() => []),
   ]);
 
   const manifests = (manifestRows as any[]).map((m) => ({
@@ -61,6 +66,11 @@ export async function buildIngestVerifyReport({
     object_key: m.object_key,
     status: m.status,
     object_kind: m.object_kind,
+    format: m.format,
+    object_class: m.object_class ?? 'raw',
+    durability_receipt: m.durability_receipt ?? null,
+    indexed_at: m.indexed_at ?? null,
+    sha256_source: m.sha256_source ?? null,
     compressed_bytes: m.compressed_bytes ?? null,
     sha256: m.sha256 ?? null,
     created_at: m.created_at,
@@ -112,14 +122,23 @@ export async function buildIngestVerifyReport({
   };
 
   const firstIncompleteStage = ((): IngestVerifyStage | null => {
-    if (pushReceipts.ack_batches === 0 && pushReceipts.wal_batches === 0) return 'push_receipt';
+    if (pushReceipts.ack_batches === 0 && !manifests.some((m) => m.durability_receipt?.state === 'verified_indexed')) return 'push_receipt';
+    if (!manifests.length) return 'manifest_ready';
     const pendingManifest = manifests.find((m) => !['ready', 'verified', 'deleted'].includes(String(m.status)));
     if (pendingManifest) return 'manifest_ready';
+    const raw = manifests.filter((m) => m.object_class === 'raw' && m.status !== 'deleted');
+    if (raw.some((m) => m.sha256_source !== 'server_verified' ||
+      m.durability_receipt?.version !== 1 || m.durability_receipt?.state !== 'verified_indexed' ||
+      m.durability_receipt?.ownerUserId !== userId || m.durability_receipt?.objectId !== m.id ||
+      m.durability_receipt?.objectKey !== m.object_key)) return 'receipt_verified';
+    if (raw.some((m) => !m.indexed_at || !windows.some((w: any) => w.object_id === m.id && w.object_key === m.object_key))) return 'signal_index';
     const missingB2 = manifests.some((m) => {
       const hit = b2Presence[m.object_key];
       return m.object_key && (!hit || !hit.exists);
     });
     if (missingB2) return 'b2_object';
+    if (raw.some((m) => String(m.format).startsWith('ndjson') &&
+      !projectionDebt.some((d: any) => d.object_id === m.id && d.state === 'complete'))) return 'projection_debt';
     if (!projections.daily_metrics?.present) return 'projection_row';
     return null;
   })();
@@ -134,6 +153,7 @@ export async function buildIngestVerifyReport({
     manifests,
     b2_presence: b2Presence,
     projections,
+    projection_debt: projectionDebt.filter((d: any) => manifests.some((m) => m.id === d.object_id)),
     daily_metrics_row: (dailyRows as any[])[0] ?? null,
     scoring_service_heartbeat: heartbeat
       ? {

@@ -6,8 +6,9 @@ import {
   workoutSessionRow,
 } from './structuredSync.ts';
 import { OBJECT_LANE_STREAMS } from './keys.ts';
+import { isDeepStrictEqual } from 'node:util';
 
-export const PUSH_PROTOCOL_VERSIONS = ['1.2', '1.1', '1.0'];
+export const PUSH_PROTOCOL_VERSIONS = ['1.3', '1.2', '1.1', '1.0'];
 
 export const APPEND_STREAMS = new Set([
   'hrSample', 'rrInterval', 'event', 'battery', 'spo2Sample', 'skinTempSample',
@@ -498,7 +499,7 @@ export function windowBounds(header: any) {
 }
 
 export function streamsForVersion(version: string): Set<string> {
-  if (version === '1.2') return ALL_STREAMS;
+  if (version === '1.3' || version === '1.2') return ALL_STREAMS;
   if (version === '1.1') return new Set([...ALL_STREAMS].filter((s) => !PROTOCOL_1_2_ONLY.has(s)));
   if (version === '1.0') return PROTOCOL_1_0_STREAMS;
   return new Set();
@@ -545,7 +546,7 @@ export function capabilitiesBody({
     streams: advertised,
     userId: userId || undefined,
   };
-  if (protocolVersion === '1.2' && objectLane) {
+  if ((protocolVersion === '1.3' || protocolVersion === '1.2') && objectLane) {
     body.objectLane = {
       ...objectLane,
       streams: advertised.filter((s) => OBJECT_LANE_STREAMS.has(s)),
@@ -599,7 +600,7 @@ export function ackMatchesBatch(ack: any, header: any): boolean {
     && ack?.batchId === header.batchId
     && ack?.stream === header.stream
     && ack?.deviceId === header.deviceId
-    && JSON.stringify(ack?.endCursor ?? null) === JSON.stringify(header.endCursor ?? null)
+    && isDeepStrictEqual(ack?.endCursor ?? null, header.endCursor ?? null)
     && ack?.acceptedRows === header.recordCount
     && ack?.status === 'accepted';
 }

@@ -24,13 +24,14 @@ import {
 } from '../_shared/registry.ts';
 import { UPLOAD_URL_TTL_SEC, createPushObjects } from '../_shared/objects.ts';
 import { MAX_OBJECT_LANE_BYTES } from '../_shared/retention.ts';
-import { createPushIngest, createPushArchive, deleteReplacementRows } from '../_shared/ingest.ts';
+import { createPushIngest, createPushArchive } from '../_shared/ingest.ts';
 import { createPushWalStore } from '../_shared/wal.ts';
-import { createPushReplacementStaging } from '../_shared/staging.ts';
 import { createSupabaseRest, restConfigFromEnv } from '../_shared/rest.ts';
 import { createS3 } from '../_shared/s3.ts';
 import { pushConfig, defaultReceiverStateId } from '../_shared/config.ts';
 import { IdentityError, resolvePushUser, createIngestTokenStore } from '../_shared/tokens.ts';
+import { registerDevice } from '../_shared/durability.ts';
+import { commitArchivedBatch } from '../_shared/projections.ts';
 
 const MAX_BODY_BYTES = 4 * 1024 * 1024 + 64 * 1024;
 
@@ -56,25 +57,19 @@ const raw = cfg.b2KeyId && cfg.b2ApplicationKey && cfg.b2Bucket && cfg.b2S3Endpo
 
 const pushWalStore = createPushWalStore({ rest });
 const pushArchive = createPushArchive({ cfg, rest, raw });
-const pushStaging = createPushReplacementStaging({ rest });
 const pushUpsertRows = (table: string, rows: unknown[], opts: { onConflict: string }) => {
   if (!rest.configured) return Promise.resolve([]);
   return rest.upsert(table, rows, opts);
 };
 const pushEnsureDevice = (row: Record<string, unknown>) => {
   if (!rest.configured) return Promise.resolve([]);
-  return rest.upsert('devices', row, { onConflict: 'id' });
+  return registerDevice(rest, row);
 };
 const pushIngest = createPushIngest({
   walStore: pushWalStore!,
   archiveObject: (args: unknown) => pushArchive.archiveObject(args),
-  upsertRows: pushUpsertRows,
-  deleteRows: (table: string, filter: unknown) => {
-    if (!rest.configured) return Promise.resolve();
-    return deleteReplacementRows(rest, table, filter);
-  },
   ensureDevice: pushEnsureDevice,
-  replacementStaging: pushStaging,
+  commitProjection: (receipt, body) => commitArchivedBatch(rest, receipt, body),
 });
 const pushObjects = createPushObjects({
   cfg,
@@ -164,11 +159,11 @@ async function handleObjectIntent(req: Request): Promise<Response> {
       return json({ type: 'error', protocolVersion: '1.2', code: 'malformed_manifest' }, 400);
     }
     const intent = await pushObjects.createIntent({ userId: user.id, manifest });
-    return json({ type: 'objectIntent', protocolVersion: '1.2', ...intent });
+    return json({ type: 'objectIntent', ...intent });
   } catch (err: any) {
     if (err instanceof Response) return err;
     if (err instanceof PushProtocolError) return protocolError(err);
-    console.error('[push] object intent failed:', err?.stack || err);
+    console.error('[push] object_intent_failed');
     return json({ type: 'error', protocolVersion: '1.2', code: 'push_failed' }, 500);
   }
 }
@@ -180,11 +175,11 @@ async function handleObjectComplete(req: Request, objectId: string): Promise<Res
       return json({ type: 'error', protocolVersion: '1.2', code: 'object_lane_unavailable' }, 503);
     }
     const ack = await pushObjects.completeObject({ userId: user.id, objectId });
-    return json({ type: 'objectAck', protocolVersion: '1.2', ...ack });
+    return json({ type: 'objectAck', ...ack });
   } catch (err: any) {
     if (err instanceof Response) return err;
     if (err instanceof PushProtocolError) return protocolError(err);
-    console.error('[push] object complete failed:', err?.stack || err);
+    console.error('[push] object_complete_failed');
     return json({ type: 'error', protocolVersion: '1.2', code: 'push_failed' }, 500);
   }
 }
@@ -199,7 +194,7 @@ async function handleInlineBatch(req: Request): Promise<Response> {
     const encoding = String(req.headers.get('content-encoding') || '').toLowerCase();
     if (encoding === 'gzip') {
       try {
-        body = new Uint8Array(gunzipSync(body));
+        body = new Uint8Array(gunzipSync(body, { maxOutputLength: 4 * 1024 * 1024 }));
       } catch {
         return json({ type: 'error', protocolVersion: '1.1', code: 'invalid_gzip' }, 400);
       }
@@ -219,7 +214,7 @@ async function handleInlineBatch(req: Request): Promise<Response> {
     }
     // The client can attribute every other branch from its receiver code; this one it sees as a bare
     // 500. Log the cause here or the only record of why a batch was refused is lost.
-    console.error('[push] unexpected ingest failure:', err?.stack || err);
+    console.error('[push] ingest_failed');
     return json({ type: 'error', protocolVersion: '1.1', code: 'push_failed' }, 500);
   }
 }
