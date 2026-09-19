@@ -550,6 +550,7 @@ object NoopPrefs {
      */
     fun migrateContinuousHrvOvernightDefault(context: Context) {
         val prefs = of(context)
+        activateFrequentVitalsCapture(prefs)
         if (shouldPinLegacyOvernightDefault(
                 hasOvernightChoice = prefs.contains(KEY_CONTINUOUS_HRV_OVERNIGHT),
                 hasUsedContinuousHrv = prefs.contains(KEY_CONTINUOUS_HRV),
@@ -557,6 +558,14 @@ object NoopPrefs {
         ) {
             prefs.edit().putBoolean(KEY_CONTINUOUS_HRV_OVERNIGHT, false).apply()
         }
+    }
+
+    /** Owner-requested all-day capture once for this branch; later Settings choices are preserved. */
+    internal fun activateFrequentVitalsCapture(prefs: android.content.SharedPreferences) {
+        val marker = "noop.frequentVitalsCaptureV1"
+        if (prefs.getBoolean(marker, false)) return
+        prefs.edit().putBoolean(KEY_CONTINUOUS_HRV, true)
+            .putBoolean(KEY_CONTINUOUS_HRV_OVERNIGHT, false).putBoolean(marker, true).apply()
     }
 
     /**

@@ -53,6 +53,7 @@ final class ServerScoreRepository: ObservableObject {
     func signIn(email: String, password: String) async {
         stopPolling()
         dependencies.clearSession()
+        CloudScoreIdentity.clearIngestOwner()
         session.activate(ownerId: nil)
         signedIn = false
         lastFetchedAt = nil
@@ -76,6 +77,7 @@ final class ServerScoreRepository: ObservableObject {
 
     func signOut() {
         dependencies.clearSession()
+        CloudScoreIdentity.clearIngestOwner()
         signedIn = false
         stopPolling()
         session.activate(ownerId: nil)
@@ -162,17 +164,21 @@ final class ServerScoreRepository: ObservableObject {
         let request = session.beginRequest(day: day)
         do {
             let cache = try await dependencies.fetch(day, owner)
-            CloudScoreIdentity.rememberOwner(cache.ownerId)
-            CloudScoreIdentity.markOverlayLive(CloudScoreIdentity.overlayIsLive(cache))
+            guard !Task.isCancelled, generation == session.generation, cache.day == day else { return }
             if session.ownerId == nil {
+                guard currentOwnerId == nil, UUID(uuidString: cache.ownerId) != nil,
+                      cache.schemaVersion == ServerScoreCacheCodec.schemaVersion,
+                      !cache.features.isEmpty else { return }
                 session.activate(ownerId: cache.ownerId)
+                guard session.accept(cache, generation: session.generation, currentOwnerId: cache.ownerId) else { return }
                 signedIn = true
-                _ = session.accept(cache, generation: session.generation, currentOwnerId: cache.ownerId)
             } else {
                 guard !Task.isCancelled,
                       session.accept(cache, generation: generation, currentOwnerId: currentOwnerId, request: request)
                 else { return }
             }
+            CloudScoreIdentity.rememberOwner(cache.ownerId)
+            CloudScoreIdentity.markOverlayLive(CloudScoreIdentity.overlayIsLive(cache))
             try cacheStore?.upsert(cache)
             lastFetchedAt = cache.fetchedAt
             lastError = nil

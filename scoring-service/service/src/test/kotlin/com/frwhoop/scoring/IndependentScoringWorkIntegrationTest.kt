@@ -30,6 +30,10 @@ class IndependentScoringWorkIntegrationTest {
         sql("insert into auth.users values('$user')")
         sql("insert into profiles(id,timezone) values('$user','UTC')")
         sql("insert into devices(id,user_id) values('$device','$user')")
+        // These cases deliberately verify the retained baseline transport. Fleet defaults may
+        // select another version, so pin the version this test's assertions actually concern.
+        sql("insert into physiology_source_selection(user_id,feature,device_id,algorithm_version) " +
+            "select '$user',feature,'$device','frwhoop-server-1' from physiology_feature_defaults")
     }
     @After fun close() { if(::db.isInitialized) db.close() }
 

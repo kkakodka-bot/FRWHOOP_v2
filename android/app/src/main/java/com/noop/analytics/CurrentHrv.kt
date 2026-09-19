@@ -3,9 +3,7 @@ package com.noop.analytics
 import com.noop.data.RrInterval
 
 /**
- * Trailing-window "current HRV" — RMSSD over the most recent strap R-R rows, refreshed after each
- * successful sync. Separate from nightly `avgHrv` (sleep-window RMSSD fed into recovery); this is an
- * additive live readout only.
+ * Latest completed UTC five-minute measurement. Legacy coarse rows cannot prove continuity.
  *
  * Kotlin parity twin of `Packages/StrandAnalytics/.../CurrentHRV.swift`. Reuses [HrvAnalyzer] primitives only.
  */
@@ -24,11 +22,15 @@ object CurrentHrv {
     /** Rows newer than this many seconds before `nowUnix` are treated as stale by the app-layer caller. */
     const val STALE_THRESHOLD_SECONDS: Int = 900
 
+    /** Query the completed window's seconds, never the trailing partial window containing now. */
+    fun completedWindow(nowUnix: Int): IntRange {
+        val end = HrvWindow.alignedStart(nowUnix)
+        return (end - HrvWindow.SECONDS) until end
+    }
+
     /**
-     * Derive a current HRV snapshot from R-R rows whose timestamps fall in
-     * `[nowUnix - windowSeconds, nowUnix]`. Returns null when coverage fails the nightly RMSSD honesty
-     * gate ([HrvAnalyzer.successiveDiffIsTrustworthy]) or when fewer than [HrvAnalyzer.MIN_BEATS] clean
-     * beats survive.
+     * Compatibility entry point: no beat identities or acquisition spans can be recovered from
+     * this row shape. Retains null until ingestion supplies proven observations.
      */
     fun derive(
         rows: List<RrInterval>,
@@ -42,7 +44,7 @@ object CurrentHrv {
     /** The latest completed UTC window, never pooled with a previous sparse window. */
     fun deriveObservations(observations: List<PhysiologyQuality.IntervalObservation>, nowUnix: Int,
                            policy: HrvWindow.Policy = HrvWindow.Policy(), inputRevision: String = "unversioned"): Snapshot? {
-        val result = HrvWindow.measure(HrvWindow.alignedStart(nowUnix) - HrvWindow.SECONDS,
+        val result = HrvWindow.measure(completedWindow(nowUnix).first,
             observations, policy = policy, inputRevision = inputRevision, computationMode = "causal")
         val rmssd = result.observedRMSSD ?: return null
         if (!result.measurementValid) return null

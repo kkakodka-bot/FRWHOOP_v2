@@ -181,6 +181,11 @@ class DayScorer(private val physiology: PhysiologyShadowRunner = PhysiologyShado
             respirationSummary = respirationSummary,
             localDayEndExclusive = inputs.dayHi+1,
             calendarOwnership = ownership,
+            heartRateWindows = com.noop.analytics.HeartRateWindows.windows(dayLo,
+                minOf(dayHi+1, nowSeconds), dayHr, dayGravity,
+                wristOff + inputs.sleepContext.filter { it.kind == "off_body" }.map { it.start to it.end }).filter { window ->
+                ownership == null || ownership.dayIntervals.any { window.start >= it.first && window.end <= it.second }
+            },
         )
     }
 }
@@ -201,4 +206,5 @@ data class ServerScoreBundle(
     val localDayEndExclusive: Long? = null,
     val calendarOwnership: com.frwhoop.scoring.db.CalendarOwnershipReader.Ownership? = null,
     val inputUnavailableReason: String? = null,
+    val heartRateWindows: List<com.noop.analytics.HeartRateWindows.Measurement> = emptyList(),
 )

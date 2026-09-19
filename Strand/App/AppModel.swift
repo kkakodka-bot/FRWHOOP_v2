@@ -706,16 +706,21 @@ final class AppModel: ObservableObject {
     private func deriveCurrentHRV() async {
         guard let store = await repo.storeHandle() else { return }
         let now = Int(Date().timeIntervalSince1970)
-        let from = now - CurrentHRV.windowSeconds
+        let bounds = CurrentHRV.completedWindow(nowUnix: now)
         let deviceId = repo.deviceId
-        guard let rows = try? await store.rrIntervals(deviceId: deviceId, from: from, to: now, limit: 10_000),
+        guard let rows = try? await store.rrIntervals(deviceId: deviceId, from: bounds.lowerBound, to: bounds.upperBound - 1, limit: 10_000),
               let newest = rows.map(\.ts).max(),
-              now - newest <= CurrentHRV.staleThresholdSeconds else { return }
+              now - newest <= CurrentHRV.staleThresholdSeconds else { currentHrv = nil; return }
+        let packets = (try? await store.rrPacketProvenance(deviceId: deviceId,
+            from: bounds.lowerBound, to: bounds.upperBound)) ?? []
+        let observations = PhysiologyQuality.packetOrLegacy(packets, legacy: rows, deviceId: deviceId)
+            ?? PhysiologyQuality.legacy(rows, deviceId: deviceId)
 
         let snapshot = await Task.detached(priority: .utility) {
-            CurrentHRV.derive(rows: rows, nowUnix: now)
+            CurrentHRV.derive(observations: observations, nowUnix: now)
         }.value
-        if let snapshot { currentHrv = snapshot }
+        guard repo.deviceId == deviceId else { currentHrv = nil; return }
+        currentHrv = snapshot
     }
 
     /// Fold a fresh reading into the smoothing window and republish a stable bpm.

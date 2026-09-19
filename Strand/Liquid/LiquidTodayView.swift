@@ -201,8 +201,13 @@ struct LiquidTodayView: View {
         guard serverScoringEnabled else { return nil }
         let selection = ServerVitalSelection.resolve(metric, serverEnabled: true,
             selectedDay: selectedDayKey, overlay: serverOverlay, localValue: nil)
+        return Self.serverVitalCaption(for: selection, includeSource: metric == .sleep)
+    }
+
+    static func serverVitalCaption(for selection: ServerVitalSelection, includeSource: Bool = false) -> String? {
+        guard selection.fromServer else { return nil }
         let label = String(localized: "Server · \(selection.day) · \(selection.status ?? "unavailable")")
-        let source = metric == .sleep ? [selection.deviceId, selection.algorithmVersion].compactMap { $0 }.joined(separator: " · ") : ""
+        let source = includeSource ? [selection.deviceId, selection.algorithmVersion].compactMap { $0 }.joined(separator: " · ") : ""
         let caption = source.isEmpty ? label : "\(label) · \(source)"
         return selection.stale ? String(localized: "Stale · \(caption)") : caption
     }

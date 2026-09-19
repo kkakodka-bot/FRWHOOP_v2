@@ -28,6 +28,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         HrSample::class,
         RrInterval::class,
         RrPacketProvenanceEntity::class,
+        StandardHrReceiptEntity::class,
         EventRow::class,
         BatterySample::class,
         Spo2Sample::class,
@@ -57,7 +58,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         SyncJobEntity::class,
         SyncJournalEntryEntity::class,
     ],
-    version = 41,
+    version = 42,
     // #775: ON so Room's KSP processor writes the generated schema (every table's exact `CREATE TABLE`,
     // columns in declaration order with affinity/NOT NULL/default, PK and indices) as JSON. That export
     // is what lets a plain JVM test — no device, no Robolectric — read Android's REAL schema and compare
@@ -78,7 +79,7 @@ abstract class WhoopDatabase : RoomDatabase() {
         const val DB_NAME = "noop_whoop.db"
         /** Room schema version — MUST equal the `@Database(version = …)` above. Surfaced in the backup
          *  manifest (#1410) so an export states its schema. Bump both together on a migration. */
-        const val SCHEMA_VERSION = 41
+        const val SCHEMA_VERSION = 42
 
         @Volatile
         private var instance: WhoopDatabase? = null
@@ -1058,6 +1059,16 @@ abstract class WhoopDatabase : RoomDatabase() {
         internal val MIGRATION_40_41 = object : Migration(40, 41) {
             override fun migrate(db: SupportSQLiteDatabase) { RR_PACKET_PROVENANCE_MIGRATION_SQL.forEach(db::execSQL) }
         }
+        internal val STANDARD_HR_RECEIPT_MIGRATION_SQL = listOf(
+            "CREATE TABLE standardHRReceipt (deviceId TEXT NOT NULL, receiptId TEXT NOT NULL, ts INTEGER NOT NULL, " +
+                "sessionId TEXT NOT NULL, notificationOrdinal INTEGER NOT NULL, receivedUnixMs INTEGER NOT NULL, " +
+                "receivedMonotonicNs INTEGER NOT NULL, rawHex TEXT NOT NULL, schemaVersion INTEGER NOT NULL, " +
+                "clockVersion TEXT NOT NULL, PRIMARY KEY(deviceId, receiptId))",
+            "CREATE INDEX standardHRReceipt_device_ts ON standardHRReceipt(deviceId, ts)",
+        )
+        internal val MIGRATION_41_42 = object : Migration(41, 42) {
+            override fun migrate(db: SupportSQLiteDatabase) { STANDARD_HR_RECEIPT_MIGRATION_SQL.forEach(db::execSQL) }
+        }
 
         /**
          * Every migration the builder registers, as a VALUE rather than an argument list.
@@ -1090,6 +1101,7 @@ abstract class WhoopDatabase : RoomDatabase() {
             MIGRATION_38_39,
             MIGRATION_39_40,
             MIGRATION_40_41,
+            MIGRATION_41_42,
         )
 
         private fun build(appContext: Context): WhoopDatabase =

@@ -54,6 +54,7 @@ val kernelAnalyticsFiles = listOf(
     "PhysiologyQuality.kt",
     "RespirationEstimator.kt",
     "CurrentHrv.kt", // W2: shared five-minute contract, tested byte-identically with the app.
+    "HeartRateWindows.kt",
     "HrvFreqDomain.kt",
     "HypnogramCoverage.kt",
     "LocalDayWindows.kt",
@@ -141,6 +142,7 @@ val kernelTestFiles = listOf(
     "HrvPacketAdapterTest.kt",
     "HrvSeriesTest.kt",
     "CurrentHrvTest.kt",
+    "HeartRateWindowsTest.kt",
     "HrvAnalyzerRollingTest.kt",
     "HrvAnalyzerSampleOrdTest.kt",
     "HrvAnalyzerSdnnIndexTest.kt",
@@ -217,6 +219,7 @@ val kernelTestResourceFiles = listOf(
     "sleep_evidence_oracle.json",
     "sleep_group_selection_oracle.json",
     "hrv_window_oracle.json",
+    "heart_rate_windows_oracle.json",
     "respiration_oracle.json",
     "local_day_windows_oracle.json",
 )

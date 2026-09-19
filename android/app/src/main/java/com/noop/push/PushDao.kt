@@ -261,7 +261,11 @@ class PushDao internal constructor(
             val index = getColumnIndexOrThrow(name)
             val value: Any? = when (getType(index)) {
                 Cursor.FIELD_TYPE_NULL -> null
-                Cursor.FIELD_TYPE_INTEGER -> if (name in spec.booleanColumns) getLong(index) != 0L else getLong(index)
+                Cursor.FIELD_TYPE_INTEGER -> when {
+                    name == "receivedMonotonicNs" -> getLong(index).toString() // exact across JSON/JavaScript
+                    name in spec.booleanColumns -> getLong(index) != 0L
+                    else -> getLong(index)
+                }
                 Cursor.FIELD_TYPE_FLOAT -> getDouble(index)
                 Cursor.FIELD_TYPE_STRING -> getString(index)
                 Cursor.FIELD_TYPE_BLOB -> getBlob(index)
@@ -286,6 +290,8 @@ class PushDao internal constructor(
         PushAppendTable.RR_INTERVAL -> RR
         PushAppendTable.RR_PACKET_PROVENANCE -> TableSpec("rrPacketProvenance", listOf("packetId"),
             listOf("ts", "sensorTs", "recordIndex", "rawHex", "srcChannel", "schemaVersion", "decoderVersion", "clockVersion", "timestampPrecisionSeconds", "clockOffsetSeconds", "declaredCount"))
+        PushAppendTable.STANDARD_HR_RECEIPT -> TableSpec("standardHRReceipt", listOf("receiptId"),
+            listOf("ts", "sessionId", "notificationOrdinal", "receivedUnixMs", "receivedMonotonicNs", "rawHex", "schemaVersion", "clockVersion"))
         PushAppendTable.EVENT -> EVENT
         PushAppendTable.BATTERY -> BATTERY
         PushAppendTable.SPO2_SAMPLE -> SPO2

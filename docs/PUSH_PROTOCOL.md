@@ -322,6 +322,7 @@ semantics; v1.1 only adds streams and optional `dailyMetric` data members.
 
 | `stream` | Natural key | `data` members |
 |---|---|---|
+| `standardHRReceipt` | `receiptId` | `ts`, `sessionId`, `notificationOrdinal`, `receivedUnixMs`, `receivedMonotonicNs`, `rawHex`, `schemaVersion`, `clockVersion` |
 | `stepSample` | `ts` | `counter`, `activityClass` (nullable) |
 | `sleepStateSample` | `ts` | `state`, `rawByte` |
 | `ppgHrSample` | `ts` | `bpm`, `conf` (nullable) |
@@ -331,6 +332,17 @@ semantics; v1.1 only adds streams and optional `dailyMetric` data members.
 
 `coachMessage.id` is a string UUID. `ouraRaw` natural key excludes `deviceId` (batch-scoped). Integer
 and boolean rules match v1.0.
+
+`standardHRReceipt` retains the original standard BLE HR notification, including repeated equal
+interval words. `receiptId` is the lowercase connection-session UUID followed by `:` and the
+nonnegative notification ordinal. `ts` is the floor of the host receipt milliseconds divided by
+1000; neither host clock is a verified sensor beat clock. `schemaVersion` is `1` and `clockVersion`
+is `host-arrival-unmapped`. `receivedMonotonicNs` is an exact nonnegative Int64 **decimal string**
+on the wire because JavaScript numbers cannot represent every nanosecond count after roughly
+104 days of host uptime. `rawHex` is lowercase hex for 1–512 original notification bytes.
+The receiver preserves the first receipt's evidence and origin source. An identical replay may
+refresh batch/ingestion metadata; conflicting packet or clock evidence under the same identity is
+rejected. This stream is capability-negotiated and never silently substituted for verified beat timing.
 
 ### v1.1 replace-window streams (new in 1.1)
 

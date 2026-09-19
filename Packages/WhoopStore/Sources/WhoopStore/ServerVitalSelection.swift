@@ -1,6 +1,6 @@
 import Foundation
 
-/// Chooses one explicit mode for a Today vital. A missing server value never borrows local history.
+/// Sleep retains explicit server ownership; independent vitals can fall back to local results.
 /// The caller supplies an owner-scoped overlay only after configuration and authentication checks.
 public struct ServerVitalSelection: Equatable {
     public enum Metric: CaseIterable { case hrv, restingHR, respiratory, sleep, charge, strain, spo2, skinTemp }
@@ -21,8 +21,9 @@ public struct ServerVitalSelection: Equatable {
         }
         // No overlay yet: keep showing locally scored values until the hosted scorer publishes.
         guard let overlay, overlay.day == selectedDay else {
-            return Self(value: localValue, fromServer: false, day: selectedDay, status: nil, stale: false,
-                        sourceFeature: nil, deviceId: nil, algorithmVersion: nil)
+            return Self(value: metric == .sleep ? nil : localValue, fromServer: metric == .sleep,
+                        day: selectedDay, status: metric == .sleep ? "unavailable" : nil, stale: false,
+                        sourceFeature: metric == .sleep ? "sleep" : nil, deviceId: nil, algorithmVersion: nil)
         }
         let value: Double?
         let featureKey: String
@@ -40,9 +41,11 @@ public struct ServerVitalSelection: Equatable {
         let status = feature?.status ?? "unavailable"
         let available = status == "available" || status == "stale"
         // A published feature with this metric still null is not live for the card.
-        // Keep the local number until the hosted kernel actually writes this key.
+        // Keep local independent vitals. Sleep's missing value may be an intentional deletion or
+        // unknown state; a local episode must never resurrect it under the selected server source.
         if !available || value == nil {
-            return Self(value: localValue, fromServer: false, day: selectedDay, status: status, stale: overlay.stale,
+            return Self(value: metric == .sleep ? nil : localValue, fromServer: metric == .sleep,
+                        day: selectedDay, status: metric == .sleep && value == nil ? "unavailable" : status, stale: overlay.stale,
                         sourceFeature: feature == nil ? nil : featureKey, deviceId: feature?.deviceId,
                         algorithmVersion: feature?.algorithmVersion)
         }

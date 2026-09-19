@@ -1,6 +1,6 @@
 package com.noop.push
 
-/** Explicit Today vital mode: an absent selected-day server value never borrows local history. */
+/** Sleep retains server ownership; independent vitals can fall back to local results. */
 data class ServerVitalSelection(
     val value: Double?, val fromServer: Boolean, val day: String, val status: String?, val stale: Boolean,
     val sourceFeature: String? = null, val deviceId: String? = null, val algorithmVersion: String? = null,
@@ -14,7 +14,9 @@ data class ServerVitalSelection(
             if (!serverEnabled) return ServerVitalSelection(localValue, false, selectedDay, null, false)
             // No overlay yet: keep showing locally scored values until the hosted scorer publishes.
             if (overlay == null || overlay.day != selectedDay)
-                return ServerVitalSelection(localValue, false, selectedDay, null, false)
+                return ServerVitalSelection(if (metric == Metric.SLEEP) null else localValue,
+                    metric == Metric.SLEEP, selectedDay, if (metric == Metric.SLEEP) "unavailable" else null,
+                    false, if (metric == Metric.SLEEP) "sleep" else null)
             val (value, featureKey) = when (metric) {
                 Metric.HRV -> overlay.daily?.hrvRmssdMs to "hrv"
                 Metric.RESTING_HR -> overlay.daily?.restingHrBpm?.toDouble() to "hrv"
@@ -29,9 +31,11 @@ data class ServerVitalSelection(
             val status = feature?.status ?: "unavailable"
             val available = status == "available" || status == "stale"
             // A published feature with this metric still null is not live for the card.
-            // Keep the local number until the hosted kernel actually writes this key.
+            // Missing sleep can be a deletion or an unknown state. Local episodes cannot resurrect it.
             if (!available || value == null) {
-                return ServerVitalSelection(localValue, false, selectedDay, status, overlay.stale,
+                return ServerVitalSelection(if (metric == Metric.SLEEP) null else localValue,
+                    metric == Metric.SLEEP, selectedDay,
+                    if (metric == Metric.SLEEP && value == null) "unavailable" else status, overlay.stale,
                     feature?.let { featureKey }, feature?.deviceId, feature?.algorithmVersion)
             }
             return ServerVitalSelection(value, true, selectedDay, status, overlay.stale || status == "stale",

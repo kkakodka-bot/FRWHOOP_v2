@@ -12,6 +12,7 @@ enum class PushAppendTable(override val wireName: String) : PushTable {
     HR_SAMPLE("hrSample"),
     RR_INTERVAL("rrInterval"),
     RR_PACKET_PROVENANCE("rrPacketProvenance"),
+    STANDARD_HR_RECEIPT("standardHRReceipt"),
     EVENT("event"),
     BATTERY("battery"),
     SPO2_SAMPLE("spo2Sample"),

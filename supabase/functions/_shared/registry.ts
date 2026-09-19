@@ -10,7 +10,7 @@ import { OBJECT_LANE_STREAMS } from './keys.ts';
 export const PUSH_PROTOCOL_VERSIONS = ['1.2', '1.1', '1.0'];
 
 export const APPEND_STREAMS = new Set([
-  'hrSample', 'rrInterval', 'rrPacketProvenance', 'event', 'battery', 'spo2Sample', 'skinTempSample',
+  'hrSample', 'rrInterval', 'rrPacketProvenance', 'standardHRReceipt', 'event', 'battery', 'spo2Sample', 'skinTempSample',
   'respSample', 'gravitySample', 'stepSample', 'sleepStateSample', 'ppgHrSample',
   'appleStepHour', 'ouraRaw', 'coachMessage',
 ]);
@@ -38,7 +38,7 @@ const PROTOCOL_1_2_ONLY = new Set(OBJECT_LANE_STREAMS);
 
 /** Streams added in protocol 1.1 — excluded from the 1.0 capability set. */
 const PROTOCOL_1_1_ONLY_APPEND = new Set([
-  'rrPacketProvenance',
+  'rrPacketProvenance', 'standardHRReceipt',
   'stepSample', 'sleepStateSample', 'ppgHrSample', 'appleStepHour', 'ouraRaw', 'coachMessage',
 ]);
 const PROTOCOL_1_1_ONLY_REPLACE = new Set([
@@ -136,6 +136,33 @@ export const APPEND_STREAM_PROJECTIONS: Record<string, {
         schemaVersion: d.schemaVersion, decoderVersion: d.decoderVersion, clockVersion: d.clockVersion,
         timestampPrecisionSeconds: d.timestampPrecisionSeconds, clockOffsetSeconds: d.clockOffsetSeconds,
         declaredCount: d.declaredCount };
+    },
+  },
+  standardHRReceipt: {
+    table: 'noop_standard_hr_receipts',
+    onConflict: 'user_id,device_id,receiptId',
+    tsKey: 'ts',
+    mapRow: ({ userId, deviceId, sourceId, batchId, record }) => {
+      const d = record.data ?? {};
+      const receiptId = record.key?.receiptId;
+      if (typeof d.sessionId !== 'string' ||
+          !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(d.sessionId) ||
+          typeof d.rawHex !== 'string' || !/^[a-f0-9]{2,1024}$/.test(d.rawHex) || d.rawHex.length % 2 !== 0 ||
+          d.schemaVersion !== 1 || d.clockVersion !== 'host-arrival-unmapped') return null;
+      for (const field of ['ts', 'notificationOrdinal', 'receivedUnixMs']) {
+        if (!Number.isSafeInteger(d[field]) || d[field] < 0) return null;
+      }
+      // Nanosecond host uptime crosses JavaScript's safe-integer boundary after ~104 days.
+      // Require a decimal string on the wire, retain it exactly for PostgreSQL bigint parsing.
+      if (typeof d.receivedMonotonicNs !== 'string' || !/^(0|[1-9][0-9]{0,18})$/.test(d.receivedMonotonicNs) ||
+          BigInt(d.receivedMonotonicNs) > 9223372036854775807n ||
+          receiptId !== `${d.sessionId}:${d.notificationOrdinal}` ||
+          d.ts !== Math.floor(d.receivedUnixMs / 1000)) return null;
+      // Arrival clocks and consecutive notifications do not assert sensor beat timing/continuity.
+      return { user_id: userId, device_id: deviceId, source_id: sourceId, batch_id: batchId, receiptId,
+        ts: d.ts, sessionId: d.sessionId, notificationOrdinal: d.notificationOrdinal,
+        receivedUnixMs: d.receivedUnixMs, receivedMonotonicNs: d.receivedMonotonicNs,
+        rawHex: d.rawHex, schemaVersion: d.schemaVersion, clockVersion: d.clockVersion };
     },
   },
   stepSample: {
@@ -478,7 +505,7 @@ export const INGEST_ENABLED_STREAMS = new Set([
 export function recordTimestamp(stream: string, record: any): number | null {
   const tsKey = APPEND_STREAM_PROJECTIONS[stream]?.tsKey;
   if (!tsKey) return null;
-  const ts = Number(stream === 'rrPacketProvenance' ? record?.data?.[tsKey] : record?.key?.[tsKey]);
+  const ts = Number(['rrPacketProvenance', 'standardHRReceipt'].includes(stream) ? record?.data?.[tsKey] : record?.key?.[tsKey]);
   return Number.isFinite(ts) ? ts : null;
 }
 

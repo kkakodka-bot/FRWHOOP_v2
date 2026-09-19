@@ -44,6 +44,7 @@ export const DELETION_STEPS = [
 
 export const DELETION_TABLES = [
   'noop_rr_packet_provenance',
+  'noop_standard_hr_receipts',
   'physiology_buckets', 'daily_physiology_series', 'ingest_gaps', 'measurements',
   'sleep_details', 'events', 'sessions', 'daily_metrics', 'metric_runs', 'object_manifests',
   'sensor_objects', 'derived_objects', 'live_windows', 'sleep_nights', 'coach_messages',

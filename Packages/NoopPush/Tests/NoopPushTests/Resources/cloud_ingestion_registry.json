@@ -7,6 +7,17 @@
       "classification": "local_only",
       "why": "Owner-scoped server physiology readback cache; never uploaded as source physiology. Android uses private preferences."
     },
+    "standardHRReceipt": {
+      "platform": "both",
+      "classification": "shipped",
+      "wireStream": "standardHRReceipt",
+      "delivery": "append",
+      "b2Stream": "standardHRReceipt",
+      "b2Extension": "ndjson.gz",
+      "b2RetentionClass": "core",
+      "supabaseTable": "noop_standard_hr_receipts",
+      "why": "Original standard BLE notification identity and raw bytes; host receipt clocks remain unmapped. Monotonic nanoseconds export as decimal strings to preserve exact integers."
+    },
     "rrPacketProvenance": {
       "platform": "both",
       "classification": "shipped",

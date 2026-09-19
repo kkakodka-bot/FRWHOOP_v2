@@ -91,6 +91,7 @@ class DeviceRegistryTest {
         override suspend fun deleteHrFor(deviceId: String) { deletedTables += "hrSample" to deviceId }
         override suspend fun deleteRrFor(deviceId: String) { deletedTables += "rrInterval" to deviceId }
         override suspend fun deleteRrPacketsFor(deviceId: String) { deletedTables += "rrPacketProvenance" to deviceId }
+        override suspend fun deleteStandardHrReceiptsFor(deviceId: String) { deletedTables += "standardHRReceipt" to deviceId }
         override suspend fun deleteSpo2For(deviceId: String) { deletedTables += "spo2Sample" to deviceId }
         override suspend fun deleteSkinTempFor(deviceId: String) { deletedTables += "skinTempSample" to deviceId }
         override suspend fun deleteRespFor(deviceId: String) { deletedTables += "respSample" to deviceId }
@@ -128,6 +129,7 @@ class DeviceRegistryTest {
         override suspend fun reKeyHr(from: String, to: String) {}
         override suspend fun reKeyRr(from: String, to: String) {}
         override suspend fun reKeyRrPackets(from: String, to: String) {}
+        override suspend fun reKeyStandardHrReceipts(from: String, to: String) {}
         override suspend fun reKeySpo2(from: String, to: String) {}
         override suspend fun reKeySkinTemp(from: String, to: String) {}
         override suspend fun reKeyResp(from: String, to: String) {}
@@ -311,7 +313,7 @@ class DeviceRegistryTest {
         // Keep in sync with the deviceId-keyed @Entity list in Entities.kt — the audit found the last five
         // were missing, leaving raw sleep-state, lab markers, live sessions and dismissed markers behind.
         val expectedTables = setOf(
-            "hrSample", "rrInterval", "rrPacketProvenance", "spo2Sample", "skinTempSample", "respSample", "gravitySample",
+            "hrSample", "rrInterval", "rrPacketProvenance", "standardHRReceipt", "spo2Sample", "skinTempSample", "respSample", "gravitySample",
             "stepSample", "ppgHrSample", "ppgWaveformSample", "v18AuxSample",
             "event", "battery", "dailyMetric", "sleepSession",
             "journal", "workout", "appleDaily", "metricSeries", "dayOwnership",

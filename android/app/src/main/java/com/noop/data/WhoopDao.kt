@@ -8,6 +8,18 @@ import androidx.room.Transaction
 import androidx.room.Upsert
 import kotlinx.coroutines.flow.Flow
 
+/** Shared with the SQLite behavior test so the reader cannot lose its seed behind unrelated events. */
+internal const val WEAR_EVENTS_FOR_WINDOW_SQL = """
+    SELECT * FROM event
+    WHERE deviceId = :deviceId AND (kind LIKE 'WRIST_ON%' OR kind LIKE 'WRIST_OFF%')
+      AND ts < :endExclusive
+      AND (ts >= :start OR ts = (
+          SELECT MAX(ts) FROM event WHERE deviceId = :deviceId AND ts < :start
+            AND (kind LIKE 'WRIST_ON%' OR kind LIKE 'WRIST_OFF%')
+      ))
+    ORDER BY ts, kind
+"""
+
 /** Kept as one compile-time constant so Room and the plain-JVM SQLite regression test execute the exact
  * same statement. Swift's twin lives in WhoopStore.analysisFingerprint(). */
 internal const val ANALYSIS_FINGERPRINT_SQL =
@@ -128,6 +140,12 @@ internal const val PROMOTE_WHOOP5_RR_SOURCE_SQL =
  */
 @Dao
 interface WhoopDao : DeviceRegistryDao {
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertStandardHrReceipts(rows: List<StandardHrReceiptEntity>): List<Long>
+
+    @Query("SELECT * FROM standardHRReceipt WHERE deviceId = :deviceId AND ts >= :from AND ts < :to ORDER BY receivedUnixMs, sessionId, notificationOrdinal")
+    suspend fun standardHrReceipts(deviceId: String, from: Long, to: Long): List<StandardHrReceiptEntity>
+
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertRrPackets(rows: List<RrPacketProvenanceEntity>): List<Long>
 
@@ -610,6 +628,10 @@ interface WhoopDao : DeviceRegistryDao {
             "ORDER BY ts ASC, kind ASC LIMIT :limit"
     )
     suspend fun events(deviceId: String, from: Long, to: Long, limit: Int): List<EventRow>
+
+    /** Wear transitions inside the measurement window and the final preceding state, for one owner. */
+    @Query(WEAR_EVENTS_FOR_WINDOW_SQL)
+    suspend fun wearEventsForWindow(deviceId: String, start: Long, endExclusive: Long): List<EventRow>
 
     @Query(
         "SELECT * FROM event WHERE deviceId = :deviceId AND kind = :kind " +

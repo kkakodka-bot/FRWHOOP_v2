@@ -1422,6 +1422,10 @@ public final class BLEManager: NSObject, ObservableObject {
         self.collector = nil
         super.init()
         state.selectBatteryDevice(deviceId)
+        // The persisted family must also govern forecasts before Bluetooth reconnects. Otherwise
+        // a restored MG battery sample uses the WHOOP 4 rated lifetime until connectCore runs.
+        state.batteryRatedHours = selectedModel.deviceFamily == .whoop5
+            ? BatteryEstimator.ratedLifeHoursWhoop5 : BatteryEstimator.ratedLifeHoursWhoop4
         configureCollectorFamily()
         guard startCentral else { return }
         #if DEBUG
@@ -6553,6 +6557,9 @@ public final class BLEManager: NSObject, ObservableObject {
 
     /// Parse a standard BLE Heart Rate Measurement (0x2A37) via the pure StandardHeartRate parser.
     private func parseStandardHR(_ data: [UInt8]) {
+        collector?.ingestStandardHRReceipt(data,
+            receivedUnixMs: Int64(Date().timeIntervalSince1970 * 1000),
+            receivedMonotonicNs: Int64(clamping: DispatchTime.now().uptimeNanoseconds))
         guard let m = StandardHeartRate.parse(data) else {
             log("HR notify parse failed: \(hex(data))")
             return
@@ -6839,6 +6846,7 @@ extension BLEManager: @preconcurrency CBCentralManagerDelegate {
         // #1881: BEFORE anything persists. The Collector and Backfiller read `deviceId` at flush and at
         // finishChunk, so re-pointing here is what keeps this link's rows off another device's id.
         adoptSourceIdentity(for: peripheral)
+        collector?.beginStandardHRReceiptSession()
         // Clear the per-connection bond BEFORE publishing the connected uuid below. SourceCoordinator's #52
         // re-adoption gate keys off `encryptedBond` at the instant `connectedPeripheralUUID` is observed —
         // an ordinary `didConnect` publish must always read false (only the deliberate post-bond #52

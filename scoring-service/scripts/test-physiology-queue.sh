@@ -52,6 +52,9 @@ for migration in "$repo_dir"/supabase/migrations/20260918[1-9]*.sql; do
   if [[ "$(basename "$migration")" == 20260918100000_physiology_independent_work.sql ]]; then
     "${psql_cmd[@]}" -f "$service_dir/service/src/test/resources/physiology_queue_isolation_fixture.sql" >>"$pg_test_dir/migrations.log"
   fi
+  if [[ "$(basename "$migration")" == 20260918200000_restore_input_revision_fencing.sql ]]; then
+    "${psql_cmd[@]}" -f "$service_dir/service/src/test/resources/physiology_coalesced_claim_fixture.sql" >>"$pg_test_dir/migrations.log"
+  fi
   "${psql_cmd[@]}" -f "$migration" >>"$pg_test_dir/migrations.log"
 done
 cd "$service_dir"
@@ -60,6 +63,7 @@ cd "$service_dir"
   --tests com.frwhoop.scoring.PhysiologyPublicationIntegrationTest \
   --tests com.frwhoop.scoring.PhysiologyDependencyIntegrationTest \
   --tests com.frwhoop.scoring.RrPacketProvenanceIntegrationTest \
+  --tests com.frwhoop.scoring.StandardHRReceiptIntegrationTest \
   --tests com.frwhoop.scoring.PhysiologyWearDependencyIntegrationTest \
   --tests com.frwhoop.scoring.RawSignalCatalogueIntegrationTest \
   --tests com.frwhoop.scoring.LegacySleepContinuationIntegrationTest \
@@ -70,6 +74,7 @@ cp "$service_dir/service/build/test-results/test/TEST-com.frwhoop.scoring.Physio
 cp "$service_dir/service/build/test-results/test/TEST-com.frwhoop.scoring.PhysiologyDependencyIntegrationTest.xml" "$pg_test_dir/"
 cp "$service_dir/service/build/test-results/test/TEST-com.frwhoop.scoring.CalendarOwnershipIntegrationTest.xml" "$pg_test_dir/"
 cp "$service_dir/service/build/test-results/test/TEST-com.frwhoop.scoring.RrPacketProvenanceIntegrationTest.xml" "$pg_test_dir/"
+cp "$service_dir/service/build/test-results/test/TEST-com.frwhoop.scoring.StandardHRReceiptIntegrationTest.xml" "$pg_test_dir/"
 cp "$service_dir/service/build/test-results/test/TEST-com.frwhoop.scoring.PhysiologyWearDependencyIntegrationTest.xml" "$pg_test_dir/"
 cp "$service_dir/service/build/test-results/test/TEST-com.frwhoop.scoring.RawSignalCatalogueIntegrationTest.xml" "$pg_test_dir/"
 cp "$service_dir/service/build/test-results/test/TEST-com.frwhoop.scoring.LegacySleepContinuationIntegrationTest.xml" "$pg_test_dir/"

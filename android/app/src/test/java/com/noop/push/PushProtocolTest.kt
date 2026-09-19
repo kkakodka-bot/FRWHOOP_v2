@@ -28,7 +28,7 @@ class PushProtocolTest {
     fun appendRegistryIncludesVersionedPacketCompanionWithoutChangingLegacyStreams() {
         assertEquals(
             listOf(
-                "hrSample", "rrInterval", "rrPacketProvenance", "event", "battery", "spo2Sample", "skinTempSample",
+                "hrSample", "rrInterval", "rrPacketProvenance", "standardHRReceipt", "event", "battery", "spo2Sample", "skinTempSample",
                 "respSample", "gravitySample",
             ),
             PushAppendTable.entries.map { it.wireName },

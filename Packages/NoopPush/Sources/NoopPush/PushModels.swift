@@ -8,6 +8,7 @@ public enum PushAppendTable: String, CaseIterable, PushTable, Sendable {
     case hrSample
     case rrInterval
     case rrPacketProvenance
+    case standardHRReceipt
     case event
     case battery
     case spo2Sample

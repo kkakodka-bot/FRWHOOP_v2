@@ -2893,4 +2893,17 @@
     <string name="server_scoring_password">Password</string>
     <string name="server_scoring_signing_in">Signing in…</string>
     <string name="server_scoring_sign_out">Sign out</string>
+    <string name="five_minute_hr_title">Five-minute heart rate</string>
+    <string name="five_minute_hr_refresh">Refresh</string>
+    <string name="five_minute_hr_select_device">Select an active sensor to view its readings.</string>
+    <string name="five_minute_hr_loading">Loading completed windows…</string>
+    <string name="five_minute_hr_read_failed">Stored readings could not be loaded. Try refreshing.</string>
+    <string name="five_minute_hr_counts">Last 24 hours · %1$d sampled averages · %2$d low-motion averages</string>
+    <string name="five_minute_hr_source">On-device calculation · sensor %1$s</string>
+    <string name="five_minute_hr_baseline_separate">Low motion does not establish physiological rest. The overnight resting baseline remains separate below.</string>
+    <string name="five_minute_hr_insufficient">No complete window has enough heart-rate samples yet. Windows with missing data remain unavailable.</string>
+    <string name="five_minute_hr_values">Sampled: %1$s bpm · Low motion: %2$s bpm</string>
+    <string name="five_minute_hr_coverage">Sample coverage: %1$d%% · With low motion: %2$d%%</string>
+    <string name="five_minute_hr_show_recent">Show latest 12 windows</string>
+    <string name="five_minute_hr_show_all">Show all %1$d windows</string>
 </resources>

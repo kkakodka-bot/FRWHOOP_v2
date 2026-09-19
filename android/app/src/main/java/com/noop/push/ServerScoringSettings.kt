@@ -17,15 +17,17 @@ object ServerScoringSettings {
     const val SYNC_PUSH_INTERVAL_MS = 10_000L
 
     fun skipsSyncCoupledRescore(context: Context): Boolean = skipsSyncCoupledRescore(prefs(context))
-    fun skipsSyncCoupledRescore(prefs: SharedPreferences): Boolean =
-        isEnabled(prefs) && overlayLive(prefs)
+    // A server physiology snapshot does not cover the whole local analysis pass or its history.
+    // Preserve the existing coalesced/fingerprint-gated schedule for the remaining local metrics.
+    @Suppress("UNUSED_PARAMETER")
+    fun skipsSyncCoupledRescore(prefs: SharedPreferences): Boolean = false
 
     fun overlayLive(prefs: SharedPreferences): Boolean = prefs.getBoolean(OVERLAY_LIVE_KEY, false)
     fun markOverlayLive(prefs: SharedPreferences, live: Boolean) {
         prefs.edit().putBoolean(OVERLAY_LIVE_KEY, live).apply()
     }
     fun overlayIsLive(cache: ServerScoreDayCache): Boolean =
-        cache.daily != null && cache.features.values.any { it.status == "available" || it.status == "stale" }
+        cache.daily != null && !cache.stale && cache.features.values.any { it.status == "available" }
 
     fun prefs(context: Context): SharedPreferences =
         context.getSharedPreferences("noop_server_scoring", Context.MODE_PRIVATE)

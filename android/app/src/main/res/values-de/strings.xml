@@ -2877,4 +2877,17 @@
     <string name="server_scoring_password">Passwort</string>
     <string name="server_scoring_signing_in">Anmeldung…</string>
     <string name="server_scoring_sign_out">Abmelden</string>
+    <string name="five_minute_hr_title">Herzfrequenz in Fünf-Minuten-Fenstern</string>
+    <string name="five_minute_hr_refresh">Aktualisieren</string>
+    <string name="five_minute_hr_select_device">Wähle einen aktiven Sensor, um seine Messwerte anzuzeigen.</string>
+    <string name="five_minute_hr_loading">Abgeschlossene Zeitfenster werden geladen…</string>
+    <string name="five_minute_hr_read_failed">Gespeicherte Messwerte konnten nicht geladen werden. Versuche es erneut.</string>
+    <string name="five_minute_hr_counts">Letzte 24 Stunden · %1$d Mittelwerte · %2$d Mittelwerte bei wenig Bewegung</string>
+    <string name="five_minute_hr_source">Auf dem Gerät berechnet · Sensor %1$s</string>
+    <string name="five_minute_hr_baseline_separate">Wenig Bewegung beweist keinen körperlichen Ruhezustand. Der nächtliche Ruhepuls wird unten gesondert angezeigt.</string>
+    <string name="five_minute_hr_insufficient">Noch kein vollständiges Zeitfenster enthält genügend Herzfrequenzdaten. Bei fehlenden Daten bleibt der Wert nicht verfügbar.</string>
+    <string name="five_minute_hr_values">Mittelwert: %1$s bpm · Bei wenig Bewegung: %2$s bpm</string>
+    <string name="five_minute_hr_coverage">Messabdeckung: %1$d%% · Bei wenig Bewegung: %2$d%%</string>
+    <string name="five_minute_hr_show_recent">Letzte 12 Zeitfenster anzeigen</string>
+    <string name="five_minute_hr_show_all">Alle %1$d Zeitfenster anzeigen</string>
 </resources>

@@ -24,6 +24,7 @@ public enum PushProtocol {
         "hrSample": (["ts"], ["bpm"]),
         "rrInterval": (["ts", "rrMs", "seq"], ["ord", "srcChannel", "tsSuspect"]),
         "rrPacketProvenance": (["packetId"], ["ts", "sensorTs", "recordIndex", "rawHex", "srcChannel", "schemaVersion", "decoderVersion", "clockVersion", "timestampPrecisionSeconds", "clockOffsetSeconds", "declaredCount"]),
+        "standardHRReceipt": (["receiptId"], ["ts", "sessionId", "notificationOrdinal", "receivedUnixMs", "receivedMonotonicNs", "rawHex", "schemaVersion", "clockVersion"]),
         "event": (["ts", "kind"], ["payloadJSON"]),
         "battery": (["ts"], ["soc", "mv", "charging"]),
         "spo2Sample": (["ts"], ["red", "ir"]),
@@ -105,7 +106,7 @@ public enum PushProtocol {
         let body = concatenate(header: header, lines: selectedLines)
         precondition(body.count <= PushProtocolLimits.maxBodyBytes)
         return PushBatch(
-            protocolVersion: table == .rrPacketProvenance ? "1.1" : version,
+            protocolVersion: [.rrPacketProvenance, .standardHRReceipt].contains(table) ? "1.1" : version,
             batchId: batchId,
             sourceId: sourceId,
             table: table,
@@ -542,7 +543,7 @@ public enum PushProtocol {
             "delivery": .string("append"),
             "deviceId": .string(deviceId),
             "endCursor": .map(cursorJson(end)),
-            "protocolVersion": .string(table == .rrPacketProvenance ? "1.1" : version),
+            "protocolVersion": .string([.rrPacketProvenance, .standardHRReceipt].contains(table) ? "1.1" : version),
             "recordCount": .int(Int64(count)),
             "sourceId": .string(sourceId),
             "startCursor": start.map { .map(cursorJson($0)) } ?? .null,

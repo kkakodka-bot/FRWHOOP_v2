@@ -23,12 +23,14 @@ function overlayFor(userId: string, day: string) {
 }
 
 Deno.test('scores: wraps server_scoring_for_day for the authenticated owner', async () => {
-  const rest = makeMemRest();
-  rest.rpc = async (name: string, args: any) => {
-    assertEquals(name, 'server_scoring_for_day');
-    assertEquals(args.p_user, USER);
-    assertEquals(args.p_day, DAY);
-    return overlayFor(USER, DAY);
+  const rest = {
+    ...makeMemRest(),
+    rpc: async (name: string, args: { p_user: string; p_day: string }) => {
+      assertEquals(name, 'server_scoring_for_day');
+      assertEquals(args.p_user, USER);
+      assertEquals(args.p_day, DAY);
+      return overlayFor(USER, DAY);
+    },
   };
   const body = await readOwnerDayScores({ rest: rest as any, userId: USER, day: DAY });
   assertEquals(body.server_scoring.user_id, USER);

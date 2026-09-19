@@ -10,11 +10,11 @@ enum ServerScoringSettings {
     /// During an active offload, flush push at most once per this interval (spec: ≤10 s).
     static let syncPushIntervalSeconds: TimeInterval = 10
 
-    /// When true, sync/offload must not run a local `analyzeRecent`; the hosted scorer owns HRV/sleep/Charge.
-    /// Skip local work only after a live overlay has actually arrived. Otherwise Today stays blank
-    /// on every phone while the queue is still catching up.
+    /// The hosted snapshot owns individual physiology fields, not the whole local analysis pass.
+    /// Even a fresh overlay cannot settle local-only metrics or their history. Keep the existing
+    /// coalesced, fingerprint-gated local schedule; fetching a score adds no new analysis timer.
     static var skipsSyncCoupledRescore: Bool {
-        isEnabled && CloudScoreIdentity.overlayLive
+        false
     }
 
     /// Clear any in-flight deferred rescore debt when server scoring owns the score path.

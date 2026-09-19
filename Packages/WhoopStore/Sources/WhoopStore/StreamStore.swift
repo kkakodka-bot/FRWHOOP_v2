@@ -31,6 +31,21 @@ private struct RRBatchSecond: Hashable {
 }
 
 extension WhoopStore {
+    /// Original standard-HR notifications. Host receipt clocks do not establish beat-time coverage.
+    public func standardHrReceipts(deviceId: String, from: Int, to: Int) async throws -> [StandardHRReceipt] {
+        try syncRead { db in
+            try Row.fetchAll(db, sql: "SELECT * FROM standardHRReceipt WHERE deviceId = ? AND ts >= ? AND ts < ? ORDER BY receivedUnixMs, sessionId, notificationOrdinal",
+                arguments: [deviceId, from, to]).compactMap { row in
+                guard let bytes = RRPacketProvenance.bytes(row["rawHex"]),
+                      let receipt = StandardHRReceipt.capture(bytes, sessionId: row["sessionId"],
+                        notificationOrdinal: row["notificationOrdinal"], receivedUnixMs: row["receivedUnixMs"],
+                        receivedMonotonicNs: row["receivedMonotonicNs"]),
+                      receipt.receiptId == row["receiptId"], receipt.ts == row["ts"],
+                      receipt.schemaVersion == row["schemaVersion"], receipt.clockVersion == row["clockVersion"] else { return nil }
+                return receipt
+            }
+        }
+    }
     /// Dual-read companion: legacy RR remains unchanged and carries no inferred identity.
     public func rrPacketProvenance(deviceId: String, from: Int, to: Int) async throws -> [RRPacketProvenance] {
         try syncRead { db in
@@ -347,6 +362,17 @@ extension WhoopStore {
                     try stmt.execute(arguments: [deviceId, p.packetId, p.ts, p.sensorTs, p.recordIndex, p.rawHex,
                         p.srcChannel, p.schemaVersion, p.decoderVersion, p.clockVersion, p.timestampPrecisionSeconds, p.clockOffsetSeconds, p.declaredCount])
                     rrPacketsInserted += db.changesCount
+                }
+            }
+            if !streams.standardHrReceipts.isEmpty {
+                let stmt = try db.cachedStatement(sql: """
+                    INSERT INTO standardHRReceipt (deviceId, receiptId, ts, sessionId, notificationOrdinal,
+                        receivedUnixMs, receivedMonotonicNs, rawHex, schemaVersion, clockVersion)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(deviceId, receiptId) DO NOTHING
+                    """)
+                for p in streams.standardHrReceipts where p.isValid {
+                    try stmt.execute(arguments: [deviceId, p.receiptId, p.ts, p.sessionId, p.notificationOrdinal,
+                        p.receivedUnixMs, p.receivedMonotonicNs, p.rawHex, p.schemaVersion, p.clockVersion])
                 }
             }
             if !streams.rr.isEmpty {

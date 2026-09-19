@@ -3657,6 +3657,10 @@ class WhoopBleClient(
     /** Standard 0x2A37 HR/RR/contact buffer — the reliable, always-on stream. */
     private val stdHr = ArrayList<HrRow>()
     private val stdRr = ArrayList<RrRow>()
+    private val stdReceipts = ArrayList<Pair<String, com.noop.protocol.StandardHrReceipt>>()
+    private var stdReceiptSessionId = java.util.UUID.randomUUID().toString()
+    private var stdReceiptOrdinal = 0L
+    private var stdReceiptDeviceId: String? = null
     private val stdContact = ArrayList<EventEntry>()
 
     // --- Offload frame drain (preserves START/data/END arrival order; port of routeBackfillFrame) ---
@@ -6769,6 +6773,10 @@ class WhoopBleClient(
         override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
             when (newState) {
                 BluetoothProfile.STATE_CONNECTED -> {
+                    synchronized(collectorLock) {
+                        stdReceiptSessionId = java.util.UUID.randomUUID().toString()
+                        stdReceiptOrdinal = 0L
+                    }
                     // Port of didConnect: mark connected, negotiate a larger ATT MTU, THEN discover.
                     handler.removeCallbacks(scanTimeoutRunnable)
                     // #1030 (ryanbr): a real link is up — cancel any pending involuntary reconnect so a
@@ -8320,6 +8328,18 @@ class WhoopBleClient(
      * The standard profile is the RELIABLE source for both HR and R-R.
      */
     private fun parseStandardHr(data: ByteArray) {
+        val receiptsShouldFlush = synchronized(collectorLock) {
+            val owner = deviceId
+            if (stdReceiptDeviceId != owner || stdReceiptOrdinal == Long.MAX_VALUE) {
+                stdReceiptSessionId = java.util.UUID.randomUUID().toString()
+                stdReceiptOrdinal = 0L
+                stdReceiptDeviceId = owner
+            }
+            com.noop.protocol.StandardHrReceipt.capture(data, stdReceiptSessionId, stdReceiptOrdinal++,
+                System.currentTimeMillis(), android.os.SystemClock.elapsedRealtimeNanos())?.let { stdReceipts.add(owner to it) }
+            stdReceipts.size >= 30
+        }
+        if (receiptsShouldFlush) ioScope.launch { flushStandardHr() }
         if (data.isEmpty()) return
         val flags = data[0].toInt() and 0xFF
         val hr16 = (flags and 0x01) != 0
@@ -9891,13 +9911,16 @@ class WhoopBleClient(
 
     /** Persist the buffered standard HR/RR. Re-buffers on failure. Port of `Collector.flushStandardHR`. */
     private suspend fun flushStandardHr() {
-        val (hr, rr, contact) = synchronized(collectorLock) {
-            if (stdHr.isEmpty() && stdRr.isEmpty() && stdContact.isEmpty()) return
+        val (samples, receipts) = synchronized(collectorLock) {
+            if (stdHr.isEmpty() && stdRr.isEmpty() && stdContact.isEmpty() && stdReceipts.isEmpty()) return
             val h = ArrayList(stdHr); val r = ArrayList(stdRr)
             val c = ArrayList(stdContact)
+            val receipts = ArrayList(stdReceipts)
             stdHr.clear(); stdRr.clear(); stdContact.clear()
-            Triple(h, r, c)
+            stdReceipts.clear()
+            Triple(h, r, c) to receipts
         }
+        val (hr, rr, contact) = samples
         // #1118: census this batch BEFORE it is stored, exactly as the historical path does, so a
         // strap log carries one `ratioRep` per transport. If each transport reports ~1.0 while the
         // stored night reads 2.77, the over-count is the UNION of the transports and no single
@@ -9913,11 +9936,17 @@ class WhoopBleClient(
             }
         }
         try {
+            // Receipt ownership is captured at arrival, so a device switch during an IO suspension
+            // cannot reattribute an old notification. Partial retries keep identical receipt IDs.
+            for ((owner, rows) in receipts.groupBy({ it.first }, { it.second })) {
+                repository.insert(StreamBatch(standardHrReceipts = rows), owner)
+            }
             addBankedLive(repository.insert(StreamBatch(hr = hr, rr = rr, events = contact), deviceId))
             liveInsertFailuresStd.set(0)
         } catch (t: Throwable) {
             synchronized(collectorLock) {
                 stdHr.addAll(0, hr); stdRr.addAll(0, rr); stdContact.addAll(0, contact)
+                stdReceipts.addAll(0, receipts)
             }
             // Swallowing this made the instrumentation above read like success: a store failing every
             // insert produced a log full of `rr emit ... offered=N` and no sign that none of it landed.
@@ -10165,7 +10194,7 @@ class WhoopBleClient(
         ack.await()
     }
 
-    private fun startBackfillDrain(lease: BackfillDrainGate<BackfillPipelineItem>.Lease) {
+    private fun startBackfillDrain(lease: BackfillDrainGate.Lease) {
         ioScope.launch {
             var ownsDrain = true
             try {

@@ -5,6 +5,28 @@ import WhoopStore
 
 @MainActor
 final class BackfillManagerLifecycleTests: XCTestCase {
+    private var savedOnboarded: Any?
+    private var savedBackfillLastAt: Any?
+
+    override func setUp() async throws {
+        try await super.setUp()
+        // These tests exercise an already configured history transport. A fresh test host has
+        // not completed onboarding, whose intentional data gate would otherwise stop every start.
+        savedOnboarded = UserDefaults.standard.object(forKey: "noop.onboarded")
+        savedBackfillLastAt = UserDefaults.standard.object(forKey: BLEManager.backfillLastAtKey)
+        UserDefaults.standard.set(true, forKey: "noop.onboarded")
+        UserDefaults.standard.removeObject(forKey: BLEManager.backfillLastAtKey)
+    }
+
+    override func tearDown() async throws {
+        for (key, value) in [("noop.onboarded", savedOnboarded),
+                             (BLEManager.backfillLastAtKey, savedBackfillLastAt)] {
+            if let value { UserDefaults.standard.set(value, forKey: key) }
+            else { UserDefaults.standard.removeObject(forKey: key) }
+        }
+        try await super.tearDown()
+    }
+
     private final class Store: BackfillStoreWriting {
         func insert(_ streams: Streams, deviceId: String) async throws
             -> (hr: Int, rr: Int, events: Int, battery: Int, spo2: Int, skinTemp: Int, resp: Int, gravity: Int) {

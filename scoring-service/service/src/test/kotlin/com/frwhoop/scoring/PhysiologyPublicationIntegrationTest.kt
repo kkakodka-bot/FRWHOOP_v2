@@ -177,6 +177,54 @@ class PhysiologyPublicationIntegrationTest {
         assertEquals(0L,count("server_physiology_results"))
     }
 
+    @Test fun fiveMinuteHeartRateReadbackFollowsHrvDeviceAndOwnerSelection() {
+        selectSyntheticQualifiedV2()
+        val secondary = UUID.randomUUID()
+        sql("insert into devices(id,user_id) values('$secondary','$user')")
+        for ((ownerDevice, mean) in listOf(device to 60, secondary to 120)) {
+            val item = claim(ownerDevice)
+            val value = payload(item).apply { getJSONObject("daily").put("heart_rate_windows", JSONArray().put(
+                JSONObject().put("start",1789606800).put("end",1789607100)
+                    .put("user_id",user.toString()).put("device_id",ownerDevice.toString())
+                    .put("method_version","sampled-hr-five-minute-1").put("mean_bpm",mean))) }
+            publish(value)
+        }
+        sql("update physiology_source_selection set device_id='$secondary' where user_id='$user' and feature='respiration'")
+        val otherUser = UUID.randomUUID()
+        sql("insert into auth.users values('$otherUser')")
+        db.withConnection { c -> c.createStatement().use { s ->
+            s.execute("grant usage on schema auth to authenticated")
+            s.execute("grant select on devices,server_daily_scores,server_sleep_nights to authenticated")
+            s.execute("set role authenticated")
+            try {
+                s.execute("select set_config('request.jwt.claim.sub','$user',false)")
+                s.executeQuery("select server_scoring_for_day('$user','$day')").use { rows ->
+                    rows.next(); val read = JSONObject(rows.getString(1))
+                    val window = read.getJSONObject("daily").getJSONArray("heart_rate_windows").getJSONObject(0)
+                    assertEquals(60,window.getInt("mean_bpm"))
+                    assertEquals(device.toString(),window.getString("device_id"))
+                    assertEquals(user.toString(),window.getString("user_id"))
+                    assertEquals(secondary.toString(),read.getJSONObject("features").getJSONObject("respiration").getString("device_id"))
+                }
+                s.execute("select set_config('request.jwt.claim.sub','$otherUser',false)")
+                expectFailure("42501") { s.execute("select server_scoring_for_day('$user','$day')") }
+                s.executeQuery("select count(*) from server_physiology_results where user_id='$user'").use { it.next(); assertEquals(0,it.getInt(1)) }
+            } finally { s.execute("reset role"); s.execute("select set_config('request.jwt.claim.sub','',false)") }
+        } }
+    }
+
+    @Test fun heartRateWindowCannotSmuggleAnotherOwnerOrDeviceIntoPublishedResult() {
+        val item = claim()
+        for ((owner, ownerDevice) in listOf(UUID.randomUUID() to device, user to UUID.randomUUID())) {
+            val value = payload(item).apply { getJSONObject("daily").put("heart_rate_windows", JSONArray().put(
+                JSONObject().put("start",1789606800).put("end",1789607100)
+                    .put("user_id",owner.toString()).put("device_id",ownerDevice.toString())
+                    .put("method_version","sampled-hr-five-minute-1").put("mean_bpm",60))) }
+            expectFailure("22023") { publish(value) }
+        }
+        assertEquals(0L,count("server_physiology_results"))
+    }
+
     @Test fun readerLoadsAfternoonContextAndEditsWithoutTreatingAnnotationsAsTruth() {
         val at=java.time.Instant.parse("2026-09-17T15:00:00Z").epochSecond
         sql("insert into noop_hr_samples(user_id,device_id,source_id,ts,bpm,batch_id) " +

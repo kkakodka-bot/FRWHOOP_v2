@@ -1,7 +1,8 @@
 import XCTest
+import WhoopStore
 @testable import Strand
 
-/// Remaining 3: when `serverScoring` is on, sync-coupled rescore drains must not invoke analyzeRecent.
+/// A physiology overlay never claims completion of local-only metrics or their history.
 @MainActor
 final class ServerScoringRescoreSkipTests: XCTestCase {
 
@@ -39,12 +40,12 @@ final class ServerScoringRescoreSkipTests: XCTestCase {
         XCTAssertTrue(ServerScoringSettings.isEnabled)
     }
 
-    func testSkipsSyncCoupledRescoreWhenFlagOnRequiresLiveOverlay() {
+    func testLiveServerOverlayDoesNotSuppressLocalOnlyMetrics() {
         ServerScoringSettings.setEnabled(true)
         CloudScoreIdentity.markOverlayLive(false)
         XCTAssertFalse(ServerScoringSettings.skipsSyncCoupledRescore)
         CloudScoreIdentity.markOverlayLive(true)
-        XCTAssertTrue(ServerScoringSettings.skipsSyncCoupledRescore)
+        XCTAssertFalse(ServerScoringSettings.skipsSyncCoupledRescore)
         CloudScoreIdentity.markOverlayLive(false)
     }
 
@@ -53,16 +54,13 @@ final class ServerScoringRescoreSkipTests: XCTestCase {
         XCTAssertFalse(ServerScoringSettings.skipsSyncCoupledRescore)
     }
 
-    func testSettleSkippedLocalRescoreDebtClearsOwedMark() {
+    func testPartialServerOverlayCannotClearOwedLocalRescore() {
         ServerScoringSettings.setEnabled(true)
+        CloudScoreIdentity.markOverlayLive(true)
         _ = RescoreBackgroundScheduler.markRescoreOwed()
         XCTAssertTrue(RescoreBackgroundScheduler.isRescoreOwed)
         ServerScoringSettings.settleSkippedLocalRescoreDebt()
-        if CloudScoreIdentity.overlayLive {
-            XCTAssertFalse(RescoreBackgroundScheduler.isRescoreOwed)
-        } else {
-            XCTAssertTrue(RescoreBackgroundScheduler.isRescoreOwed)
-        }
+        XCTAssertTrue(RescoreBackgroundScheduler.isRescoreOwed)
     }
 
     func testSettleSkippedLocalRescoreDebtNoOpWhenFlagOff() {
@@ -76,5 +74,42 @@ final class ServerScoringRescoreSkipTests: XCTestCase {
         XCTAssertEqual(CloudPushPeriodicScheduler.effectiveInterval(serverScoringEnabled: true), 45, accuracy: 0.001)
         XCTAssertEqual(CloudPushPeriodicScheduler.effectiveInterval(serverScoringEnabled: false),
                        CloudPushPeriodicScheduler.defaultInterval, accuracy: 0.001)
+    }
+
+    private func snapshot(stale: Bool = false, featureStatus: String = "available") throws -> ServerScoreDayCache {
+        let data = try JSONSerialization.data(withJSONObject: ["server_scoring": [
+            "schema_version": 2, "user_id": "11111111-1111-1111-1111-111111111111",
+            "day": "2026-09-18", "algorithm_version": "per_feature", "stale": stale,
+            "features": ["hrv": ["status": featureStatus, "device_id": "device",
+                                  "algorithm_version": "frwhoop-server-1", "input_revision": 1, "required_revision": 1]],
+            "daily": ["hrv_rmssd_ms": 42], "nights": []
+        ]])
+        return try ServerScoreCacheCodec.parseSnapshot(data, day: "2026-09-18",
+            ownerId: "11111111-1111-1111-1111-111111111111")
+    }
+
+    func testStaleServerSnapshotIsNotLive() throws {
+        XCTAssertFalse(CloudScoreIdentity.overlayIsLive(try snapshot(stale: true)))
+        XCTAssertFalse(CloudScoreIdentity.overlayIsLive(try snapshot(featureStatus: "stale")))
+        XCTAssertTrue(CloudScoreIdentity.overlayIsLive(try snapshot()))
+    }
+
+    func testLocalFallbackDoesNotCarryServerCaption() throws {
+        let cache = try snapshot()
+        for overlay in [nil, cache] {
+            let selection = ServerVitalSelection.resolve(.restingHR, serverEnabled: true,
+                selectedDay: "2026-09-18", overlay: overlay, localValue: 51)
+            XCTAssertEqual(selection.value, 51)
+            XCTAssertFalse(selection.fromServer)
+            XCTAssertNil(LiquidTodayView.serverVitalCaption(for: selection))
+        }
+    }
+
+    func testServerCaptionRetainsStaleProvenanceForActualServerValue() throws {
+        let selection = ServerVitalSelection.resolve(.hrv, serverEnabled: true,
+            selectedDay: "2026-09-18", overlay: try snapshot(stale: true), localValue: 51)
+        XCTAssertEqual(selection.value, 42)
+        XCTAssertTrue(selection.fromServer)
+        XCTAssertEqual(LiquidTodayView.serverVitalCaption(for: selection), "Stale · Server · 2026-09-18 · available")
     }
 }

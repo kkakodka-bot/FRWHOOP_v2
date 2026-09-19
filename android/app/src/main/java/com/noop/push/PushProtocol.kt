@@ -70,7 +70,7 @@ object PushProtocol {
         val body = concatenate(header, selectedLines)
         check(body.size <= MAX_BODY_BYTES)
         return PushBatch(
-            protocolVersion = if (table == PushAppendTable.RR_PACKET_PROVENANCE) "1.1" else VERSION,
+            protocolVersion = if (table in setOf(PushAppendTable.RR_PACKET_PROVENANCE, PushAppendTable.STANDARD_HR_RECEIPT)) "1.1" else VERSION,
             batchId = batchId,
             sourceId = sourceId,
             table = table,
@@ -442,7 +442,7 @@ object PushProtocol {
         "delivery" to "append",
         "deviceId" to deviceId,
         "endCursor" to cursorJson(end),
-        "protocolVersion" to if (table == PushAppendTable.RR_PACKET_PROVENANCE) "1.1" else VERSION,
+        "protocolVersion" to if (table in setOf(PushAppendTable.RR_PACKET_PROVENANCE, PushAppendTable.STANDARD_HR_RECEIPT)) "1.1" else VERSION,
         "recordCount" to count,
         "sourceId" to sourceId,
         "startCursor" to start?.let(::cursorJson),
@@ -587,6 +587,7 @@ object PushProtocol {
         "hrSample" to (listOf("ts") to listOf("bpm")),
         "rrInterval" to (listOf("ts", "rrMs", "seq") to listOf("ord", "srcChannel", "tsSuspect")),
         "rrPacketProvenance" to (listOf("packetId") to listOf("ts", "sensorTs", "recordIndex", "rawHex", "srcChannel", "schemaVersion", "decoderVersion", "clockVersion", "timestampPrecisionSeconds", "clockOffsetSeconds", "declaredCount")),
+        "standardHRReceipt" to (listOf("receiptId") to listOf("ts", "sessionId", "notificationOrdinal", "receivedUnixMs", "receivedMonotonicNs", "rawHex", "schemaVersion", "clockVersion")),
         "event" to (listOf("ts", "kind") to listOf("payloadJSON")),
         "battery" to (listOf("ts") to listOf("soc", "mv", "charging")),
         "spo2Sample" to (listOf("ts") to listOf("red", "ir")),

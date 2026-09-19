@@ -596,6 +596,7 @@ public struct Streams: Equatable, Codable {
     public var hr: [HRSample]
     public var rr: [RRInterval]
     public var rrPackets: [RRPacketProvenance]
+    public var standardHrReceipts: [StandardHRReceipt]
     public var spo2: [SpO2Sample]
     public var skinTemp: [SkinTempSample]
     public var resp: [RespSample]
@@ -738,9 +739,11 @@ public struct Streams: Equatable, Codable {
                 steps: [StepSample] = [], sleepState: [SleepStateSample] = [],
                 ppgHr: [PpgHrSample] = [], ppgWaveform: [PpgWaveformSample] = [],
                 v18Aux: [V18AuxSample] = [],
-                events: [WhoopEvent] = [], battery: [BatterySample] = [], rrPackets: [RRPacketProvenance] = []) {
+                events: [WhoopEvent] = [], battery: [BatterySample] = [], rrPackets: [RRPacketProvenance] = [],
+                standardHrReceipts: [StandardHRReceipt] = []) {
         self.hr = hr; self.rr = rr
         self.rrPackets = rrPackets
+        self.standardHrReceipts = standardHrReceipts
         self.spo2 = spo2; self.skinTemp = skinTemp; self.resp = resp; self.gravity = gravity
         self.steps = steps; self.sleepState = sleepState; self.ppgHr = ppgHr
         self.ppgWaveform = ppgWaveform
@@ -752,7 +755,7 @@ public struct Streams: Equatable, Codable {
     /// all dropped (CRC fail / unmapped layout / out-of-range timestamp), the silent-data-loss
     /// diagnostic in `Backfiller.finishChunk` (#77).
     public var isEmpty: Bool {
-        hr.isEmpty && rr.isEmpty && rrPackets.isEmpty && spo2.isEmpty && skinTemp.isEmpty && resp.isEmpty
+        hr.isEmpty && rr.isEmpty && rrPackets.isEmpty && standardHrReceipts.isEmpty && spo2.isEmpty && skinTemp.isEmpty && resp.isEmpty
             && gravity.isEmpty && steps.isEmpty && sleepState.isEmpty && ppgHr.isEmpty
             && ppgWaveform.isEmpty && v18Aux.isEmpty && events.isEmpty && battery.isEmpty
     }
@@ -760,6 +763,7 @@ public struct Streams: Equatable, Codable {
     private enum CodingKeys: String, CodingKey {
         case hr, rr, spo2, skinTemp = "skin_temp", resp, gravity, steps
         case rrPackets = "rr_packets"
+        case standardHrReceipts = "standard_hr_receipts"
         case sleepState = "sleep_state"
         case ppgHr = "ppg_hr"
         case ppgWaveform = "ppg_waveform"
@@ -774,6 +778,7 @@ public struct Streams: Equatable, Codable {
         hr = try c.decodeIfPresent([HRSample].self, forKey: .hr) ?? []
         rr = try c.decodeIfPresent([RRInterval].self, forKey: .rr) ?? []
         rrPackets = try c.decodeIfPresent([RRPacketProvenance].self, forKey: .rrPackets) ?? []
+        standardHrReceipts = try c.decodeIfPresent([StandardHRReceipt].self, forKey: .standardHrReceipts) ?? []
         spo2 = try c.decodeIfPresent([SpO2Sample].self, forKey: .spo2) ?? []
         skinTemp = try c.decodeIfPresent([SkinTempSample].self, forKey: .skinTemp) ?? []
         resp = try c.decodeIfPresent([RespSample].self, forKey: .resp) ?? []

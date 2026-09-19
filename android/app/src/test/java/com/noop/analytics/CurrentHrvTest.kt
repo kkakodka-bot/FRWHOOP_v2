@@ -5,6 +5,12 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class CurrentHrvTest {
+    @Test fun queryWindowMatchesCompletedUtcMeasurement() {
+        assertEquals(0 until 300, CurrentHrv.completedWindow(300))
+        assertEquals(0 until 300, CurrentHrv.completedWindow(599))
+        assertEquals(300 until 600, CurrentHrv.completedWindow(600))
+        assertEquals(-300 until 0, CurrentHrv.completedWindow(0))
+    }
     @Test fun provenFullWindowPreservesTrueZero() {
         val r = CurrentHrv.deriveObservations(hrvEvidence(), 300)!!
         assertEquals(0.0, r.rmssdMs, 1e-9); assertEquals(300, r.cleanBeats); assertEquals(1.0, r.coverage, 1e-9)

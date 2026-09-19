@@ -7,6 +7,23 @@ final class ServerScoreRepositoryRaceTests: XCTestCase {
     private let day = "2026-09-16"
     private let ownerA = "11111111-1111-1111-1111-111111111111"
     private let ownerB = "44444444-4444-4444-4444-444444444444"
+    private let ownerKey = "noop.serverScoring.ingestOwnerId"
+    private var savedOwner: Any?
+    private var savedOverlayLive = false
+
+    override func setUp() {
+        super.setUp()
+        savedOwner = UserDefaults.standard.object(forKey: ownerKey)
+        savedOverlayLive = CloudScoreIdentity.overlayLive
+        CloudScoreIdentity.clearIngestOwner()
+    }
+
+    override func tearDown() {
+        if let savedOwner { UserDefaults.standard.set(savedOwner, forKey: ownerKey) }
+        else { UserDefaults.standard.removeObject(forKey: ownerKey) }
+        CloudScoreIdentity.markOverlayLive(savedOverlayLive)
+        super.tearDown()
+    }
 
     private actor Gate {
         private var continuation: CheckedContinuation<Void, Never>?
@@ -56,6 +73,29 @@ final class ServerScoreRepositoryRaceTests: XCTestCase {
         repo.signOut()
         await gate.open(); await pending.value
         XCTAssertFalse(repo.signedIn); XCTAssertNil(repo.overlay(for: day)); XCTAssertNil(repo.lastFetchedAt)
+        XCTAssertNil(try ServerScoreCacheStore(db: store.registryWriter).load(ownerId: ownerA, day: day))
+        XCTAssertNil(UserDefaults.standard.string(forKey: ownerKey))
+        XCTAssertFalse(CloudScoreIdentity.overlayLive)
+    }
+
+    func testDelayedSuccessCannotReplaceNextAccountIngestIdentity() async throws {
+        let auth = Auth(ownerA), gate = Gate()
+        let old = try snapshot(ownerA), next = try snapshot(ownerB)
+        let entered = expectation(description: "old account fetch started")
+        let repo = ServerScoreRepository(dependencies: dependencies(auth) { _, owner in
+            if owner == self.ownerA {
+                entered.fulfill(); await gate.wait(); return old
+            }
+            return next
+        })
+        let store = try await WhoopStore.inMemory(); repo.wire(store: store)
+        let pending = Task { await repo.refreshVisibleDays(todayKey: day) }
+        await fulfillment(of: [entered], timeout: 2)
+        await repo.signIn(email: ownerB, password: "unused")
+        XCTAssertEqual(UserDefaults.standard.string(forKey: ownerKey), ownerB)
+        await gate.open(); await pending.value
+        XCTAssertEqual(UserDefaults.standard.string(forKey: ownerKey), ownerB)
+        XCTAssertEqual(repo.overlay(for: day)?.ownerId, ownerB)
         XCTAssertNil(try ServerScoreCacheStore(db: store.registryWriter).load(ownerId: ownerA, day: day))
     }
 

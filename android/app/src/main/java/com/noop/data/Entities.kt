@@ -163,6 +163,14 @@ data class RrPacketProvenanceEntity(
     val clockVersion: String, val timestampPrecisionSeconds: Double, val clockOffsetSeconds: Long, val declaredCount: Int,
 )
 
+@Entity(tableName = "standardHRReceipt", primaryKeys = ["deviceId", "receiptId"],
+    indices = [Index(value = ["deviceId", "ts"], name = "standardHRReceipt_device_ts")])
+data class StandardHrReceiptEntity(
+    val deviceId: String, val receiptId: String, val ts: Long, val sessionId: String,
+    val notificationOrdinal: Long, val receivedUnixMs: Long, val receivedMonotonicNs: Long,
+    val rawHex: String, val schemaVersion: Int, val clockVersion: String,
+)
+
 /**
  * Strap event. Swift `event` (v1). PK (deviceId, ts, kind).
  * `payloadJSON` is the deterministic (sorted-keys) JSON of the remaining parsed fields,

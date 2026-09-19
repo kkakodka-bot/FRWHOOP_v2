@@ -94,12 +94,13 @@ data class StreamBatch(
      */
     val dynAccel: DynAccelDiag = DynAccelDiag(),
     val rrPackets: List<com.noop.protocol.RrPacketProvenance> = emptyList(),
+    val standardHrReceipts: List<com.noop.protocol.StandardHrReceipt> = emptyList(),
 ) {
     // [v18Aux] counts here, and it is load-bearing rather than cosmetic: `insert` early-returns on
     // `isEmpty`, so a batch carrying ONLY aux rows would silently bank nothing. Swift's `Streams.isEmpty`
     // lists it too — the two must agree or the same offload drops rows on one platform only.
     val isEmpty: Boolean
-        get() = hr.isEmpty() && rr.isEmpty() && rrPackets.isEmpty() && events.isEmpty() && battery.isEmpty() &&
+        get() = hr.isEmpty() && rr.isEmpty() && rrPackets.isEmpty() && standardHrReceipts.isEmpty() && events.isEmpty() && battery.isEmpty() &&
             spo2.isEmpty() && skinTemp.isEmpty() && resp.isEmpty() && gravity.isEmpty() &&
             steps.isEmpty() && sleepState.isEmpty() && ppgHr.isEmpty() && ppgWaveform.isEmpty() &&
             v18Aux.isEmpty()
@@ -571,6 +572,11 @@ class WhoopRepository(
         val packetIds = if (packets.isEmpty()) emptyList() else dao.insertRrPackets(packets.map { p ->
             RrPacketProvenanceEntity(deviceId, p.packetId, p.ts, p.sensorTs, p.recordIndex, p.rawHex, p.srcChannel,
                 p.schemaVersion, p.decoderVersion, p.clockVersion, p.timestampPrecisionSeconds, p.clockOffsetSeconds, p.declaredCount)
+        })
+        val receipts = streams.standardHrReceipts.filter { it.isValid }
+        if (receipts.isNotEmpty()) dao.insertStandardHrReceipts(receipts.map { p ->
+            StandardHrReceiptEntity(deviceId, p.receiptId, p.ts, p.sessionId, p.notificationOrdinal,
+                p.receivedUnixMs, p.receivedMonotonicNs, p.rawHex, p.schemaVersion, p.clockVersion)
         })
         val rrRows = assignRrSeq(deviceId, streams.rr)
         val rrIds = if (rrRows.isEmpty()) emptyList() else dao.insertRr(rrRows)
@@ -1350,6 +1356,9 @@ class WhoopRepository(
 
     suspend fun events(deviceId: String, from: Long, to: Long, limit: Int = DEFAULT_LIMIT) =
         dao.events(deviceId, from, to, limit)
+
+    suspend fun wearEventsForWindow(deviceId: String, start: Long, endExclusive: Long) =
+        dao.wearEventsForWindow(deviceId, start, endExclusive)
 
     /** Standard-BLE contact readings only; legacy HR rows have no companion event and stay absent. */
     suspend fun standardHrContacts(

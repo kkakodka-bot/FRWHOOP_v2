@@ -1029,6 +1029,22 @@ extension WhoopStore {
             }
             try db.create(index: "rrPacketProvenance_device_ts", on: "rrPacketProvenance", columns: ["deviceId", "ts"])
         }
+        migrator.registerMigration("v51-standard-hr-receipts") { db in
+            try db.create(table: "standardHRReceipt") { t in
+                t.column("deviceId", .text).notNull()
+                t.column("receiptId", .text).notNull()
+                t.column("ts", .integer).notNull()
+                t.column("sessionId", .text).notNull()
+                t.column("notificationOrdinal", .integer).notNull()
+                t.column("receivedUnixMs", .integer).notNull()
+                t.column("receivedMonotonicNs", .integer).notNull()
+                t.column("rawHex", .text).notNull()
+                t.column("schemaVersion", .integer).notNull()
+                t.column("clockVersion", .text).notNull()
+                t.primaryKey(["deviceId", "receiptId"])
+            }
+            try db.create(index: "standardHRReceipt_device_ts", on: "standardHRReceipt", columns: ["deviceId", "ts"])
+        }
         return migrator
     }
 }

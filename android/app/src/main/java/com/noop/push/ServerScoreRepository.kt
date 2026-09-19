@@ -164,9 +164,9 @@ class ServerScoreRepository(
         runCatching {
             val cache = ServerScoreClient.fetchDaySnapshot(appContext, day, owner)
             currentCoroutineContext().ensureActive()
+            if (!session.accept(cache, generation, currentOwnerId(), request)) return
             ServerScoringSettings.markOverlayLive(ServerScoringSettings.prefs(appContext),
                 ServerScoringSettings.overlayIsLive(cache))
-            if (!session.accept(cache, generation, currentOwnerId(), request)) return
             cacheStore.upsert(cache)
             _lastFetchedAtMs.value = cache.fetchedAtMs
             _lastError.value = null

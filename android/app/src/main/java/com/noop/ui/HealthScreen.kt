@@ -1948,6 +1948,7 @@ fun VitalDetailScreen(vm: AppViewModel, key: String) {
         // offset left the lower cards on plain canvas (tester report).
         fullBleedBackground = screenBackdropFullBleed(showDayCycleBackground, skyBehindCards),
     ) {
+        if (key == "rhr") FiveMinuteHeartRateCard(vm)
         if (com.noop.push.ServerScoringSettings.isEnabled(context) && (key == "hrv" || key == "resp")) {
             if (key == "hrv") ServerHrvSeriesCard(vm) else ServerRespirationSummaryCard(vm)
             Text(uiString(R.string.physiology_hrv_local_history), style = NoopType.subhead, color = Palette.textSecondary)

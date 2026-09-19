@@ -21,6 +21,26 @@ import kotlin.math.sin
 
 /** Synthetic wiring controls only, not a WHOOP/reference accuracy result. */
 class DayScorerPhysiologyIntegrationTest {
+    @Test fun completedHeartRateWindowsHonorAcquisitionCutoffAndExplicitOffBodyContext() {
+        val lo=bounds.dayLo
+        val hr=(lo until lo+600).map { HrSample(device.toString(),it,if(it<lo+300) 60 else 120) }
+        val gravity=hr.map { GravitySample(device.toString(),it.ts,0.0,0.0,1.0,dynAccel=.01) }
+        val base=input(false).copy(hr=hr,gravity=gravity,rr=emptyList(),hrvObservations=emptyList(),events=emptyList())
+        val now=Instant.ofEpochSecond(lo+459)
+        val score=DayScorer().score(base,CanonicalScorePayload.ALGORITHM_VERSION,"7",now)
+        val window=score.heartRateWindows.single()
+        assertEquals(lo,window.start); assertEquals(lo+300,window.end)
+        assertEquals(60.0,window.meanBpm!!,0.0); assertEquals(60.0,window.lowMotionBpm!!,0.0)
+        val payload=CanonicalScorePayload.build(score)
+        assertTrue(payload.getJSONObject("daily").isNull("resting_hr_bpm"))
+        val published=payload.getJSONObject("daily").getJSONArray("heart_rate_windows").getJSONObject(0)
+        assertEquals(device.toString(),published.getString("device_id"))
+        assertEquals(user.toString(),published.getString("user_id"))
+        val offBody=base.copy(sleepContext=listOf(com.noop.analytics.SleepContextSpan(lo,lo+300,"off_body","fixture",availableAt=lo)))
+        val excluded=DayScorer().score(offBody,CanonicalScorePayload.ALGORITHM_VERSION,"8",now).heartRateWindows.single()
+        assertNull(excluded.meanBpm); assertNull(excluded.lowMotionBpm)
+        assertEquals("off_body_evidence",excluded.lowMotionReason)
+    }
     private val user=UUID.fromString("11111111-1111-1111-1111-111111111111")
     private val device=UUID.fromString("22222222-2222-2222-2222-222222222222")
     private val bounds=UserDayBounds.forDay("2026-09-17",ZoneOffset.UTC)

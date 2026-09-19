@@ -22,16 +22,29 @@ class ServerScoringRescoreSkipTest {
     }
 
     @Test
-    fun skipsSyncCoupledRescoreWhenFlagOnAndOverlayLive() {
+    fun liveServerOverlayDoesNotSuppressLocalOnlyMetrics() {
         ServerScoringSettings.setEnabled(context, true)
         assertFalse(ServerScoringSettings.skipsSyncCoupledRescore(context))
         ServerScoringSettings.markOverlayLive(context, true)
-        assertTrue(ServerScoringSettings.skipsSyncCoupledRescore(context))
+        assertFalse(ServerScoringSettings.skipsSyncCoupledRescore(context))
     }
 
     @Test
     fun runsSyncCoupledRescoreWhenFlagOff() {
         assertFalse(ServerScoringSettings.skipsSyncCoupledRescore(context))
+    }
+
+    @Test
+    fun staleServerSnapshotIsNotLive() {
+        val feature = ServerScoreFeatureCache("available", null, "device", "frwhoop-server-1",
+            1L, 1L, null, null, null, null, null)
+        val cache = ServerScoreDayCache("2026-09-18", "per_feature",
+            ServerScoreDailyCache(hrvRmssdMs = 42.0), emptyList(), null, false, 0L,
+            features = mapOf("hrv" to feature))
+        assertTrue(ServerScoringSettings.overlayIsLive(cache))
+        assertFalse(ServerScoringSettings.overlayIsLive(cache.copy(stale = true)))
+        assertFalse(ServerScoringSettings.overlayIsLive(cache.copy(
+            features = mapOf("hrv" to feature.copy(status = "stale")))))
     }
 
     @Test
