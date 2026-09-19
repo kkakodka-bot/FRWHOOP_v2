@@ -308,24 +308,23 @@ extension SleepModel {
     // MARK: Typical / need
 
     static func mean(_ vals: [Double]) -> Double? {
-        guard !vals.isEmpty else { return nil }
-        return vals.reduce(0, +) / Double(vals.count)
+        DailyPresentationMath.mean(vals)
     }
 
     /// Mean total sleep duration (minutes) across nights with data — the "typical".
     static func typicalTotalMin(days: [DailyMetric]) -> Double? {
-        mean(days.compactMap { $0.totalSleepMin }.filter { $0 > 0 })
+        DailyPresentationMath.positiveMean(days.map(\.totalSleepMin))
     }
 
     /// Mean of a per-stage minutes column across days with data.
     static func typicalStageMin(days: [DailyMetric], _ key: KeyPath<DailyMetric, Double?>) -> Double? {
-        mean(days.compactMap { $0[keyPath: key] }.filter { $0 > 0 })
+        DailyPresentationMath.positiveMean(days.map { $0[keyPath: key] })
     }
 
     /// The personal sleep need (minutes): mean asleep, but never below a 7.5h floor so
     /// debt/performance read sensibly even for a chronically short sleeper.
     static func sleepNeedMin(days: [DailyMetric]) -> Double {
-        Swift.max(450, typicalTotalMin(days: days) ?? 450)   // 450 min = 7.5h
+        DailyPresentationMath.descriptiveSleepNeed(observedMinutes: days.map(\.totalSleepMin))   // 450 min = 7.5h
     }
 
     /// The NORMATIVE per-user sleep need (minutes) the DEBT surfaces measure against — the
@@ -380,8 +379,7 @@ extension SleepModel {
 
     static func efficiencySeries(days: [DailyMetric]) -> Metric {
         metric(days: days) { d in
-            guard let e = d.efficiency else { return nil }
-            return e <= 1.0 ? e * 100 : e
+            DailyPresentationMath.efficiencyPercent(d.efficiency)
         }
     }
 
@@ -398,22 +396,11 @@ extension SleepModel {
         func bedMinutes(_ s: CachedSleepSession) -> Double {
             let d = Date(timeIntervalSince1970: TimeInterval(s.effectiveStartTs))
             let comps = cal.dateComponents([.hour, .minute], from: d)
-            var m = Double((comps.hour ?? 0) * 60 + (comps.minute ?? 0))
-            if m < 12 * 60 { m += 24 * 60 }   // wrap evening onsets into one continuous scale
-            return m
+            return Double((comps.hour ?? 0) * 60 + (comps.minute ?? 0))
         }
         let mins = sleeps.map(bedMinutes)
         guard mins.count >= 3 else { return (nil, nil, []) }
-        var scores: [Double] = []
-        for i in mins.indices {
-            let lo = Swift.max(0, i - 13)
-            let window = Array(mins[lo...i])
-            guard window.count >= 3 else { continue }
-            let m = window.reduce(0, +) / Double(window.count)
-            let variance = window.map { ($0 - m) * ($0 - m) }.reduce(0, +) / Double(window.count)
-            let sd = variance.squareRoot()
-            scores.append(Swift.max(0, Swift.min(100, 100 * (1 - sd / 120))))
-        }
+        let scores = DailyPresentationMath.bedtimeConsistencySeries(localBedMinutes: mins)
         return (scores.last, mean(scores), scores)
     }
 
@@ -425,17 +412,14 @@ extension SleepModel {
         return metric(days: days) { d in
             guard let asleep = d.totalSleepMin, asleep > 0 else { return nil }
             let need = imported[d.day]?.needMin ?? fallbackNeed
-            guard need > 0 else { return nil }
-            return asleep / need * 100
+            return DailyPresentationMath.hoursVsNeededPercent(asleepMin: asleep, needMin: need)
         }
     }
 
     /// Restorative % = (deep + REM) / asleep — the share of the night that does the work.
     static func restorativeSeries(days: [DailyMetric]) -> Metric {
         metric(days: days) { d in
-            guard let deep = d.deepMin, let rem = d.remMin,
-                  let asleep = d.totalSleepMin, asleep > 0 else { return nil }
-            return (deep + rem) / asleep * 100
+            DailyPresentationMath.restorativePercent(deepMin: d.deepMin, remMin: d.remMin, asleepMin: d.totalSleepMin)
         }
     }
 
