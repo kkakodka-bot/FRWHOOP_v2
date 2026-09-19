@@ -929,6 +929,401 @@ final class WorkoutPreferenceEvaluationStoreTests: XCTestCase {
         let rows = try await workoutBytes(f); XCTAssertTrue(rows.isEmpty)
     }
 
+    private struct DependentSnapshot: Equatable {
+        let control: [Row]
+        let jobs: [Row]
+        let workouts: [Row]
+    }
+
+    private func dependentSnapshot(_ f: Fixture) async throws -> DependentSnapshot {
+        try await f.store.registryWriter.read { db in
+            .init(control: try Row.fetchAll(db, sql: "SELECT * FROM workoutPreferenceEvaluation"),
+                  jobs: try Row.fetchAll(db, sql: "SELECT * FROM syncJob ORDER BY kind"),
+                  workouts: try Row.fetchAll(db, sql: "SELECT * FROM workout ORDER BY deviceId,startTs,sport"))
+        }
+    }
+
+    private func dependentReceipt(_ f: Fixture, rescore: Bool = true) async throws -> E.ValidatedReceipt {
+        let done = try await finish(f, lease: scanLease(f, markJob: rescore))
+        XCTAssertEqual(done.disposition, .complete)
+        let receipt = try XCTUnwrap(done.validatedReceipt)
+        if rescore {
+            let paid = try await f.store.settleWorkoutPreferenceRescoreJob(session: f.session, receipt: receipt,
+                request: f.request, capturedToken: XCTUnwrap(receipt.receipt.coreWitness.capturedRescoreJobToken), permit: f.permit)
+            XCTAssertTrue(paid)
+        }
+        let current = try await f.store.inspectWorkoutPreferenceEvaluation(session: f.session, request: f.request, now: 0)
+        XCTAssertEqual(current.disposition, .complete)
+        return try XCTUnwrap(current.validatedReceipt)
+    }
+
+    func testDependentSettlementDeletesOnlyEachExactAllowedJobWithoutStateOrRowWrites() async throws {
+        let f = try await fixture()
+        try await insert(f, start: 1)
+        try await insert(f, start: f.target.upperTs + 1, source: "manual", strain: 7)
+        let receipt = try await dependentReceipt(f)
+        let kinds: [SyncJobKind] = [.cloudPush, .healthWriteback, .widgetPublish]
+        let tokens = try await f.store.markJobsOwed(kinds: kinds.map(\.rawValue) + ["unknownExport"])
+        let original = try await dependentSnapshot(f)
+        for kind in kinds {
+            let before = try await dependentSnapshot(f)
+            let deleted = try await f.store.settleWorkoutPreferenceDependentJob(session: f.session, receipt: receipt,
+                request: f.request, kind: kind, capturedToken: XCTUnwrap(tokens[kind.rawValue]), permit: f.permit)
+            XCTAssertTrue(deleted)
+            let after = try await dependentSnapshot(f)
+            XCTAssertEqual(after.control, original.control); XCTAssertEqual(after.workouts, original.workouts)
+            XCTAssertEqual(after.jobs, before.jobs.filter { $0["kind"] as String != kind.rawValue })
+            let repeated = try await f.store.settleWorkoutPreferenceDependentJob(session: f.session, receipt: receipt,
+                request: f.request, kind: kind, capturedToken: XCTUnwrap(tokens[kind.rawValue]), permit: f.permit)
+            XCTAssertFalse(repeated)
+        }
+        let jobs = try await f.store.owedJobs()
+        XCTAssertEqual(jobs.count, 1); XCTAssertEqual(jobs.first?.kind, "unknownExport")
+        XCTAssertEqual(jobs.first?.token, tokens["unknownExport"])
+    }
+
+    func testDependentSettlementRejectsRescoreAndCannotRepresentUnknownKind() async throws {
+        let f = try await fixture(), receipt = try await dependentReceipt(f, rescore: false)
+        let tokens = try await f.store.markJobsOwed(kinds: ["rescore", "unknownExport", "cloudPush"])
+        let before = try await dependentSnapshot(f)
+        let deleted = try await f.store.settleWorkoutPreferenceDependentJob(session: f.session, receipt: receipt,
+            request: f.request, kind: .rescore, capturedToken: XCTUnwrap(tokens["rescore"]), permit: f.permit)
+        XCTAssertFalse(deleted); XCTAssertNil(SyncJobKind(rawValue: "unknownExport"))
+        let after = try await dependentSnapshot(f); XCTAssertEqual(after, before)
+    }
+
+    func testDependentSettlementAcceptsCompleteEvaluationThatNeverHadRescoreDebt() async throws {
+        let f = try await fixture(), receipt = try await dependentReceipt(f, rescore: false)
+        XCTAssertNil(receipt.receipt.coreWitness.capturedRescoreJobToken)
+        let token = try await f.store.markJobOwed(kind: "widgetPublish")
+        let before = try await dependentSnapshot(f)
+        let deleted = try await f.store.settleWorkoutPreferenceDependentJob(session: f.session, receipt: receipt,
+            request: f.request, kind: .widgetPublish, capturedToken: token, permit: f.permit)
+        XCTAssertTrue(deleted)
+        let after = try await dependentSnapshot(f)
+        XCTAssertEqual(after.control, before.control); XCTAssertEqual(after.workouts, before.workouts)
+        XCTAssertTrue(after.jobs.isEmpty)
+    }
+
+    func testDependentSettlementRefusesOwedRescoreAndItsUnverifiedGenericDisappearance() async throws {
+        let f = try await fixture()
+        let complete = try await finish(f, lease: scanLease(f))
+        let receipt = try XCTUnwrap(complete.validatedReceipt)
+        let token = try await f.store.markJobOwed(kind: "cloudPush")
+        let before = try await dependentSnapshot(f)
+        let owed = try await f.store.settleWorkoutPreferenceDependentJob(session: f.session, receipt: receipt,
+            request: f.request, kind: .cloudPush, capturedToken: token, permit: f.permit)
+        XCTAssertFalse(owed)
+        let unchanged = try await dependentSnapshot(f); XCTAssertEqual(unchanged, before)
+        let generic = try await f.store.settleJob(kind: "rescore", token: XCTUnwrap(receipt.receipt.coreWitness.capturedRescoreJobToken))
+        XCTAssertTrue(generic)
+        let missing = try await dependentSnapshot(f)
+        let unproved = try await f.store.settleWorkoutPreferenceDependentJob(session: f.session, receipt: receipt,
+            request: f.request, kind: .cloudPush, capturedToken: token, permit: f.permit)
+        XCTAssertFalse(unproved)
+        let after = try await dependentSnapshot(f); XCTAssertEqual(after, missing)
+    }
+
+    func testDependentSettlementRefusesNewRescoreDebtAfterPriorExactSettlement() async throws {
+        let f = try await fixture(), receipt = try await dependentReceipt(f)
+        let token = try await f.store.markJobOwed(kind: "healthWriteback")
+        _ = try await f.store.markJobOwed(kind: "rescore")
+        let before = try await dependentSnapshot(f)
+        let deleted = try await f.store.settleWorkoutPreferenceDependentJob(session: f.session, receipt: receipt,
+            request: f.request, kind: .healthWriteback, capturedToken: token, permit: f.permit)
+        XCTAssertFalse(deleted)
+        let after = try await dependentSnapshot(f); XCTAssertEqual(after, before)
+    }
+
+    func testDependentSettlementRequiresCurrentExactExportTokenIncludingEmbeddedNul() async throws {
+        let f = try await fixture(), receipt = try await dependentReceipt(f)
+        let old = try await f.store.markJobOwed(kind: "cloudPush")
+        let current = try await f.store.markJobOwed(kind: "cloudPush")
+        let other = try await f.store.markJobOwed(kind: "widgetPublish")
+        let before = try await dependentSnapshot(f)
+        for token in [old, current + "\0suffix", other, ""] {
+            let deleted = try await f.store.settleWorkoutPreferenceDependentJob(session: f.session, receipt: receipt,
+                request: f.request, kind: .cloudPush, capturedToken: token, permit: f.permit)
+            XCTAssertFalse(deleted)
+            let after = try await dependentSnapshot(f); XCTAssertEqual(after, before)
+        }
+        let deleted = try await f.store.settleWorkoutPreferenceDependentJob(session: f.session, receipt: receipt,
+            request: f.request, kind: .cloudPush, capturedToken: current, permit: f.permit)
+        XCTAssertTrue(deleted)
+    }
+
+    func testDependentSettlementRejectsWrongRequestOwnerPreferenceAndWriter() async throws {
+        let f = try await fixture(), receipt = try await dependentReceipt(f)
+        let token = try await f.store.markJobOwed(kind: "cloudPush")
+        let otherOwner = try E.Owner(projectURL: f.request.owner.projectURL, userID: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
+        let wrongOwner = try E.Request(owner: otherOwner, preference: f.request.preference,
+            canonicalWriter: f.request.canonicalWriter, requestedDays: f.request.requestedDays,
+            localDayAnchor: f.request.localDayAnchor, timezoneID: f.request.timezoneID,
+            offsetSeconds: f.request.offsetSeconds, dependencyDigest: f.request.dependencyDigest)
+        let requests = [wrongOwner, try request(sequence: 2), try withWriter("other-writer", request: f.request)]
+        let before = try await dependentSnapshot(f)
+        for request in requests {
+            let deleted = try await f.store.settleWorkoutPreferenceDependentJob(session: f.session, receipt: receipt,
+                request: request, kind: .cloudPush, capturedToken: token, permit: f.permit)
+            XCTAssertFalse(deleted)
+        }
+        let after = try await dependentSnapshot(f); XCTAssertEqual(after, before)
+    }
+
+    func testDependentSettlementRejectsWorkoutRevisionDriftAndOverflow() async throws {
+        for overflow in [false, true] {
+            let f = try await fixture(), receipt = try await dependentReceipt(f)
+            let token = try await f.store.markJobOwed(kind: "cloudPush")
+            if overflow {
+                try await f.store.registryWriter.write { try $0.execute(sql: "UPDATE workoutPreferenceEvaluation SET revisionOverflow=1") }
+            } else {
+                try await insert(f, start: 1, source: "manual", strain: 7)
+            }
+            let before = try await dependentSnapshot(f)
+            let deleted = try await f.store.settleWorkoutPreferenceDependentJob(session: f.session, receipt: receipt,
+                request: f.request, kind: .cloudPush, capturedToken: token, permit: f.permit)
+            XCTAssertFalse(deleted)
+            let after = try await dependentSnapshot(f); XCTAssertEqual(after, before)
+        }
+    }
+
+    func testDependentSettlementRejectsPartialReceiptAndResourceHeldOldReceipt() async throws {
+        let partial = try await fixture()
+        try await insert(partial, start: 1, source: "manual", strain: 7)
+        let view = try await finish(partial, lease: scanLease(partial, markJob: false))
+        XCTAssertEqual(view.disposition, .evaluatedPartial)
+        let token = try await partial.store.markJobOwed(kind: "cloudPush")
+        let before = try await dependentSnapshot(partial)
+        let deleted = try await partial.store.settleWorkoutPreferenceDependentJob(session: partial.session,
+            receipt: XCTUnwrap(view.validatedReceipt), request: partial.request, kind: .cloudPush,
+            capturedToken: token, permit: partial.permit)
+        XCTAssertFalse(deleted)
+        let after = try await dependentSnapshot(partial); XCTAssertEqual(after, before)
+
+        let held = try await fixture(), oldReceipt = try await dependentReceipt(held, rescore: false)
+        let heldToken = try await held.store.markJobOwed(kind: "healthWriteback")
+        try await insert(held, start: 1, notes: String(repeating: "x", count: 65536))
+        let hold = try await finish(held, lease: scanLease(held, markJob: false))
+        XCTAssertEqual(hold.disposition, .held(.oversizedRow)); XCTAssertNil(hold.validatedReceipt)
+        let heldBefore = try await dependentSnapshot(held)
+        let paid = try await held.store.settleWorkoutPreferenceDependentJob(session: held.session, receipt: oldReceipt,
+            request: held.request, kind: .healthWriteback, capturedToken: heldToken, permit: held.permit)
+        XCTAssertFalse(paid)
+        let heldAfter = try await dependentSnapshot(held); XCTAssertEqual(heldAfter, heldBefore)
+    }
+
+    func testDependentSettlementNeedsCurrentReceiptAfterRescoreSettlementAdvancedHead() async throws {
+        let f = try await fixture()
+        let complete = try await finish(f, lease: scanLease(f))
+        let old = try XCTUnwrap(complete.validatedReceipt)
+        let paid = try await f.store.settleWorkoutPreferenceRescoreJob(session: f.session, receipt: old,
+            request: f.request, capturedToken: XCTUnwrap(old.receipt.coreWitness.capturedRescoreJobToken), permit: f.permit)
+        XCTAssertTrue(paid)
+        let token = try await f.store.markJobOwed(kind: "cloudPush")
+        let before = try await dependentSnapshot(f)
+        let stale = try await f.store.settleWorkoutPreferenceDependentJob(session: f.session, receipt: old,
+            request: f.request, kind: .cloudPush, capturedToken: token, permit: f.permit)
+        XCTAssertFalse(stale)
+        let unchanged = try await dependentSnapshot(f); XCTAssertEqual(unchanged, before)
+        let current = try await f.store.inspectWorkoutPreferenceEvaluation(session: f.session, request: f.request, now: 0)
+        let fresh = try XCTUnwrap(current.validatedReceipt)
+        XCTAssertNotEqual(fresh.head, old.head)
+        let settled = try await f.store.settleWorkoutPreferenceDependentJob(session: f.session, receipt: fresh,
+            request: f.request, kind: .cloudPush, capturedToken: token, permit: f.permit)
+        XCTAssertTrue(settled)
+    }
+
+    func testDependentSettlementCannotBorrowWarmReceiptIntoUnvalidatedSameStoreSession() async throws {
+        let f = try await fixture()
+        try await many(f, count: 129)
+        let receipt = try await dependentReceipt(f)
+        let token = try await f.store.markJobOwed(kind: "cloudPush")
+        let session = try await f.store.openWorkoutPreferenceEvaluation(owner: f.request.owner, runtimeFence: f.runtime)
+        let cold = Fixture(store: f.store, session: session, runtime: f.runtime, permit: f.permit,
+                           request: f.request, target: f.target)
+        let before = try await dependentSnapshot(cold)
+        let denied = try await cold.store.settleWorkoutPreferenceDependentJob(session: session, receipt: receipt,
+            request: f.request, kind: .cloudPush, capturedToken: token, permit: f.permit)
+        XCTAssertFalse(denied)
+        let unchanged = try await dependentSnapshot(cold); XCTAssertEqual(unchanged, before)
+        let view = try await cold.store.inspectWorkoutPreferenceEvaluation(session: session, request: f.request, now: 0)
+        XCTAssertEqual(view.disposition, .needsValidation)
+        let proved = try await finish(cold, lease: XCTUnwrap(view.lease))
+        XCTAssertEqual(proved.disposition, .complete)
+        let settled = try await cold.store.settleWorkoutPreferenceDependentJob(session: session,
+            receipt: XCTUnwrap(proved.validatedReceipt), request: f.request,
+            kind: .cloudPush, capturedToken: token, permit: f.permit)
+        XCTAssertTrue(settled)
+    }
+
+    func testDependentSettlementAfterRealReopenRequiresNewInstanceValidatedReceipt() async throws {
+        let directory = try directory("workout-export-reopen")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let req = try request(), path = directory.appendingPathComponent("account.sqlite").path
+        let original = try await fixture(path: path, request: req)
+        defer { try? original.store.registryWriter.close() }
+        try await many(original, count: 129)
+        let receipt = try await dependentReceipt(original)
+        let token = try await original.store.markJobOwed(kind: "healthWriteback")
+        try await original.store.checkpointWAL(); try original.store.registryWriter.close()
+        let cold = try await fixture(path: path, request: req)
+        defer { try? cold.store.registryWriter.close() }
+        let before = try await dependentSnapshot(cold)
+        let denied = try await cold.store.settleWorkoutPreferenceDependentJob(session: cold.session, receipt: receipt,
+            request: req, kind: .healthWriteback, capturedToken: token, permit: cold.permit)
+        XCTAssertFalse(denied)
+        let unchanged = try await dependentSnapshot(cold); XCTAssertEqual(unchanged, before)
+        let view = try await cold.store.inspectWorkoutPreferenceEvaluation(session: cold.session, request: req, now: 0)
+        XCTAssertEqual(view.head, receipt.head); XCTAssertEqual(view.disposition, .needsValidation)
+        let proved = try await finish(cold, lease: XCTUnwrap(view.lease))
+        XCTAssertEqual(proved.disposition, .complete)
+        let stillForeign = try await cold.store.settleWorkoutPreferenceDependentJob(session: cold.session, receipt: receipt,
+            request: req, kind: .healthWriteback, capturedToken: token, permit: cold.permit)
+        XCTAssertFalse(stillForeign)
+        let settled = try await cold.store.settleWorkoutPreferenceDependentJob(session: cold.session,
+            receipt: XCTUnwrap(proved.validatedReceipt), request: req,
+            kind: .healthWriteback, capturedToken: token, permit: cold.permit)
+        XCTAssertTrue(settled)
+    }
+
+    func testDependentSettlementRefusesCopiedMatchingHeadWithChangedMembership() async throws {
+        let directory = try directory("workout-export-copy")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let req = try request(), path = directory.appendingPathComponent("original.sqlite").path
+        let original = try await fixture(path: path, request: req)
+        defer { try? original.store.registryWriter.close() }
+        try await insert(original, start: 1, notes: "original\0bytes")
+        let receipt = try await dependentReceipt(original)
+        let token = try await original.store.markJobOwed(kind: "widgetPublish")
+        try await original.store.checkpointWAL(); try original.store.registryWriter.close()
+        let copiedPath = directory.appendingPathComponent("copied.sqlite").path
+        for suffix in ["", "-wal", "-shm"] where FileManager.default.fileExists(atPath: path + suffix) {
+            try FileManager.default.copyItem(atPath: path + suffix, toPath: copiedPath + suffix)
+        }
+        let copied = try await fixture(path: copiedPath, request: req)
+        defer { try? copied.store.registryWriter.close() }
+        try await copied.store.registryWriter.write { db in
+            try db.execute(sql: "UPDATE workout SET notes=CAST(? AS TEXT)", arguments: [Data("changed\0bytes".utf8)])
+            try db.execute(sql: "UPDATE workoutPreferenceEvaluation SET workoutRevision=?", arguments: [receipt.head.workoutRevision])
+        }
+        let before = try await dependentSnapshot(copied)
+        let denied = try await copied.store.settleWorkoutPreferenceDependentJob(session: copied.session, receipt: receipt,
+            request: req, kind: .widgetPublish, capturedToken: token, permit: copied.permit)
+        XCTAssertFalse(denied)
+        let unchanged = try await dependentSnapshot(copied); XCTAssertEqual(unchanged, before)
+        let view = try await copied.store.inspectWorkoutPreferenceEvaluation(session: copied.session, request: req, now: 0)
+        XCTAssertEqual(view.head, receipt.head); XCTAssertEqual(view.disposition, .needsValidation)
+        let rejected = try await finish(copied, lease: XCTUnwrap(view.lease))
+        XCTAssertEqual(rejected.disposition, .needsCorePass); XCTAssertNil(rejected.validatedReceipt)
+        let afterProof = try await dependentSnapshot(copied)
+        let again = try await copied.store.settleWorkoutPreferenceDependentJob(session: copied.session, receipt: receipt,
+            request: req, kind: .widgetPublish, capturedToken: token, permit: copied.permit)
+        XCTAssertFalse(again)
+        let final = try await dependentSnapshot(copied); XCTAssertEqual(final, afterProof)
+        XCTAssertEqual(final.jobs, before.jobs); XCTAssertEqual(final.workouts, before.workouts)
+    }
+
+    func testDependentSettlementPermitRevocationAfterDeleteBeforeCommitRollsBackExactJob() async throws {
+        let f = try await fixture(), receipt = try await dependentReceipt(f)
+        let token = try await f.store.markJobOwed(kind: "cloudPush")
+        let before = try await dependentSnapshot(f)
+        try await f.store.registryWriter.write { db in
+            db.add(function: DatabaseFunction("revokeDependentPermit", argumentCount: 0, pure: false) { _ in
+                f.permit.invalidate(); return nil
+            })
+            try db.execute(sql: "CREATE TEMP TRIGGER revokeDependent AFTER DELETE ON syncJob WHEN OLD.kind='cloudPush' BEGIN SELECT revokeDependentPermit(); END")
+        }
+        await failed(.retired) {
+            _ = try await f.store.settleWorkoutPreferenceDependentJob(session: f.session, receipt: receipt,
+                request: f.request, kind: .cloudPush, capturedToken: token, permit: f.permit)
+        }
+        let after = try await dependentSnapshot(f); XCTAssertEqual(after, before)
+        XCTAssertTrue(f.runtime.isValid)
+        try await f.store.registryWriter.write { try $0.execute(sql: "DROP TRIGGER revokeDependent") }
+        _ = try await f.store.markJobOwed(kind: "widgetPublish") // No account-wide fence poisoning.
+        let jobs = try await f.store.owedJobs()
+        XCTAssertEqual(jobs.first { $0.kind == "cloudPush" }?.token, token)
+        XCTAssertTrue(jobs.contains { $0.kind == "widgetPublish" })
+    }
+
+    func testDependentSettlementSqlFailureAfterDeleteRollsBackAndOriginalReceiptCanRetry() async throws {
+        let f = try await fixture(), receipt = try await dependentReceipt(f)
+        let token = try await f.store.markJobOwed(kind: "cloudPush")
+        let before = try await dependentSnapshot(f)
+        try await f.store.registryWriter.write {
+            try $0.execute(sql: "CREATE TEMP TRIGGER failDependent AFTER DELETE ON syncJob WHEN OLD.kind='cloudPush' BEGIN SELECT RAISE(ABORT,'synthetic export settlement failure'); END")
+        }
+        do {
+            _ = try await f.store.settleWorkoutPreferenceDependentJob(session: f.session, receipt: receipt,
+                request: f.request, kind: .cloudPush, capturedToken: token, permit: f.permit)
+            XCTFail("SQL fault was swallowed")
+        } catch { XCTAssertTrue(error is DatabaseError, "\(error)") }
+        let after = try await dependentSnapshot(f); XCTAssertEqual(after, before)
+        try await f.store.registryWriter.write { try $0.execute(sql: "DROP TRIGGER failDependent") }
+        let retried = try await f.store.settleWorkoutPreferenceDependentJob(session: f.session, receipt: receipt,
+            request: f.request, kind: .cloudPush, capturedToken: token, permit: f.permit)
+        XCTAssertTrue(retried)
+    }
+
+    func testDependentSettlementPrecancelledTaskRetainsExactJob() async throws {
+        let f = try await fixture(), receipt = try await dependentReceipt(f)
+        let token = try await f.store.markJobOwed(kind: "cloudPush"), before = try await dependentSnapshot(f)
+        let task = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await f.store.settleWorkoutPreferenceDependentJob(session: f.session, receipt: receipt,
+                request: f.request, kind: .cloudPush, capturedToken: token, permit: f.permit)
+        }
+        do { _ = try await task.value; XCTFail("cancelled export settled") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        let after = try await dependentSnapshot(f); XCTAssertEqual(after, before)
+    }
+
+    private final class DependentCancellationHandle: @unchecked Sendable {
+        private let lock = NSLock()
+        private var task: Task<Bool, Error>?
+        func install(_ task: Task<Bool, Error>?) { lock.lock(); self.task = task; lock.unlock() }
+        func cancel() { lock.lock(); let captured = task; lock.unlock(); captured?.cancel() }
+    }
+
+    func testDependentSettlementTaskCancellationAfterDeleteIsCaughtAtCommit() async throws {
+        let f = try await fixture(), receipt = try await dependentReceipt(f)
+        let token = try await f.store.markJobOwed(kind: "cloudPush"), before = try await dependentSnapshot(f)
+        let handle = DependentCancellationHandle()
+        try await f.store.registryWriter.write { db in
+            db.add(function: DatabaseFunction("cancelDependentTask", argumentCount: 0, pure: false) { _ in
+                handle.cancel(); return nil
+            })
+            try db.execute(sql: "CREATE TEMP TRIGGER cancelDependent AFTER DELETE ON syncJob WHEN OLD.kind='cloudPush' BEGIN SELECT cancelDependentTask(); END")
+        }
+        let start = AsyncStream<Void>.makeStream()
+        let task = Task {
+            for await _ in start.stream { break }
+            return try await f.store.settleWorkoutPreferenceDependentJob(session: f.session, receipt: receipt,
+                request: f.request, kind: .cloudPush, capturedToken: token, permit: f.permit)
+        }
+        handle.install(task)
+        defer { handle.install(nil) }
+        start.continuation.yield(()); start.continuation.finish()
+        do { _ = try await task.value; XCTFail("mid-transaction cancellation settled export") }
+        catch { XCTAssertEqual(error as? E.Failure, .cancelled) }
+        let after = try await dependentSnapshot(f); XCTAssertEqual(after, before)
+        try await f.store.registryWriter.write { try $0.execute(sql: "DROP TRIGGER cancelDependent") }
+        XCTAssertTrue(f.runtime.isValid)
+    }
+
+    func testDependentSettlementRetiredSessionOrRuntimeCannotDeleteDebt() async throws {
+        for retireSession in [true, false] {
+            let f = try await fixture(), receipt = try await dependentReceipt(f)
+            let token = try await f.store.markJobOwed(kind: "cloudPush"), before = try await dependentSnapshot(f)
+            if retireSession { f.session.invalidate() } else { f.runtime.invalidate() }
+            await failed(.retired) {
+                _ = try await f.store.settleWorkoutPreferenceDependentJob(session: f.session, receipt: receipt,
+                    request: f.request, kind: .cloudPush, capturedToken: token, permit: f.permit)
+            }
+            let after = try await dependentSnapshot(f); XCTAssertEqual(after, before)
+        }
+    }
+
     private func persistedProgress(_ f: Fixture) async throws -> Data {
         try await f.store.registryWriter.read { db in
             let bytes = try XCTUnwrap(Data.fetchOne(db, sql: "SELECT stateBytes FROM workoutPreferenceEvaluation"))

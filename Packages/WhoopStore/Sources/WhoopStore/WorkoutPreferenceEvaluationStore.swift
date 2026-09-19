@@ -984,6 +984,42 @@ extension WhoopStore {
         } onCancel: { cancellation.invalidate() }
     }
 
+    public func settleWorkoutPreferenceDependentJob(session: WorkoutEvaluationSession,
+                                                    receipt: WorkoutPreferenceEvaluation.ValidatedReceipt,
+                                                    request: WorkoutPreferenceEvaluation.Request,
+                                                    kind: SyncJobKind,
+                                                    capturedToken: String,
+                                                    permit: WorkoutEvaluationPermit) async throws -> Bool {
+        switch kind {
+        case .cloudPush, .healthWriteback, .widgetPublish: break
+        case .rescore: return false
+        }
+        let cancellation = StoreWriteFence()
+        return try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            return try evaluationWrite(session: session, permit: permit, cancellation: cancellation) { db in
+                let control = try WPEStorage.load(db)
+                let rescoreToken = try WPEStorage.token(db)
+                guard request.owner == session.owner, receipt.instance == session.instance,
+                      receipt.head == control.head, session.trustedHead() == control.head,
+                      !control.head.revisionOverflow, control.state.phase == .sealed,
+                      control.head.workoutRevision == control.state.expectedRevision,
+                      WPEStorage.compatible(receipt.receipt.target.request, request),
+                      receipt.receipt.outcome == .complete, !receipt.receipt.counts.hasBlockers,
+                      rescoreToken == nil, WPEStorage.tokenMatches(control.state, rescoreToken) else { return false }
+                let checked = try WPEStorage.receipt(control, instance: session.instance)
+                guard checked.receipt.digest == receipt.receipt.digest,
+                      checked.receipt.revision == receipt.receipt.revision,
+                      checked.receipt.outcome == .complete, !checked.receipt.counts.hasBlockers else { return false }
+                // Export settlement consumes only its exact debt; it neither renews membership
+                // nor changes the separately settled rescore prerequisite.
+                try db.execute(sql: "DELETE FROM syncJob WHERE kind=? AND token=CAST(? AS TEXT) COLLATE BINARY",
+                               arguments: [kind.rawValue, Data(capturedToken.utf8)])
+                return db.changesCount == 1
+            }
+        } onCancel: { cancellation.invalidate() }
+    }
+
     public func settleWorkoutPreferenceRescoreJob(session: WorkoutEvaluationSession,
                                                  receipt: WorkoutPreferenceEvaluation.ValidatedReceipt,
                                                  request: WorkoutPreferenceEvaluation.Request,
