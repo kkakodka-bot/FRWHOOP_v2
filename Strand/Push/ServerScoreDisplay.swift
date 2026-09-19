@@ -3,6 +3,21 @@ import WhoopStore
 
 /// Maps server score cache onto Today/Sleep display fields when `serverScoring` is on.
 enum ServerScoreDisplay {
+    static func recovery(day: String, overlay: ServerScoreDayCache?) -> Double? {
+        guard ServerScoringSettings.isEnabled, overlay?.day == day else { return nil }
+        return overlay?.daily?.recovery
+    }
+
+    static func strain(day: String, overlay: ServerScoreDayCache?) -> Double? {
+        guard ServerScoringSettings.isEnabled, overlay?.day == day else { return nil }
+        return overlay?.daily?.strain
+    }
+
+    static func spo2(day: String, overlay: ServerScoreDayCache?) -> Double? {
+        guard ServerScoringSettings.isEnabled, overlay?.day == day else { return nil }
+        return overlay?.daily?.spo2Pct
+    }
+
     static func hrvRmssd(day: String, overlay: ServerScoreDayCache?) -> Double? {
         guard ServerScoringSettings.isEnabled, overlay?.day == day, let daily = overlay?.daily else { return nil }
         return daily.hrvRmssdMs

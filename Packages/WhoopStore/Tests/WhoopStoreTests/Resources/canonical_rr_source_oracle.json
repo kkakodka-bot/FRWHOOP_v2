@@ -1,5 +1,5 @@
 {
-  "version": "whoop-canonical-rr-1",
+  "version": "whoop-canonical-rr-2",
   "columns": ["ts", "rrMs", "seq", "ord", "srcChannel", "tsSuspect"],
   "cases": [
     {"name": "historical_precedence", "family": "WHOOP5",

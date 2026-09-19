@@ -100,12 +100,12 @@ class ScoringPoller(
             }
             return done
         } catch (err: Exception) {
+            log.error(
+                "score failed for {} {} {}: {}",
+                item.userId, item.deviceId, item.day, err.message, err,
+            )
             if (queue.markFailed(item, err.message ?: err.javaClass.simpleName)) {
                 heartbeat.recordError(err.message ?: err.javaClass.simpleName)
-                log.error(
-                    "score failed for {} {} {}: {}",
-                    item.userId, item.deviceId, item.day, err.message, err,
-                )
             } else {
                 log.info("discarded superseded scoring run {}", item.runId)
             }

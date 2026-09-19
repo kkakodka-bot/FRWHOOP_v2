@@ -74,24 +74,37 @@ class ScoringWorkQueueIntegrationTest {
         assertTrue(queue.markDone(claim(), 1))
     }
 
-    @Test fun newInputAndExpiredLeaseFenceEveryOldMutation() {
+    @Test fun pendingArrivalsCoalesceAndLiveLeasePublishesThenRequeues() {
+        queue.dirtyWorkItem(user, device, day)
+        assertEquals(1L, revision(day))
+        queue.dirtyWorkItem(user, device, day)
+        assertEquals(1L, revision(day))
+        val running = claim()
+        assertEquals(1L, running.inputRevision)
+        queue.dirtyWorkItem(user, device, day)
+        assertEquals(1L, revision(day))
+        assertNull(queue.claimOne(user, device, day))
+        assertTrue(queue.renew(running))
+        fence(running)
+        assertTrue(queue.markDone(running, 1))
+        assertEquals(2L, revision(day))
+        val next = claim()
+        assertEquals(2L, next.inputRevision)
+        fence(next)
+        assertTrue(queue.markDone(next, 1))
+        assertNull(queue.claimOne(user, device, day))
+    }
+
+    @Test fun expiredLeaseFenceEveryOldMutation() {
         queue.dirtyWorkItem(user, device, day)
         val obsolete = claim()
-        queue.dirtyWorkItem(user, device, day)
-        val current = claim()
-        assertFalse(queue.renew(obsolete))
-        assertFalse(queue.markDone(obsolete, 1))
-        assertFalse(queue.markFailed(obsolete, "old error"))
-        assertFalse(queue.markWaiting(obsolete, "old waiting"))
-        expectStale { fence(obsolete) }
-        assertTrue(queue.renew(current))
         sql("update physiology_work_items set lease_expires_at=clock_timestamp()-interval '1 second' where user_id='$user'")
-        assertFalse(queue.renew(current))
-        expectStale { fence(current) }
+        assertFalse(queue.renew(obsolete))
+        expectStale { fence(obsolete) }
         val successor = claim()
-        assertNotEquals(current.leaseToken, successor.leaseToken)
-        assertNotEquals(current.runId, successor.runId)
-        assertFalse(queue.markDone(current, 1))
+        assertNotEquals(obsolete.leaseToken, successor.leaseToken)
+        assertNotEquals(obsolete.runId, successor.runId)
+        assertFalse(queue.markDone(obsolete, 1))
         fence(successor)
         assertTrue(queue.markDone(successor, 1))
     }
@@ -123,10 +136,10 @@ class ScoringWorkQueueIntegrationTest {
         sql("update noop_hr_samples set ingested_at=clock_timestamp(),batch_id='${UUID.randomUUID()}' where user_id='$user'")
         assertEquals(1L, revision(day))
         sql("update noop_hr_samples set bpm=61 where user_id='$user'")
-        assertEquals(2L, revision(day))
+        assertEquals(1L, revision(day))
         sql("delete from noop_hr_samples where user_id='$user'")
-        assertEquals(3L, revision(day))
-        assertEquals(3L, revision("2026-09-18"))
+        assertEquals(1L, revision(day))
+        assertEquals(1L, revision("2026-09-18"))
     }
 
     @Test fun bulkArrivalCoalescesAndTransactionRollbackCannotDirty() {
@@ -150,10 +163,13 @@ class ScoringWorkQueueIntegrationTest {
 
     @Test fun deviceFamilyCorrectionInvalidatesButLastSeenDoesNot() {
         queue.dirtyWorkItem(user,device,day)
+        val before=scalar("select floor(extract(epoch from dirty_at)*1000) from physiology_work_items where user_id='$user' and day='$day'")
         sql("update devices set last_seen_at=clock_timestamp() where id='$device'")
         assertEquals(1L,revision(day))
+        assertEquals(before,scalar("select floor(extract(epoch from dirty_at)*1000) from physiology_work_items where user_id='$user' and day='$day'"))
         sql("update devices set device_family='whoop4' where id='$device'")
-        assertEquals(2L,revision(day))
+        assertEquals(1L,revision(day))
+        assertTrue(scalar("select floor(extract(epoch from dirty_at)*1000) from physiology_work_items where user_id='$user' and day='$day'")>before)
     }
 
     @Test fun allAuxiliarySignalsAndManualChangesDirtyWithoutHrArrival() {
@@ -168,12 +184,13 @@ class ScoringWorkQueueIntegrationTest {
             "insert into sessions(user_id,device_id,start_at,end_at,user_modified) values('$user','$device',to_timestamp($ts),to_timestamp($ts+120),true)",
             "insert into sleep_details(session_id,user_id,user_start_at) select id,user_id,to_timestamp($ts+10) from sessions where user_id='$user'",
         )
-        inserts.forEachIndexed { index, statement ->
+        inserts.forEach { statement ->
             sql(statement)
-            assertEquals("Missing input invalidation for $statement",index+1L,revision(day))
+            assertEquals("Missing input invalidation for $statement",1L,revision(day))
+            assertEquals(0L,scalar("select count(*) from physiology_work_items where user_id='$user' and day='$day' and done_at is not null"))
         }
         sql("delete from sessions where user_id='$user'")
-        assertTrue(revision(day)>inserts.size)
+        assertEquals(1L,revision(day))
     }
 
     @Test fun timezoneChangeDoesNotMoveLateHistoricalRecordsAndDstUsesCalendarDays() {
@@ -195,7 +212,7 @@ class ScoringWorkQueueIntegrationTest {
         sql("insert into sleep_details(session_id,user_id,user_start_at,user_end_at) " +
             "values('$id','$user','2026-09-17T01:00Z','2026-09-17T02:00Z')")
         sql("update sleep_details set user_start_at='2026-09-19T01:00Z',user_end_at='2026-09-19T02:00Z' where session_id='$id'")
-        assertEquals(3L,revision(day))
+        assertEquals(1L,revision(day))
         assertEquals(1L,revision("2026-09-19"))
         assertEquals(1L,revision("2026-09-20"))
     }
@@ -225,7 +242,7 @@ class ScoringWorkQueueIntegrationTest {
         assertEquals(1L,revision(day))
         sql("delete from object_manifests where id='$objectId'")
         assertEquals(0L,scalar("select count(*) from object_manifests where id='$objectId'"))
-        assertEquals(2L,revision(day))
+        assertEquals(1L,revision(day))
     }
 
     @Test fun deletingUnverifiedRawObjectDoesNotCreatePhysiologyWork() {
@@ -261,10 +278,10 @@ class ScoringWorkQueueIntegrationTest {
                 assertTrue("arrival must wait for publication lock",waiting)
                 assertFalse(dirty.isDone)
                 conn.commit()
-                assertEquals(2L,dirty.get(5,TimeUnit.SECONDS))
+                assertEquals(1L,dirty.get(5,TimeUnit.SECONDS))
             }
-            expectStale { fence(item) }
-            assertFalse(queue.markDone(item,1))
+            fence(item)
+            assertTrue(queue.markDone(item,1))
             assertEquals(1L,scalar("select revision from queue_test_publications where user_id='$user'"))
             assertEquals(2L,revision(day))
         } finally { pool.shutdownNow() }

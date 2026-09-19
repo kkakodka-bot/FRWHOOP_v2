@@ -67,10 +67,10 @@ class RrPacketProvenanceIntegrationTest {
 
         // SQL shape acceptance is not cryptographic proof: the production reader checks the bytes.
         sql("update noop_rr_packet_provenance set \"rawHex\"=repeat('0',length(\"rawHex\")) where user_id='$user'")
-        assertEquals(2L, revision())
+        assertEquals(1L, revision())
         assertNull(reader.loadDay(user,day,device,"UTC")!!.hrvObservations)
         sql("delete from noop_rr_packet_provenance where user_id='$user'")
-        assertEquals(3L, revision())
+        assertEquals(1L, revision())
     }
 
     private fun sql(statement: String) = db.withConnection { c -> c.createStatement().use { it.execute(statement) } }

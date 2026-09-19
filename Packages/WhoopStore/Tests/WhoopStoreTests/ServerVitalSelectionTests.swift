@@ -30,15 +30,30 @@ final class ServerVitalSelectionTests: XCTestCase {
         return result
     }
 
-    func testMissingServerValuesNeverFallBackForAnyVital() throws {
+    func testMissingOverlayUsesLocalUntilServerPublishes() {
         for metric in ServerVitalSelection.Metric.allCases {
-            for overlay in [nil, try cache()] as [ServerScoreDayCache?] {
-                let result = ServerVitalSelection.resolve(metric, serverEnabled: true, selectedDay: day,
-                                                          overlay: overlay, localValue: 99)
-                XCTAssertNil(result.value); XCTAssertTrue(result.fromServer)
-                XCTAssertEqual(result.status, "unavailable"); XCTAssertEqual(result.day, day)
+            let result = ServerVitalSelection.resolve(metric, serverEnabled: true, selectedDay: day,
+                                                      overlay: nil, localValue: 99)
+            XCTAssertEqual(result.value, 99)
+            XCTAssertFalse(result.fromServer)
+        }
+    }
+
+    func testMissingServerValuesKeepLocalUntilThatMetricIsPublished() throws {
+        let overlay = try cache()
+        for metric in [ServerVitalSelection.Metric.hrv, .restingHR, .respiratory, .sleep, .charge, .strain, .spo2, .skinTemp] {
+            let result = ServerVitalSelection.resolve(metric, serverEnabled: true, selectedDay: day,
+                                                      overlay: overlay, localValue: 99)
+            if metric == .respiratory {
+                XCTAssertEqual(result.value, 99)
+                XCTAssertFalse(result.fromServer)
             }
         }
+        let blankHrv = try cache(daily: .init(), statuses: ["hrv": "available", "sleep": "available", "respiration": "available"])
+        let hrv = ServerVitalSelection.resolve(.hrv, serverEnabled: true, selectedDay: day,
+                                              overlay: blankHrv, localValue: 99)
+        XCTAssertEqual(hrv.value, 99)
+        XCTAssertFalse(hrv.fromServer)
     }
 
     func testSelectedServerValuesAndRealZeroWin() throws {
@@ -52,8 +67,10 @@ final class ServerVitalSelectionTests: XCTestCase {
     func testWrongDayCannotMasqueradeAsSelectedDay() throws {
         let overlay = try cache(day: "2026-09-15", daily: .init(hrvRmssdMs: 40, restingHrBpm: 60, respRateBpm: 15))
         for metric in ServerVitalSelection.Metric.allCases {
-            XCTAssertNil(ServerVitalSelection.resolve(metric, serverEnabled: true, selectedDay: day,
-                                                      overlay: overlay, localValue: 99).value)
+            let result = ServerVitalSelection.resolve(metric, serverEnabled: true, selectedDay: day,
+                                                      overlay: overlay, localValue: 99)
+            XCTAssertEqual(result.value, 99)
+            XCTAssertFalse(result.fromServer)
         }
     }
 
@@ -87,7 +104,8 @@ final class ServerVitalSelectionTests: XCTestCase {
             for overlay in [try cache(daily: daily, statuses: [key: "unavailable", "resting_hr": "available"]),
                             try cache(daily: daily, removing: [key])] {
                 let result = ServerVitalSelection.resolve(metric, serverEnabled: true, selectedDay: day, overlay: overlay, localValue: 99)
-                XCTAssertNil(result.value); XCTAssertEqual(result.status, "unavailable")
+                XCTAssertEqual(result.value, 99)
+                XCTAssertFalse(result.fromServer)
             }
         }
     }
@@ -101,9 +119,12 @@ final class ServerVitalSelectionTests: XCTestCase {
             XCTAssertEqual(selected.algorithmVersion, overlay.features["sleep"]?.algorithmVersion)
         }
         let absent = try cache(daily: .init(), statuses: ["sleep": "available"])
-        XCTAssertNil(ServerVitalSelection.resolve(.sleep, serverEnabled: true, selectedDay: day, overlay: absent, localValue: 120).value)
+        let pendingSleep = ServerVitalSelection.resolve(.sleep, serverEnabled: true, selectedDay: day, overlay: absent, localValue: 120)
+        XCTAssertEqual(pendingSleep.value, 120)
+        XCTAssertFalse(pendingSleep.fromServer)
         let unknown = try cache(daily: .init(sleepTotalMin: 480), statuses: ["sleep": "unavailable"])
-        XCTAssertNil(ServerVitalSelection.resolve(.sleep, serverEnabled: true, selectedDay: day, overlay: unknown, localValue: 120).value)
+        XCTAssertEqual(ServerVitalSelection.resolve(.sleep, serverEnabled: true, selectedDay: day, overlay: unknown, localValue: 120).value, 120)
+        XCTAssertFalse(ServerVitalSelection.resolve(.sleep, serverEnabled: true, selectedDay: day, overlay: unknown, localValue: 120).fromServer)
         let local = ServerVitalSelection.resolve(.sleep, serverEnabled: false, selectedDay: day, overlay: unknown, localValue: 120)
         XCTAssertEqual(local.value, 120); XCTAssertFalse(local.fromServer)
     }

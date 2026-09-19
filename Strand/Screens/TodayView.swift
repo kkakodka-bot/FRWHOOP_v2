@@ -638,6 +638,13 @@ struct TodayView: View {
     /// carry. Both numbers always come off the SAME row, so an absolute is never paired with another
     /// night's deviation.
     private var skinTempLeadReading: SkinTempDisplay.Reading? {
+        let selection = ServerVitalSelection.resolve(.skinTemp, serverEnabled: serverScoringEnabled,
+                                                     selectedDay: selectedDayKey, overlay: serverOverlay, localValue: nil)
+        if selection.fromServer {
+            return SkinTempDisplay.leadReading(absC: serverOverlay?.daily?.skinTempC,
+                                               devC: serverOverlay?.daily?.skinTempDevC,
+                                               prefer: skinTempPreferred)
+        }
         let row = [displayDay, lastVitalsDay, lastSkinTempReadingDay]
             .compactMap { $0 }
             .first { $0.skinTempC != nil || $0.skinTempDevC != nil }
@@ -2731,7 +2738,9 @@ struct TodayView: View {
             // back to the spo2_candidate sparkline tail (WHOOP `spo2_candidate_82` or Oura ceiling@100
             // `0x6F`, device-conditional — see IntelligenceEngine) so the card shows a strap-estimate
             // (unverified) number instead of "—".
-            let calibrated = (d?.spo2Pct ?? lastVitalsDay?.spo2Pct ?? lastSpo2Day?.spo2Pct)
+            let calibrated = ServerVitalSelection.resolve(.spo2, serverEnabled: serverScoringEnabled,
+                selectedDay: selectedDayKey, overlay: serverOverlay,
+                localValue: d?.spo2Pct ?? lastVitalsDay?.spo2Pct ?? lastSpo2Day?.spo2Pct).value
             if let v = calibrated { return String(format: "%.0f%%", locale: AppLanguage.activeLocale, v) }
             if PuffinExperiment.spo2CandidateDisplayEnabled, let tail = sparks["spo2_candidate"]?.last {
                 return String(format: "%.0f%%", locale: AppLanguage.activeLocale, tail)

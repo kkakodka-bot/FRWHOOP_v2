@@ -24,12 +24,20 @@ class ServerVitalSelectionTest {
             .copy(day = day, daily = daily, stale = stale)
     }
 
-    @Test fun missingServerValuesNeverFallBackForAnyVital() {
-        for (metric in ServerVitalSelection.Metric.entries) for (overlay in listOf(null, cache())) {
-            val result = ServerVitalSelection.resolve(metric, true, day, overlay, 99.0)
-            assertNull(result.value); assertTrue(result.fromServer)
-            assertEquals("unavailable", result.status); assertEquals(day, result.day)
+    @Test fun missingOverlayUsesLocalUntilServerPublishes() {
+        for (metric in ServerVitalSelection.Metric.entries) {
+            val result = ServerVitalSelection.resolve(metric, true, day, null, 99.0)
+            assertEquals(99.0, result.value!!, 0.0); assertFalse(result.fromServer)
         }
+    }
+
+    @Test fun missingServerValuesKeepLocalUntilThatMetricIsPublished() {
+        val overlay = cache()
+        val respiratory = ServerVitalSelection.resolve(ServerVitalSelection.Metric.RESPIRATORY, true, day, overlay, 99.0)
+        assertEquals(99.0, respiratory.value!!, 0.0); assertFalse(respiratory.fromServer)
+        val blankHrv = cache(daily = ServerScoreDailyCache(), statuses = mapOf("hrv" to "available", "sleep" to "available", "respiration" to "available"))
+        val hrv = ServerVitalSelection.resolve(ServerVitalSelection.Metric.HRV, true, day, blankHrv, 99.0)
+        assertEquals(99.0, hrv.value!!, 0.0); assertFalse(hrv.fromServer)
     }
 
     @Test fun selectedServerValuesAndRealZeroWin() {
@@ -42,7 +50,7 @@ class ServerVitalSelectionTest {
     @Test fun wrongDayCannotMasqueradeAsSelectedDay() {
         val overlay = cache("2026-09-15", ServerScoreDailyCache(hrvRmssdMs = 40.0, restingHrBpm = 60, respRateBpm = 15.0))
         for (metric in ServerVitalSelection.Metric.entries)
-            assertNull(ServerVitalSelection.resolve(metric, true, day, overlay, 99.0).value)
+            assertEquals(99.0, ServerVitalSelection.resolve(metric, true, day, overlay, 99.0).value!!, 0.0)
     }
 
     @Test fun localModeIsUnchangedAndIgnoresServer() {
@@ -74,7 +82,7 @@ class ServerVitalSelectionTest {
             for (overlay in listOf(cache(daily = daily, statuses = mapOf(key to "unavailable", "resting_hr" to "available")),
                 cache(daily = daily, removing = listOf(key)))) {
                 val result = ServerVitalSelection.resolve(metric, true, day, overlay, 99.0)
-                assertNull(result.value); assertEquals("unavailable", result.status)
+                assertEquals(99.0, result.value!!, 0.0); assertFalse(result.fromServer)
             }
         }
     }
@@ -88,9 +96,11 @@ class ServerVitalSelectionTest {
             assertEquals(overlay.features["sleep"]?.algorithmVersion, selected.algorithmVersion)
         }
         val absent = cache(daily = ServerScoreDailyCache(), statuses = mapOf("sleep" to "available"))
-        assertNull(ServerVitalSelection.resolve(ServerVitalSelection.Metric.SLEEP, true, day, absent, 120.0).value)
+        val pendingSleep = ServerVitalSelection.resolve(ServerVitalSelection.Metric.SLEEP, true, day, absent, 120.0)
+        assertEquals(120.0, pendingSleep.value!!, 0.0); assertFalse(pendingSleep.fromServer)
         val unknown = cache(daily = ServerScoreDailyCache(sleepTotalMin = 480.0), statuses = mapOf("sleep" to "unavailable"))
-        assertNull(ServerVitalSelection.resolve(ServerVitalSelection.Metric.SLEEP, true, day, unknown, 120.0).value)
+        assertEquals(120.0, ServerVitalSelection.resolve(ServerVitalSelection.Metric.SLEEP, true, day, unknown, 120.0).value!!, 0.0)
+        assertFalse(ServerVitalSelection.resolve(ServerVitalSelection.Metric.SLEEP, true, day, unknown, 120.0).fromServer)
         val local = ServerVitalSelection.resolve(ServerVitalSelection.Metric.SLEEP, false, day, unknown, 120.0)
         assertEquals(120.0, local.value!!, 0.0); assertFalse(local.fromServer)
     }

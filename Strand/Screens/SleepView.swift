@@ -18,7 +18,7 @@ private struct ServerSleepScreen: View {
         Repository.dayString(Calendar.current.date(byAdding: .day, value: -dayOffset, to: Date()) ?? Date())
     }
     var body: some View {
-        let cache = ServerScoringSettings.ready && scores.signedIn ? scores.overlay(for: day) : nil
+        let cache = ServerScoringSettings.ready && (scores.signedIn || CloudScoreIdentity.hasIngestToken) ? scores.overlay(for: day) : nil
         let episodes = ServerSleepEpisode.episodes(cache, day: day)
         ScreenScaffold(title: "Sleep", subtitle: "Server physiology", onRefresh: {
             await scores.refreshVisibleDays(todayKey: day)
@@ -132,7 +132,7 @@ private struct ServerSleepScreen: View {
 
     private func status(_ cache: ServerScoreDayCache?) -> String {
         if !ServerScoringSettings.ready { return String(localized: "Server sleep unavailable: configure the server connection.") }
-        if !scores.signedIn { return String(localized: "Server sleep unavailable: sign in to your account.") }
+        if !scores.signedIn && !CloudScoreIdentity.hasIngestToken { return String(localized: "Server sleep unavailable: sign in to your account.") }
         guard let cache else { return scores.lastError ?? String(localized: "Server sleep unavailable for this day.") }
         let feature = cache.features["sleep"]
         let value = "\(feature?.status ?? "unavailable")\(feature?.reason.map { " · \($0)" } ?? "")"
@@ -273,6 +273,7 @@ struct SleepView: View {
     @AppStorage(SleepLayoutPrefs.orderKey) private var sleepSectionOrderRaw = ""
     @AppStorage(SleepLayoutPrefs.hiddenKey) private var sleepHiddenSectionsRaw = ""
     @State private var showSleepCustomize = false
+    @State private var serverSignedIn = false
 
     /// The analytical cards to render, in saved order minus the hidden set.
     private var sleepVisibleSections: [SleepSection] {
@@ -281,12 +282,17 @@ struct SleepView: View {
 
     var body: some View {
         Group {
-            if serverScoringEnabled {
+            // Don't replace the whole Sleep tab with a sign-in wall. Server
+            // physiology is an overlay; unsigned or unconfigured builds keep
+            // the on-device night.
+            if serverScoringEnabled && serverSignedIn {
                 ServerSleepScreen(scores: appModel.serverScores)
             } else {
                 localBody
             }
         }
+        .onAppear { serverSignedIn = appModel.serverScores.signedIn }
+        .onReceive(appModel.serverScores.$signedIn) { serverSignedIn = $0 }
     }
 
     private var localBody: some View {

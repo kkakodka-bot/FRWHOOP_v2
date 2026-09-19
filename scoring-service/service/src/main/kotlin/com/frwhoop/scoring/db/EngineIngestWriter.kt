@@ -8,13 +8,19 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.concurrent.TimeUnit
 
 /** Publishes a device/revision snapshot while the database validates its live lease. */
 class EngineIngestWriter(
     private val supabaseUrl: String,
     private val serviceRoleKey: String,
     private val ingestSecret: String,
-    private val http: OkHttpClient = OkHttpClient.Builder().build(),
+    private val http: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(120, TimeUnit.SECONDS)
+        .writeTimeout(120, TimeUnit.SECONDS)
+        .callTimeout(180, TimeUnit.SECONDS)
+        .build(),
     private val rpcPath: String = "rpc/engine_publish_physiology",
 ) {
     companion object {

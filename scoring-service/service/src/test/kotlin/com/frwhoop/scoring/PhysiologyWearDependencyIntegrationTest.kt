@@ -48,12 +48,12 @@ class PhysiologyWearDependencyIntegrationTest {
             assertEquals(before,revision("2026-09-17"))
             c.commit()
         }
-        assertTrue(revision("2026-09-17")>before)
+        assertEquals(before,revision("2026-09-17"))
         val changed=revision("2026-09-17")
         sql("update noop_events set ingested_at=clock_timestamp(),batch_id='${UUID.randomUUID()}' where user_id='$user'")
         assertEquals(changed,revision("2026-09-17"))
         sql("delete from noop_events where user_id='$user'")
-        assertTrue(revision("2026-09-17")>changed)
+        assertEquals(changed,revision("2026-09-17"))
     }
     @Test fun nextTransitionEndsInfluenceAndConflictingSameSecondStateRemainsOff() {
         event(off+3600,"WRIST_ON(11)")

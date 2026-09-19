@@ -10,8 +10,32 @@ object SleepSignalValidity {
     fun heartRate(sample: HrSample): Boolean = sample.bpm in 25..240
     fun gravity(sample: GravitySample): Boolean {
         val magnitudeSquared = sample.x * sample.x + sample.y * sample.y + sample.z * sample.z
+        val vectorOk = sample.x.isFinite() && sample.y.isFinite() && sample.z.isFinite() &&
+            magnitudeSquared.isFinite() && magnitudeSquared > 1e-12
+        val dyn = sample.dynAccel
+        val dynOk = dyn != null && dyn.isFinite() && dyn in 0.0..8.0
+        // WHOOP 5 live projections often bank a 1 Hz zero vector plus the strap's own dynAccel.
+        // A zero placeholder is not motion evidence; dynAccel in-gate still is.
+        return vectorOk || dynOk
+    }
+    fun orientationMagnitudeSquared(sample: GravitySample): Double =
+        sample.x * sample.x + sample.y * sample.y + sample.z * sample.z
+    fun hasOrientation(sample: GravitySample): Boolean {
+        val magnitudeSquared = orientationMagnitudeSquared(sample)
         return sample.x.isFinite() && sample.y.isFinite() && sample.z.isFinite() &&
             magnitudeSquared.isFinite() && magnitudeSquared > 1e-12
+    }
+    fun movement(samples: List<GravitySample>): Double? {
+        val unit = samples.filter(::hasOrientation).map {
+            val norm = sqrt(orientationMagnitudeSquared(it))
+            doubleArrayOf(it.x / norm, it.y / norm, it.z / norm)
+        }
+        val orientation = unit.zipWithNext().map { (a, b) ->
+            sqrt(a.indices.sumOf { (a[it] - b[it]) * (a[it] - b[it]) })
+        }.takeIf { it.isNotEmpty() }?.average()
+        if (orientation != null) return orientation
+        return samples.mapNotNull { it.dynAccel }.filter { it.isFinite() && it in 0.0..8.0 }
+            .takeIf { it.isNotEmpty() }?.average()
     }
 }
 
@@ -20,7 +44,8 @@ object SleepOpportunityDetector {
     const val VERSION = "full-day-binary-shadow-1"
     const val MINIMUM_MAIN_SLEEP_SECONDS = 90 * 60L // Engineering grouping rule, independent of bedtime.
     data class Policy(val minimumSleepSeconds: Long = 15 * 60, val minimumFeatureBinCoverage: Double = 5.0 / 6,
-                      val maximumRelativeHr: Double = 0.9, val maximumMeanOrientationChange: Double = 0.03)
+                      val maximumRelativeHr: Double = 0.9, val maximumRelativeHrWithoutOrientation: Double = 0.85,
+                      val maximumMeanOrientationChange: Double = 0.03)
     data class Result(val epochs: List<StageSegment>, val episodes: List<DetectedSleep>, val referenceHr: Double?)
 
     /** Qualify complete groups before ranking so an ineligible nap cannot hide eligible main sleep. */
@@ -46,6 +71,7 @@ object SleepOpportunityDetector {
                policy: Policy = Policy()): Result {
         require(end > start && end - start <= 76 * 3600 && policy.minimumSleepSeconds in 300..14400)
         require(policy.minimumFeatureBinCoverage in 0.5..1.0 && policy.maximumRelativeHr in 0.5..0.99 &&
+            policy.maximumRelativeHrWithoutOrientation in 0.5..0.99 &&
             policy.maximumMeanOrientationChange in 0.001..0.2)
         val h = hr.filter { it.ts in start until end && SleepSignalValidity.heartRate(it) }.distinctBy { it.ts }.sortedBy { it.ts }
         val g = gravity.filter { it.ts in start until end && SleepSignalValidity.gravity(it) }.distinctBy { it.ts }.sortedBy { it.ts }
@@ -67,15 +93,15 @@ object SleepOpportunityDetector {
             val annotations=context.filter { it.start<t+30 && it.end>t }
             val offBody=annotations.any { it.kind=="off_body" }
             val awake=annotations.any { it.kind in listOf("awake","reading","phone_use") }
-            val unit=motion.map { val norm=sqrt(it.x*it.x+it.y*it.y+it.z*it.z); doubleArrayOf(it.x/norm,it.y/norm,it.z/norm) }
-            val movement=unit.zipWithNext().map { (a,b) -> sqrt(a.indices.sumOf { (a[it]-b[it])*(a[it]-b[it]) }) }
-                .takeIf { it.isNotEmpty() }?.average()
+            val movement=SleepSignalValidity.movement(motion)
+            val relativeHr=if (motion.count(SleepSignalValidity::hasOrientation) >= 2)
+                policy.maximumRelativeHr else policy.maximumRelativeHrWithoutOrientation
             val state=when {
                 offBody -> "off_body"
                 awake || t in moving -> "awake"
                 coverage<policy.minimumFeatureBinCoverage || movement==null -> "state_unknown"
                 movement>policy.maximumMeanOrientationChange -> "awake"
-                reference!=null && rows.map { it.bpm }.average()<=reference*policy.maximumRelativeHr -> "sleep_unstaged"
+                reference!=null && rows.map { it.bpm }.average()<=reference*relativeHr -> "sleep_unstaged"
                 else -> "state_unknown"
             }
             val reason=when(state) {

@@ -21,7 +21,7 @@ final class ServerScoreRepository: ObservableObject {
         var automaticPolling = true
 
         static let live = Dependencies(
-            ownerId: { CloudAuthClient.storedSession()?.userId },
+            ownerId: { CloudScoreIdentity.storedOwnerId() },
             clearSession: { CloudAuthClient.clearSession() },
             clearIfCurrent: { CloudAuthClient.clearSession(ifAccessToken: $0, ownerId: $1) },
             signIn: { _ = try await CloudAuthClient.signIn(email: $0, password: $1) },
@@ -32,7 +32,7 @@ final class ServerScoreRepository: ObservableObject {
     private let dependencies: Dependencies
     init(dependencies: Dependencies = .live) {
         self.dependencies = dependencies
-        signedIn = dependencies.ownerId() != nil
+        signedIn = dependencies.ownerId() != nil || CloudScoreIdentity.hasIngestToken
         session.activate(ownerId: dependencies.ownerId())
     }
 
@@ -46,7 +46,7 @@ final class ServerScoreRepository: ObservableObject {
     func wire(store: WhoopStore) {
         cacheStore = ServerScoreCacheStore(db: store.registryWriter)
         session.activate(ownerId: currentOwnerId)
-        signedIn = currentOwnerId != nil
+        signedIn = currentOwnerId != nil || CloudScoreIdentity.hasIngestToken
         preloadFromDisk()
     }
 
@@ -93,7 +93,8 @@ final class ServerScoreRepository: ObservableObject {
 
     func startPolling(todayKey: String) {
         pollingDay = todayKey
-        guard dependencies.ready(), signedIn, dependencies.automaticPolling else { return }
+        guard dependencies.ready(), dependencies.automaticPolling else { return }
+        guard signedIn || CloudScoreIdentity.hasIngestToken else { return }
         stopPolling()
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
@@ -146,7 +147,7 @@ final class ServerScoreRepository: ObservableObject {
     }
 
     func refreshVisibleDays(todayKey: String? = nil) async {
-        guard dependencies.ready(), signedIn else { return }
+        guard dependencies.ready(), signedIn || CloudScoreIdentity.hasIngestToken else { return }
         if let todayKey {
             visibleDays.insert(todayKey)
         }
@@ -156,26 +157,36 @@ final class ServerScoreRepository: ObservableObject {
 
     private func fetch(day: String) async {
         synchronizeOwner()
-        guard let owner = session.ownerId else { return }
+        let owner = session.ownerId ?? ""
         let generation = session.generation
         let request = session.beginRequest(day: day)
         do {
             let cache = try await dependencies.fetch(day, owner)
-            guard !Task.isCancelled, session.accept(cache, generation: generation, currentOwnerId: currentOwnerId, request: request) else { return }
+            CloudScoreIdentity.rememberOwner(cache.ownerId)
+            CloudScoreIdentity.markOverlayLive(CloudScoreIdentity.overlayIsLive(cache))
+            if session.ownerId == nil {
+                session.activate(ownerId: cache.ownerId)
+                signedIn = true
+                _ = session.accept(cache, generation: session.generation, currentOwnerId: cache.ownerId)
+            } else {
+                guard !Task.isCancelled,
+                      session.accept(cache, generation: generation, currentOwnerId: currentOwnerId, request: request)
+                else { return }
+            }
             try cacheStore?.upsert(cache)
             lastFetchedAt = cache.fetchedAt
             lastError = nil
         } catch ServerScoreClient.FetchError.unauthorized(let token) {
             guard !Task.isCancelled, session.isCurrentRequest(day: day, generation: generation, currentOwnerId: currentOwnerId, request: request),
                   dependencies.clearIfCurrent(token, owner) else { return }
-            signedIn = false
-            session.activate(ownerId: nil)
+            signedIn = CloudScoreIdentity.hasIngestToken
+            if !signedIn { session.activate(ownerId: nil) }
             lastError = "Session expired — sign in again"
         } catch {
             synchronizeOwner()
             guard !Task.isCancelled, session.isCurrentRequest(day: day, generation: generation, currentOwnerId: currentOwnerId, request: request) else { return }
             lastError = "Server scores unavailable"
-            if let cached = try? cacheStore?.load(ownerId: owner, day: day) {
+            if let ownerId = session.ownerId, let cached = try? cacheStore?.load(ownerId: ownerId, day: day) {
                 session.accept(cached, generation: generation, currentOwnerId: currentOwnerId, request: request)
             }
         }

@@ -824,6 +824,9 @@ public final class BLEManager: NSObject, ObservableObject {
     /// toggle only on the false↔true edge instead of on every input change. Cleared on disconnect — the
     /// strap forgets the toggle across a connection, and the post-bond branch re-arms from `wantsRealtime`.
     private var realtimeArmed = false
+    #if DEBUG
+    var realtimeToggleForTesting: ((Bool) -> Bool)?
+    #endif
     /// #80 marginal-radio fallback: tracks consecutive arm-then-quick-timeout cycles. When it trips,
     /// `standardHRFallback` goes true and the next connect skips arming R10/R11 (relies on 0x2A37).
     private var marginalRadio = MarginalRadioDetector()
@@ -1020,6 +1023,14 @@ public final class BLEManager: NSObject, ObservableObject {
     /// Multi-WHOOP Add-a-WHOOP wizard surface: straps seen while `isPresentingScan` is true, WITHOUT
     /// auto-connecting. Cleared at the start of each `scanForWhoops()`. Empty/unused on the default path.
     @Published public private(set) var discoveredWhoops: [(uuid: String, name: String, rssi: Int)] = []
+    let onboardingSetup = WhoopOnboardingSetup()
+    @Published private(set) var onboardingScanIssue: String?
+    private var onboardingDiscoveryRequested = false
+    private var onboardingTimer: Timer?
+    private var onboardingDeadline = Date.distantPast
+    private var onboardingEraseWritePending = false
+    private var onboardingVerification: EmptyHistoryVerification?
+    private var onboardingVerificationRequested = false
     /// Peripheral captured during `willRestoreState`; cleared in `didConnect`.
     /// Non-nil signals that `centralManagerDidUpdateState` should reconnect this
     /// specific peripheral rather than starting a fresh scan.
@@ -1832,6 +1843,10 @@ public final class BLEManager: NSObject, ObservableObject {
     }
 
     private func connectCore(model: WhoopModel) {
+        guard onboardingSetup.mayConnect else { return }
+        if onboardingSetup.required, let id = onboardingSetup.selectedID {
+            setPreferredPeripheral(id)
+        }
         intentionalDisconnect = false
         // Connection test mode: stamp when this connect attempt began so didConnect can report the connect
         // latency. A plain Date() assignment, no behaviour change; only read behind the .connection gate.
@@ -2139,6 +2154,8 @@ public final class BLEManager: NSObject, ObservableObject {
     /// string clears the pin rather than wedging the scan. Only `didDiscover` reads it; setting it
     /// does NOT start/stop/redirect an in-flight connection on its own.
     public func setPreferredPeripheral(_ uuidString: String?) {
+        if onboardingSetup.required, let selected = onboardingSetup.selectedID,
+           onboardingSetup.phase != .chooseDevice, uuidString != selected { return }
         let resolved = uuidString.flatMap { UUID(uuidString: $0) }   // nil for unparseable → clears the pin
         // A genuinely NEW pin starts the #52 refusal streak clean — the old streak belonged to the strap we
         // were pinned to before, not this one. Re-applying the SAME pin (the common no-op when the active
@@ -2248,6 +2265,7 @@ public final class BLEManager: NSObject, ObservableObject {
     /// says which path tried. Logged only on the transition into blocking, so a rotation timer cannot
     /// flood the log.
     private func whoopConnectAllowed(_ reason: String) -> Bool {
+        guard onboardingSetup.mayConnect else { return false }
         if whoopIsActiveDevice { return true }
         // The flag is a CACHE of a registry fact, and the registry is the authority. Re-validate before
         // refusing, so the gate can never latch: it is set from the coordinator's stop/start closures and
@@ -2322,10 +2340,167 @@ public final class BLEManager: NSObject, ObservableObject {
     /// End the Add-a-WHOOP present-scan: stop scanning and clear `isPresentingScan` so `didDiscover`
     /// returns to its normal auto-connect behaviour. Safe to call when not presenting (idempotent).
     public func stopWhoopScan() {
+        onboardingDiscoveryRequested = false
         guard isPresentingScan else { return }
         isPresentingScan = false
         central.stopScan()
         log("Add-a-WHOOP scan: stopped")
+    }
+
+    /// First-run discovery never calls connect(), even briefly: the user must pick
+    /// a strap and confirm its printed serial before the encrypted pairing starts.
+    @discardableResult
+    func scanForOnboarding(model: WhoopModel) -> Bool {
+        guard onboardingSetup.required, !onboardingSetup.busy else { return false }
+        disconnect()
+        selectedModel = model
+        UserDefaults.standard.set(model.rawValue, forKey: "selectedWhoopModel")
+        onboardingSetup.chooseAnotherDevice()
+        onboardingDiscoveryRequested = true
+        onboardingScanIssue = onboardingBluetoothIssue
+        guard central.state == .poweredOn else { return false }
+        scanForWhoops()
+        return true
+    }
+
+    private var onboardingBluetoothIssue: String? {
+        switch central.state {
+        case .poweredOn: return nil
+        case .poweredOff: return "Bluetooth is off. Turn it on to find your WHOOP."
+        case .unauthorized: return "Allow Bluetooth for NARA in Settings so it can find your WHOOP."
+        case .unsupported: return "Bluetooth Low Energy is unavailable on this device."
+        default: return "Waiting for Bluetooth to become available…"
+        }
+    }
+
+    func pairForOnboarding(id: String, name: String, serialConfirmed: Bool) {
+        guard onboardingSetup.select(id: id, name: name, serialConfirmed: serialConfirmed) else { return }
+        startOnboardingConnection()
+    }
+
+    func retryOnboarding(eraseAgain: Bool = false) {
+        onboardingSetup.retry(eraseAgain: eraseAgain)
+        guard onboardingSetup.phase == .pairing else { return }
+        startOnboardingConnection()
+    }
+
+    private func startOnboardingConnection() {
+        stopWhoopScan()
+        onboardingVerification = nil
+        onboardingVerificationRequested = false
+        onboardingEraseWritePending = false
+        onboardingDeadline = Date().addingTimeInterval(90)
+        onboardingTimer?.invalidate()
+        onboardingTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.advanceOnboardingConnection() }
+        }
+        connect(model: .persisted)
+    }
+
+    private func advanceOnboardingConnection() {
+        guard onboardingSetup.busy else { onboardingTimer?.invalidate(); return }
+        guard Date() < onboardingDeadline else {
+            failOnboarding("Setup timed out. Keep your WHOOP charged and close by. If it has not paired, tap the top repeatedly until the side light flashes blue, then retry and tap Pair on your phone.")
+            return
+        }
+        guard let p = peripheral, p.identifier.uuidString == onboardingSetup.selectedID,
+              p.state == .connected, state.connected, state.encryptedBond, didBond,
+              connectHandshakeDone, commandChannelReady,
+              confirmedCommandWritesOutstanding == 0 else { return }
+        let notificationsReady = selectedModel.deviceFamily == .whoop5
+            ? Self.whoop5NotifyChars.prefix(3).allSatisfy { uuid in
+                whoop5NotifyCharacteristics.contains { $0.uuid == uuid && $0.isNotifying }
+            }
+            : cmdNotifyConfirmedActive && dataNotifyCharacteristic?.isNotifying == true
+                && eventNotifyCharacteristic?.isNotifying == true
+        guard notificationsReady else { return }
+        if let action = onboardingSetup.secureLinkReady(peripheralID: p.identifier.uuidString,
+                                                       encrypted: state.encryptedBond) {
+            onboardingDeadline = Date().addingTimeInterval(45)
+            switch action {
+            case .erase:
+                // Documented FORCE_TRIM whole-history sentinel, docs/PROTOCOL.md §6.
+                // Deliberately absent from WhoopCommand and its generic command menu.
+                onboardingEraseWritePending = true
+                writeOnboardingCommand(25, payload: Array(repeating: 0xFE, count: 8), confirmed: true)
+            case .verify:
+                requestOnboardingVerification()
+            }
+        }
+        if onboardingSetup.phase == .verifying, !onboardingVerificationRequested {
+            requestOnboardingVerification()
+        }
+    }
+
+    private func requestOnboardingVerification() {
+        guard !onboardingVerificationRequested, onboardingSetup.phase == .verifying else { return }
+        onboardingVerification = EmptyHistoryVerification()
+        onboardingVerificationRequested = true
+        onboardingDeadline = Date().addingTimeInterval(45)
+        writeOnboardingCommand(22, payload: [0], confirmed: false)
+    }
+
+    private func writeOnboardingCommand(_ opcode: UInt8, payload: [UInt8], confirmed: Bool) {
+        guard onboardingSetup.permitsWrite(opcode: opcode, payload: payload),
+              let p = peripheral, p.identifier.uuidString == onboardingSetup.selectedID,
+              p.state == .connected, state.encryptedBond, let ch = cmdCharacteristic else {
+            failOnboarding("The paired connection was lost. Retry setup with your WHOOP nearby.")
+            return
+        }
+        seq &+= 1
+        let frame: [UInt8]
+        if selectedModel.deviceFamily == .whoop5 {
+            frame = puffinCommandFrame(cmd: opcode, seq: seq, payload: payload)
+        } else {
+            var harvard = frameFromPayload(payload, type: 35, seq: seq, cmd: opcode)
+            harvard[3] = crc8(Array(harvard[1...2]))
+            frame = harvard
+        }
+        p.writeValue(Data(frame), for: ch, type: confirmed ? .withResponse : .withoutResponse)
+    }
+
+    private func failOnboarding(_ message: String) {
+        onboardingSetup.fail(message)
+        onboardingTimer?.invalidate()
+        onboardingEraseWritePending = false
+        onboardingVerification = nil
+        onboardingVerificationRequested = false
+        // Cancelling the link also stops an unsuccessful verification offload. No
+        // history chunk is acknowledged after failure and no reconnect erases again.
+        disconnect()
+    }
+
+    /// Intercepts bytes before wire journals, raw exports, live parsing, or history
+    /// persistence. This also covers data arriving before a user has selected a strap.
+    private func consumeOnboardingValue(_ bytes: [UInt8], characteristic: CBCharacteristic,
+                                        peripheral: CBPeripheral) -> Bool {
+        guard !onboardingSetup.mayIngest(from: peripheral.identifier.uuidString) else { return false }
+        lastDataAt = Date()
+        let isProtocol = [Self.dataNotifyChar, Self.cmdNotifyChar, Self.eventNotifyChar]
+            .contains(characteristic.uuid) || Self.whoop5NotifyChars.contains(characteristic.uuid)
+        guard isProtocol else { return true }
+        guard onboardingSetup.phase == .verifying, onboardingVerificationRequested,
+              peripheral.identifier.uuidString == onboardingSetup.selectedID else { return true }
+        let outcomes = onboardingVerification?.receiveNotification(bytes,
+            characteristic: characteristic.uuid.uuidString, family: selectedModel.deviceFamily) ?? []
+        for outcome in outcomes {
+            switch outcome {
+            case .acknowledge(let payload):
+                writeOnboardingCommand(23, payload: payload, confirmed: false)
+            case .empty:
+                onboardingSetup.verifiedEmpty(peripheralID: peripheral.identifier.uuidString)
+                onboardingTimer?.invalidate()
+                onboardingVerification = nil
+                if onboardingSetup.phase == .ready {
+                    log("Onboarding: paired strap returned a verified empty history session")
+                    requestSync(.manual)
+                }
+            case .rejected:
+                failOnboarding("NARA could not confirm that storage is empty. No readings have been saved. Keep the WHOOP off your wrist, then tap Clear storage and retry.")
+            case .waiting: break
+            }
+        }
+        return true
     }
 
     /// Apply the raw-outbox retention policy (24h synced window / 50MB unsynced cap).
@@ -2714,7 +2889,7 @@ public final class BLEManager: NSObject, ObservableObject {
               selectedModel.deviceFamily == .whoop5 else { return }
         send(.setClock, payload: BLEManager.setClockPayload())
         send(.getClock, payload: [])
-        let wantRealtime = screenWantsRealtime || continuousCaptureWantsNow()
+        let wantRealtime = realtimeWantedNow
         wantsRealtime = wantRealtime
         send(.toggleRealtimeHR, payload: [wantRealtime ? 0x01 : 0x00])
         realtimeArmed = wantRealtime
@@ -4154,7 +4329,9 @@ public final class BLEManager: NSObject, ObservableObject {
         standardHRFallback = false
         state.standardHRMode = nil
         enableLiveNotifications(reason: "start realtime")
-        send(.sendR10R11Realtime, payload: [0x01])   // the heavy burst rides alongside the toggle on Live
+        if state.worn {
+            send(.sendR10R11Realtime, payload: [0x01])
+        }
         reconcileRealtime()                          // arms TOGGLE_REALTIME_HR(1) on the off→on edge
         realtimeArmedAt = Date()       // start the arm→drop stopwatch for the marginal-radio detector
     }
@@ -4179,6 +4356,25 @@ public final class BLEManager: NSObject, ObservableObject {
     public func setKeepRealtimeForData(_ keep: Bool) {
         keepRealtimeForData = keep
         reconcileRealtime()
+    }
+
+    /// Release the app-requested stream when firmware reports wrist-off. Preserve the user's
+    /// intent so wrist-on can resume it. This controls telemetry, not the firmware's optical power.
+    public func wristStateDidChange() {
+        log("Wear: \(state.worn ? "on wrist" : "off wrist"); reconciling realtime request")
+        guard !backfilling else { return } // the keep-alive reconciles after history finishes
+        if selectedModel.deviceFamily == .whoop4 {
+            if !state.worn {
+                send(.sendR10R11Realtime, payload: [0x00])
+            } else if screenWantsRealtime && !standardHRFallback {
+                send(.sendR10R11Realtime, payload: [0x01])
+            }
+        }
+        reconcileRealtime()
+    }
+
+    private var realtimeWantedNow: Bool {
+        state.worn && (screenWantsRealtime || continuousCaptureWantsNow())
     }
 
     /// #477 (Settings): battery-% at/below which the offload cadence stretches while discharging (0 = off).
@@ -4281,12 +4477,19 @@ public final class BLEManager: NSObject, ObservableObject {
     /// framing); otherwise the want is remembered and the post-bond branch arms it. Mirrors the Android
     /// `reconcileRealtime`.
     private func reconcileRealtime() {
-        let want = screenWantsRealtime || continuousCaptureWantsNow()
+        let want = realtimeWantedNow
         wantsRealtime = want   // keep-alive + post-bond arm-on-connect read this derived value
         guard want != realtimeArmed else { return }                      // no edge — nothing to send
         guard selectedModel.deviceFamily == .whoop4 || state.bonded else { return }   // can't reach the strap yet
-        realtimeArmed = want
-        send(.toggleRealtimeHR, payload: [want ? 0x01 : 0x00])
+        #if DEBUG
+        if let writer = realtimeToggleForTesting {
+            if writer(want) { realtimeArmed = want }
+            return
+        }
+        #endif
+        if send(.toggleRealtimeHR, payload: [want ? 0x01 : 0x00]) {
+            realtimeArmed = want
+        }
     }
 
     /// EXPERIMENTAL R22 telemetry (#174): give the user (and us) live proof of what the strap is doing.
@@ -5543,7 +5746,7 @@ public final class BLEManager: NSObject, ObservableObject {
         // the false→true edge. Ticks with no transition cost one predicate evaluation. This runs BEFORE
         // the WHOOP4-only guard below so a 5/MG stream also disarms/re-arms on the window edges (send()
         // routes the 5/MG toggle and drops the WHOOP4-framed R10/R11 stop for it).
-        let captureWantNow = screenWantsRealtime || continuousCaptureWantsNow()
+        let captureWantNow = realtimeWantedNow
         if wantsRealtime != captureWantNow, keepRealtimeForData, !screenWantsRealtime {
             if captureWantNow {
                 log("Continuous HRV: overnight window opened; arming the realtime stream (#927)")
@@ -6500,6 +6703,10 @@ extension BLEManager: @preconcurrency CBCentralManagerDelegate {
         }
         // Bootstrap the async store once on first poweredOn (idempotent if already set).
         Task { @MainActor in await bootstrapStore() }
+        if onboardingDiscoveryRequested, onboardingSetup.phase == .chooseDevice {
+            scanForWhoops()
+            return
+        }
         if let p = restoredPeripheral {
             log("poweredOn with restored peripheral — reconnecting \(p.identifier)")
             if p.state != .connected {
@@ -6587,6 +6794,9 @@ extension BLEManager: @preconcurrency CBCentralManagerDelegate {
             }
             return
         }
+        // A discovery callback already queued before stopScan must not connect
+        // after the setup screen has returned to device selection.
+        guard onboardingSetup.mayConnect else { return }
         // Multi-WHOOP preferred-peripheral filter: when the app has pinned a specific strap, ignore any
         // OTHER discovered WHOOP and keep scanning. When `preferredPeripheralUUID == nil` (the single-
         // WHOOP default) this guard is skipped and the original "connect to the first discovered" path
@@ -6606,6 +6816,11 @@ extension BLEManager: @preconcurrency CBCentralManagerDelegate {
     }
 
     public func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
+        if onboardingSetup.required,
+           (!onboardingSetup.mayConnect || onboardingSetup.selectedID != peripheral.identifier.uuidString) {
+            central.cancelPeripheralConnection(peripheral)
+            return
+        }
         cancelScanFallback()
         cancelPendingConnectProbe()   // #730: the connect resolved; no pending-connect log needed
         failedConnectAttempts = 0   // a successful connect clears the reconnect backoff (#414)
@@ -7114,10 +7329,22 @@ extension BLEManager: @preconcurrency CBCentralManagerDelegate {
     /// notifications are re-routed without user interaction.
     public func centralManager(_ central: CBCentralManager,
                                willRestoreState dict: [String: Any]) {
+        if onboardingSetup.required, onboardingSetup.phase != .ready {
+            // A restored peripheral is not fresh evidence that the user approved
+            // pairing. Resume only through the setup screen's explicit retry.
+            for p in dict[CBCentralManagerRestoredStatePeripheralsKey] as? [CBPeripheral] ?? [] {
+                central.cancelPeripheralConnection(p)
+            }
+            return
+        }
         launchedViaStateRestoration = true
         guard let peripherals = dict[CBCentralManagerRestoredStatePeripheralsKey] as? [CBPeripheral],
               let p = peripherals.first else {
             log("Restore: no peripherals in state dict")
+            return
+        }
+        if onboardingSetup.required, onboardingSetup.selectedID != p.identifier.uuidString {
+            central.cancelPeripheralConnection(p)
             return
         }
         self.peripheral = p
@@ -7548,7 +7775,7 @@ extension BLEManager: @preconcurrency CBPeripheralDelegate {
             // #927: RE-DERIVE the want at arm time, never the precomputed `wantsRealtime`: that value can
             // be up to a keep-alive tick (30 s) stale, and a reconnect just OUTSIDE the overnight window
             // would re-arm the flood from it and stay armed until the next tick.
-            let realtimeWantNow = screenWantsRealtime || continuousCaptureWantsNow()
+            let realtimeWantNow = realtimeWantedNow
             wantsRealtime = realtimeWantNow
             if realtimeWantNow && !whoop5RealtimeArmed {
                 whoop5RealtimeArmed = true
@@ -7673,7 +7900,7 @@ extension BLEManager: @preconcurrency CBPeripheralDelegate {
         // #927: RE-DERIVE the want at arm time (same reasoning as the 5/MG branch above): a reconnect
         // outside the overnight window must not arm the flood from a stale precomputed `wantsRealtime`
         // (up to a keep-alive tick stale); the keep-alive would then hold it armed for another 30 s.
-        let realtimeWantNow = screenWantsRealtime || continuousCaptureWantsNow()
+        let realtimeWantNow = realtimeWantedNow
         wantsRealtime = realtimeWantNow
         if realtimeWantNow {
             if standardHRFallback {
@@ -7886,6 +8113,8 @@ extension BLEManager: @preconcurrency CBPeripheralDelegate {
         }
         guard let data = characteristic.value else { return }
         let bytes = [UInt8](data)
+        guard peripheral.identifier == self.peripheral?.identifier else { return }
+        if consumeOnboardingValue(bytes, characteristic: characteristic, peripheral: peripheral) { return }
         // Level A is authoritative: persist the exact notification value before routing,
         // reassembly, packet classification, or any semantic decoder can touch it.
         guard captureSensorWireEvidence(bytes, characteristic: characteristic) else { return }
@@ -8172,6 +8401,15 @@ extension BLEManager: @preconcurrency CBPeripheralDelegate {
     public func peripheral(_ peripheral: CBPeripheral,
                            didUpdateNotificationStateFor characteristic: CBCharacteristic,
                            error: Error?) {
+        guard peripheral.identifier == self.peripheral?.identifier else { return }
+        if onboardingSetup.phase == .resetting || onboardingSetup.phase == .verifying {
+            let historyChannel = [Self.cmdNotifyChar, Self.eventNotifyChar, Self.dataNotifyChar]
+                .contains(characteristic.uuid) || Self.whoop5NotifyChars.prefix(3).contains(characteristic.uuid)
+            if historyChannel, error != nil || !characteristic.isNotifying {
+                failOnboarding("The history connection was interrupted. Keep your WHOOP nearby and retry the storage check.")
+                return
+            }
+        }
         if let error = error {
             log("Notify enable failed for \(characteristic.uuid): \(error.localizedDescription)")
         } else {

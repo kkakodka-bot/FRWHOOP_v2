@@ -412,6 +412,12 @@ fun TodayScreen(
     val displayMetric = remember(today, historicalMetric, selectedDayOffset) {
         if (selectedDayOffset == 0) today ?: historicalMetric else historicalMetric
     }
+    val overlayCharge = com.noop.push.ServerVitalSelection.resolve(
+        com.noop.push.ServerVitalSelection.Metric.CHARGE, serverEnabled, selectedDayKey, serverOverlay,
+        displayMetric?.recovery).value
+    val overlayStrain = com.noop.push.ServerVitalSelection.resolve(
+        com.noop.push.ServerVitalSelection.Metric.STRAIN, serverEnabled, selectedDayKey, serverOverlay,
+        displayMetric?.strain).value
     val dayCycleMode = NoopPrefs.dayCycleMode(LocalContext.current)
     // Steps alone use the physiological sleep-onset cycle. Every other field stays on the dashboard's
     // existing logical-day row; past-day navigation continues to show the persisted historical cycle row.
@@ -878,7 +884,14 @@ fun TodayScreen(
     // merges imported + computed sleep_performance (imported-wins), so an importer sees the export's
     // figure and a Bluetooth-only user sees the on-device composite. Null until loaded / no night yet.
     var restScoreForDay by remember { mutableStateOf<Double?>(null) }
-    LaunchedEffect(days, selectedDayKey, selectedDayOffset) {
+    LaunchedEffect(days, selectedDayKey, selectedDayOffset, serverOverlay, serverEnabled) {
+        val overlayEfficiency = com.noop.push.ServerVitalSelection.resolve(
+            com.noop.push.ServerVitalSelection.Metric.SLEEP, serverEnabled, selectedDayKey, serverOverlay, null)
+        if (overlayEfficiency.fromServer) {
+            val efficiency = serverOverlay?.daily?.sleepEfficiency
+            restScoreForDay = efficiency?.let { if (it <= 1.5) it * 100 else it }
+            return@LaunchedEffect
+        }
         val byDay = runCatching {
             viewModel.repo.resolvedSeries("sleep_performance", "my-whoop", "0000-00-00", "9999-99-99",
                 strapDeviceId = viewModel.activeStrapId)
@@ -949,8 +962,10 @@ fun TodayScreen(
     // fabricated number. Any past day → null (the gauge uses the stored strain). Keyed on the same inputs
     // as the day-scoped loads so it reloads as the selector moves and as a sync/import grows the HR window.
     var liveTodayStrain by remember { mutableStateOf<Double?>(null) }
-    LaunchedEffect(days, selectedDayKey, selectedDayOffset, activeDayCycle, dayCycleMode) {
-        liveTodayStrain = if (selectedDayOffset == 0) {
+    LaunchedEffect(days, selectedDayKey, selectedDayOffset, activeDayCycle, dayCycleMode, serverOverlay, serverEnabled) {
+        liveTodayStrain = if (com.noop.push.ServerScoringSettings.skipsSyncCoupledRescore(context)) {
+            overlayStrain
+        } else if (selectedDayOffset == 0) {
             val zone = ZoneId.systemDefault()
             val now = System.currentTimeMillis() / 1000
             val start = activeDayCycleStart(
@@ -986,7 +1001,7 @@ fun TodayScreen(
     // and 0.5 in the other two. The ring resolves the same way from the same rule (see ScoreHeroRow).
     val effortForDay = StrainScorer.effectiveEffort(
         live = if (selectedDayOffset == 0) liveTodayStrain else null,
-        stored = displayMetric?.strain,
+        stored = overlayStrain,
     )
 
     // Recovery cold-start: recovery is null until the HRV baseline crosses the seed gate
@@ -1100,7 +1115,7 @@ fun TodayScreen(
     val scoreState: ScoreState = remember(displayMetric, recoveryCalibration, lastScoredRecoveryDay, selectedDayOffset, carryOverTodayKey) {
         if (selectedDayOffset == 0) {
             scoreStateForToday(
-                todayRecovery = displayMetric?.recovery,
+                todayRecovery = overlayCharge,
                 calibratingNights = recoveryCalibration,
                 carriedDay = lastScoredRecoveryDay,
                 today = carryOverTodayKey,
@@ -1510,7 +1525,10 @@ fun TodayScreen(
                                     .staggeredAppear(stagger),
                             ) {
                                 ScoreHeroRow(
-                                    day = displayMetric,
+                                    day = displayMetric?.copy(
+                                        recovery = overlayCharge,
+                                        strain = overlayStrain ?: displayMetric.strain,
+                                    ) ?: displayMetric,
                                     restScore = restScoreForDay,
                                     recoveryCalibration = recoveryCalibration,
                                     lastScoredCharge = lastScoredCharge,
@@ -3871,27 +3889,25 @@ private fun dashboardCardValue(
             withUnit(dashboardServerVital(card, serverEnabled, selectedDayKey, serverOverlay,
                 day?.respRateBpm ?: respDay?.respRateBpm)?.value?.let { String.format(Locale.getDefault(), "%.1f", it) } ?: NO_DATA)
         DashboardCard.BLOOD_OXYGEN ->
-            // PER-FIELD carry: the whole-row carries (vd) land on rows whose spo2Pct is null (the engine
-            // writes spo2Pct = null on computed rows), so fall through to the last row that HAS one.
-            // #103/queue-11a: when no calibrated spo2Pct exists, fall back to the spo2_candidate strap
-            // estimate (WHOOP @82 or Oura ceiling@100, from metricSeries) when the experimental display
-            // toggle is ON. Labelled "estimate" in the Health vitals screen; here it just fills the card
-            // so it's not blank.
-            (vd?.spo2Pct ?: spo2Day?.spo2Pct)?.let { String.format(Locale.getDefault(), "%.0f%%", it) }
+            com.noop.push.ServerVitalSelection.resolve(
+                com.noop.push.ServerVitalSelection.Metric.SPO2, serverEnabled, selectedDayKey, serverOverlay,
+                vd?.spo2Pct ?: spo2Day?.spo2Pct).value?.let { String.format(Locale.getDefault(), "%.0f%%", it) }
                 ?: (vd?.day ?: day?.day)?.let { spo2CandidateByDay[it] }?.let { String.format(Locale.getDefault(), "%.0f%%", it) }
                 ?: NO_DATA
             DashboardCard.SKIN_TEMP -> {
-                // #1844: LEAD WITH THE ABSOLUTE when the night measured one, the rule the Health tile has
-                // used since #1665 — a deviation with no anchor cannot be read ("+0.9" is a fever or a warm
-                // bedroom). Both numbers come off the SAME row so the scale shown is that night's own.
-                // #622 still applies to the fallback: a deviation keeps its Δ unit so "−0.1 °C" is never
-                // read as a wrist temperature.
-                // Same resolver as the Key Metrics tile, so the two can never disagree — the claim the iOS
-                // twin already made in a comment and that now actually holds on both platforms. It also puts
-                // today's own reading FIRST: `vd` is `carriedDay ?: day`, so a live carry hid a temperature
-                // measured today, which `todaysOwnReadingWinsOverEitherCarry` has asserted all along.
-                resolveSkinTempReading(day, carriedDay, skinTempDay, skinTempPreferred)
-                    ?.let { com.noop.analytics.SkinTempDisplay.formatReading(it, fahrenheit = fahrenheit) }
+                val selection = com.noop.push.ServerVitalSelection.resolve(
+                    com.noop.push.ServerVitalSelection.Metric.SKIN_TEMP, serverEnabled, selectedDayKey,
+                    serverOverlay, null)
+                val reading = if (selection.fromServer) {
+                    com.noop.analytics.SkinTempDisplay.leadReading(
+                        absC = serverOverlay?.daily?.skinTempC,
+                        devC = serverOverlay?.daily?.skinTempDevC,
+                        prefer = skinTempPreferred,
+                    )
+                } else {
+                    resolveSkinTempReading(day, carriedDay, skinTempDay, skinTempPreferred)
+                }
+                reading?.let { com.noop.analytics.SkinTempDisplay.formatReading(it, fahrenheit = fahrenheit) }
                     ?: NO_DATA
             }
         DashboardCard.SLEEP -> dashboardServerVital(card, serverEnabled, selectedDayKey, serverOverlay, vd?.totalSleepMin)?.value

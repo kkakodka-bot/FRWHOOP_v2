@@ -8,21 +8,25 @@ final class ServerScoringRescoreSkipTests: XCTestCase {
     private var savedServerScoring: Any?
     private var savedOwed: Any?
     private var savedToken: Any?
+    private var savedOverlayLive: Bool = false
 
     override func setUp() {
         super.setUp()
         savedServerScoring = UserDefaults.standard.object(forKey: ServerScoringSettings.defaultsKey)
         savedOwed = UserDefaults.standard.object(forKey: RescoreBackgroundScheduler.owedKey)
         savedToken = UserDefaults.standard.object(forKey: RescoreBackgroundScheduler.owedTokenKey)
+        savedOverlayLive = CloudScoreIdentity.overlayLive
         UserDefaults.standard.removeObject(forKey: ServerScoringSettings.defaultsKey)
         UserDefaults.standard.removeObject(forKey: RescoreBackgroundScheduler.owedKey)
         UserDefaults.standard.removeObject(forKey: RescoreBackgroundScheduler.owedTokenKey)
+        CloudScoreIdentity.markOverlayLive(false)
     }
 
     override func tearDown() {
         restore(savedServerScoring, ServerScoringSettings.defaultsKey)
         restore(savedOwed, RescoreBackgroundScheduler.owedKey)
         restore(savedToken, RescoreBackgroundScheduler.owedTokenKey)
+        CloudScoreIdentity.markOverlayLive(savedOverlayLive)
         super.tearDown()
     }
 
@@ -35,9 +39,13 @@ final class ServerScoringRescoreSkipTests: XCTestCase {
         XCTAssertTrue(ServerScoringSettings.isEnabled)
     }
 
-    func testSkipsSyncCoupledRescoreWhenFlagOn() {
+    func testSkipsSyncCoupledRescoreWhenFlagOnRequiresLiveOverlay() {
         ServerScoringSettings.setEnabled(true)
+        CloudScoreIdentity.markOverlayLive(false)
+        XCTAssertFalse(ServerScoringSettings.skipsSyncCoupledRescore)
+        CloudScoreIdentity.markOverlayLive(true)
         XCTAssertTrue(ServerScoringSettings.skipsSyncCoupledRescore)
+        CloudScoreIdentity.markOverlayLive(false)
     }
 
     func testRunsSyncCoupledRescoreWhenFlagOff() {
@@ -50,7 +58,11 @@ final class ServerScoringRescoreSkipTests: XCTestCase {
         _ = RescoreBackgroundScheduler.markRescoreOwed()
         XCTAssertTrue(RescoreBackgroundScheduler.isRescoreOwed)
         ServerScoringSettings.settleSkippedLocalRescoreDebt()
-        XCTAssertFalse(RescoreBackgroundScheduler.isRescoreOwed)
+        if CloudScoreIdentity.overlayLive {
+            XCTAssertFalse(RescoreBackgroundScheduler.isRescoreOwed)
+        } else {
+            XCTAssertTrue(RescoreBackgroundScheduler.isRescoreOwed)
+        }
     }
 
     func testSettleSkippedLocalRescoreDebtNoOpWhenFlagOff() {

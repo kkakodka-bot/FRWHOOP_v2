@@ -35,6 +35,10 @@ final class SleepOpportunityDetectorTests: XCTestCase {
         XCTAssertTrue(SleepOpportunityDetector.detect(start: day,end: day+86400,hr: low,gravity: gap).episodes.isEmpty)
         let burst = Array(repeating: GravitySample(ts: nap,x: 0,y: 0,z: 1),count: 100)
         XCTAssertTrue(SleepOpportunityDetector.detect(start: day,end: day+86400,hr: low,gravity: burst).episodes.isEmpty)
+        let dynStill = stride(from: day,to: day+86400,by: 5).map { GravitySample(ts: $0,x: 0,y: 0,z: 0,dynAccel: 0) }
+        let dynOut = SleepOpportunityDetector.detect(start: day,end: day+86400,hr: low,gravity: dynStill)
+        XCTAssertEqual(dynOut.episodes.map(\.start), [nap])
+        XCTAssertEqual(dynOut.episodes.map(\.end), [nap+1200])
     }
     func testEngineKeepsNapSeparateAndCausalModeCannotRunRetrospectiveDetector() {
         let ranges = [(day+3600)..<(day+5*3600),nap..<(nap+1200)]

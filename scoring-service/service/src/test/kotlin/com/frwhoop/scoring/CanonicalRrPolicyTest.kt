@@ -50,4 +50,14 @@ class CanonicalRrPolicyTest {
                 CanonicalRrPolicy.select(rows, DeviceFamily.valueOf(case.getString("family"))))
         }
     }
+
+    @Test fun hostedUntaggedMillisecondTrainIsScoredWhenNoWhoop5TransportExists() {
+        val zero = RrInterval(deviceId = "device", ts = 100, rrMs = 800, seq = 0, ord = 0, srcChannel = 0)
+        val unlabeled = RrInterval(deviceId = "device", ts = 101, rrMs = 810, seq = 0, ord = 0, srcChannel = null)
+        assertEquals(listOf(zero, unlabeled), CanonicalRrPolicy.select(listOf(zero, unlabeled), DeviceFamily.WHOOP5))
+        val realtime = unlabeled.copy(ts = 102, rrMs = 820, srcChannel = 6)
+        assertEquals(emptyList<RrInterval>(), CanonicalRrPolicy.select(listOf(zero, unlabeled, realtime), DeviceFamily.WHOOP5))
+        val historical = zero.copy(ts = 103, rrMs = 830, srcChannel = 5)
+        assertEquals(listOf(historical), CanonicalRrPolicy.select(listOf(zero, unlabeled, historical), DeviceFamily.WHOOP5))
+    }
 }

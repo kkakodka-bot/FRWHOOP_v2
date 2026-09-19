@@ -32,6 +32,7 @@ import { createS3 } from '../_shared/s3.ts';
 import { pushConfig, defaultReceiverStateId } from '../_shared/config.ts';
 import { IdentityError, resolvePushUser, createIngestTokenStore } from '../_shared/tokens.ts';
 import { createDeviceRegistrar } from '../_shared/devices.ts';
+import { enqueueScoringAfterIngest } from '../_shared/scoringEnqueue.ts';
 
 const MAX_BODY_BYTES = 4 * 1024 * 1024 + 64 * 1024;
 
@@ -178,6 +179,11 @@ async function handleObjectComplete(req: Request, objectId: string): Promise<Res
       return json({ type: 'error', protocolVersion: '1.2', code: 'object_lane_unavailable' }, 503);
     }
     const ack = await pushObjects.completeObject({ userId: user.id, objectId });
+    void enqueueScoringAfterIngest({
+      rest,
+      userId: user.id,
+      deviceId: ack?.deviceId,
+    }).catch((err) => console.error('[push] scoring enqueue failed:', err?.stack || err));
     return json({ type: 'objectAck', protocolVersion: '1.2', ...ack });
   } catch (err: any) {
     if (err instanceof Response) return err;
@@ -206,6 +212,11 @@ async function handleInlineBatch(req: Request): Promise<Response> {
       return json({ type: 'error', protocolVersion: '1.1', code: 'decoded_body_too_large' }, 413);
     }
     const ack = await pushIngest.acceptBatch({ userId: user.id, decodedBody: body });
+    void enqueueScoringAfterIngest({
+      rest,
+      userId: user.id,
+      deviceId: ack?.deviceId,
+    }).catch((err) => console.error('[push] scoring enqueue failed:', err?.stack || err));
     return json(ack);
   } catch (err: any) {
     if (err instanceof Response) return err;

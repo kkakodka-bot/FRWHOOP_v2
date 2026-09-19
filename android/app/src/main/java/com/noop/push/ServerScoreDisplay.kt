@@ -17,4 +17,19 @@ object ServerScoreDisplay {
         if (!ServerScoringSettings.isEnabled(context) || overlay?.day != day) return null
         return overlay?.daily?.sleepTotalMin
     }
+
+    fun recovery(context: Context, day: String, overlay: ServerScoreDayCache?): Double? {
+        if (!ServerScoringSettings.isEnabled(context) || overlay?.day != day) return null
+        return overlay?.daily?.recovery
+    }
+
+    fun strain(context: Context, day: String, overlay: ServerScoreDayCache?): Double? {
+        if (!ServerScoringSettings.isEnabled(context) || overlay?.day != day) return null
+        return overlay?.daily?.strain
+    }
+
+    fun spo2(context: Context, day: String, overlay: ServerScoreDayCache?): Double? {
+        if (!ServerScoringSettings.isEnabled(context) || overlay?.day != day) return null
+        return overlay?.daily?.spo2Pct
+    }
 }

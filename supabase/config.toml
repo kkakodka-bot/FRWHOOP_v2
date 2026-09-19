@@ -61,3 +61,7 @@ verify_jwt = false
 
 [functions.ingest-verify]
 verify_jwt = false
+
+# Score readback uses the same bearer as push (JWT or opaque noop_ ingest token).
+[functions.scores]
+verify_jwt = false

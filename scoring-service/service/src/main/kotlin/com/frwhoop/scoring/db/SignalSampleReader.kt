@@ -42,6 +42,7 @@ class SignalSampleReader(private val db: PostgresClient) : ScoreInputProvider {
         val hrvObservations: List<com.noop.analytics.PhysiologyQuality.IntervalObservation>? = null,
         val hrvHistory: List<com.noop.analytics.HrvWindow.Result> = emptyList(),
         val calendarOwnership: CalendarOwnershipReader.Ownership? = null,
+        val skinTemp: List<com.noop.data.SkinTempSample> = emptyList(),
     )
 
     override fun loadDay(userId: UUID, day: String, deviceId: UUID): DayInputs? =
@@ -101,6 +102,8 @@ class SignalSampleReader(private val db: PostgresClient) : ScoreInputProvider {
                     .filter { inContext(it.first) } else emptyList(),
                 hrvHistory = if (available) loadHrvHistory(conn,userId,deviceId,dayLo,nightLo) else emptyList(),
                 calendarOwnership = ownership,
+                skinTemp = if (available) loadSkinTemp(conn, userId, deviceIdText, nightLo, nightHi)
+                    .filter { inContext(it.ts) } else emptyList(),
             )
         }
 
@@ -355,7 +358,7 @@ class SignalSampleReader(private val db: PostgresClient) : ScoreInputProvider {
         toTs: Long,
     ): List<GravitySample> = conn.prepareStatement(
         """
-        select ts, x, y, z
+        select ts, x, y, z, "dynAccel"
         from public.noop_gravity_samples
         where user_id = ? and device_id::text = ? and ts between ? and ?
         order by ts asc
@@ -375,6 +378,42 @@ class SignalSampleReader(private val db: PostgresClient) : ScoreInputProvider {
                             x = rs.getDouble("x"),
                             y = rs.getDouble("y"),
                             z = rs.getDouble("z"),
+                            dynAccel = (rs.getObject("dynAccel") as? Number)?.toDouble(),
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    private fun loadSkinTemp(
+        conn: Connection,
+        userId: UUID,
+        deviceId: String,
+        fromTs: Long,
+        toTs: Long,
+    ): List<com.noop.data.SkinTempSample> = conn.prepareStatement(
+        """
+        select ts, raw, "aux1Raw", "aux2Raw"
+        from public.noop_skin_temp_samples
+        where user_id = ? and device_id::text = ? and ts between ? and ?
+        order by ts asc
+        """.trimIndent(),
+    ).use { ps ->
+        ps.setObject(1, userId)
+        ps.setString(2, deviceId)
+        ps.setLong(3, fromTs)
+        ps.setLong(4, toTs)
+        ps.executeQuery().use { rs ->
+            buildList {
+                while (rs.next()) {
+                    add(
+                        com.noop.data.SkinTempSample(
+                            deviceId = deviceId,
+                            ts = rs.getLong("ts"),
+                            raw = rs.getInt("raw"),
+                            aux1Raw = (rs.getObject("aux1Raw") as? Number)?.toInt(),
+                            aux2Raw = (rs.getObject("aux2Raw") as? Number)?.toInt(),
                         ),
                     )
                 }

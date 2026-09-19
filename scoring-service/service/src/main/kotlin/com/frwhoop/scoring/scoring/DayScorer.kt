@@ -11,8 +11,9 @@ import com.noop.protocol.DeviceFamily
 import com.frwhoop.scoring.signals.PhysiologyShadowRunner
 
 /**
- * Runs the scoped server kernel (HRV/RR + sleep) via the extracted Kotlin twin.
- * Charge/Effort/Rest outputs are computed internally but discarded at ingest write time.
+ * Runs the scoped server kernel (HRV/RR + sleep + Charge/Effort) via the extracted Kotlin twin.
+ * Charge and Effort are published on the physiology-2 daily payload so phones can read them
+ * from the hosted overlay rather than rescoring locally.
  */
 class DayScorer(private val physiology: PhysiologyShadowRunner = PhysiologyShadowRunner()) {
     fun score(inputs: SignalSampleReader.DayInputs, algorithmVersion: String, inputRevision: String = "unversioned",
@@ -26,6 +27,7 @@ class DayScorer(private val physiology: PhysiologyShadowRunner = PhysiologyShado
             rr=inputs.rr.filter { it.ts<=cutoff },
             resp=inputs.resp.filter { it.ts<=cutoff },
             gravity=inputs.gravity.filter { it.ts<=cutoff && com.noop.analytics.SleepSignalValidity.gravity(it) },
+            skinTemp=inputs.skinTemp.filter { it.ts<=cutoff },
             steps=inputs.steps.filter { it.ts<=cutoff }, events=inputs.events.filter { it.ts<=cutoff },
             bandSleepState=inputs.bandSleepState.filter { it.first<=cutoff },
             hrvObservations=inputs.hrvObservations?.filter { row ->
@@ -89,6 +91,7 @@ class DayScorer(private val physiology: PhysiologyShadowRunner = PhysiologyShado
             profile = inputs.profile,
             tzOffsetSeconds = inputs.tzOffsetSeconds,
             wristOff = wristOff,
+            skinTemp = inputs.skinTemp,
             skinTempFamily = inputs.deviceFamily,
             useSleepStagerV2 = true,
             useMotionAwareWake = inputs.deviceFamily != DeviceFamily.WHOOP4,

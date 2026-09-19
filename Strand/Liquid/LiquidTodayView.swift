@@ -245,6 +245,13 @@ struct LiquidTodayView: View {
     /// vitals carry, else the freshest prior row with either. Both numbers come off the SAME row, so an
     /// absolute is never paired with another night's deviation. Twin of `TodayView.skinTempLeadReading`.
     private var skinTempLeadReading: SkinTempDisplay.Reading? {
+        let selection = ServerVitalSelection.resolve(.skinTemp, serverEnabled: serverScoringEnabled,
+                                                     selectedDay: selectedDayKey, overlay: serverOverlay, localValue: nil)
+        if selection.fromServer {
+            return SkinTempDisplay.leadReading(absC: serverOverlay?.daily?.skinTempC,
+                                               devC: serverOverlay?.daily?.skinTempDevC,
+                                               prefer: SkinTempDisplay.Kind(rawValue: skinTempDisplayRaw) ?? .absolute)
+        }
         let row = [displayDay, vitalsDay, cachedSkinTempReadingDay]
             .compactMap { $0 }
             .first { $0.skinTempC != nil || $0.skinTempDevC != nil }
@@ -993,7 +1000,7 @@ struct LiquidTodayView: View {
             // candidate fallback and experimental gating included — so the card and the tile cannot
             // disagree about the same day's number. The tile's key/route handling is deliberately NOT
             // copied; see below for why the two are not interchangeable.
-            let spo2Real = displayDay?.spo2Pct ?? vitalsDay?.spo2Pct ?? spo2Day?.spo2Pct
+            let spo2Real = serverVital(.spo2, local: displayDay?.spo2Pct ?? vitalsDay?.spo2Pct ?? spo2Day?.spo2Pct)
             let spo2CandidateOn = PuffinExperiment.spo2CandidateDisplayEnabled
             let spo2Candidate = spo2Real == nil && spo2CandidateOn
                 ? spo2CandidateByDay[cachedDisplayDay?.day ?? selectedDayKey]
@@ -1390,7 +1397,7 @@ struct LiquidTodayView: View {
             // device-conditional "spo2_candidate" mean (WHOOP: `spo2_candidate_82`; Oura: ceiling@100
             // `0x6F`, see `AnalyticsEngine.nightlySpo2CeilingMean`) only when `spo2Pct` is nil AND the
             // toggle is ON — same gating as the classic tile, never as the default.
-            let spo2Real = displayDay?.spo2Pct ?? vitalsDay?.spo2Pct ?? spo2Day?.spo2Pct
+            let spo2Real = serverVital(.spo2, local: displayDay?.spo2Pct ?? vitalsDay?.spo2Pct ?? spo2Day?.spo2Pct)
             let spo2CandidateOn = PuffinExperiment.spo2CandidateDisplayEnabled
             let spo2CandidateValue = spo2Real == nil && spo2CandidateOn
                 ? spo2CandidateByDay[cachedDisplayDay?.day ?? selectedDayKey]
@@ -1646,7 +1653,8 @@ struct LiquidTodayView: View {
             isCalibrating: calNights != nil
         )
         cachedChargeDisplay = ChargeDisplay.resolve(
-            todayRecovery: day?.recovery,
+            todayRecovery: ServerVitalSelection.resolve(.charge, serverEnabled: serverScoringEnabled,
+                selectedDay: tkey, overlay: serverOverlay, localValue: day?.recovery).value,
             priorScored: priorScored,
             calibrationNights: calNights,
             todayKey: tkey)
@@ -1670,7 +1678,10 @@ struct LiquidTodayView: View {
         // `StrainScorer.minReadings` the scorer returns nil and the read-outs fall back to the stored row
         // — never a fabricated value. A navigated past day clears it.
         let liveStrainLocal: Double?
-        if selectedDayOffset == 0 {
+        if ServerScoringSettings.skipsSyncCoupledRescore {
+            liveStrainLocal = ServerVitalSelection.resolve(.strain, serverEnabled: true,
+                selectedDay: selectedDayKey, overlay: serverOverlay, localValue: day?.strain).value
+        } else if selectedDayOffset == 0 {
             // An EXPLICIT limit, not the 8000 default: that default is chart-sized, and this read is
             // whole-window. `hrSamples` is `ORDER BY ts ASC LIMIT`, so truncation drops the NEWEST rows —
             // at the ~18k HR rows a real day banks, the default covered roughly the first ten hours and the
@@ -1718,10 +1729,18 @@ struct LiquidTodayView: View {
         // gravity ⇒ no sleep_performance point ever written) used to pin Rest to the weeks-old series tail
         // forever while Charge advanced; freshness-gate the tail-fallback so a stale tail falls through to
         // the Rest hero's No-Data/calibrating state (same empty treatment Effort uses) instead of freezing.
-        restScore = TodayView.freshRestScore(
+        let localRest = TodayView.freshRestScore(
             todayValue: restByDay[selectedDayKey], lastDay: restSeries.last?.day,
             lastValue: restSeries.last?.value, isTodaySelected: selectedDayOffset == 0,
             todayKey: selectedDayKey)
+        if serverScoringEnabled,
+           let overlay = serverOverlay, overlay.day == selectedDayKey,
+           let status = overlay.features["sleep"]?.status, status == "available" || status == "stale",
+           let efficiency = overlay.daily?.sleepEfficiency {
+            restScore = efficiency <= 1.5 ? efficiency * 100 : efficiency
+        } else {
+            restScore = localRest
+        }
         // StressModel loops the full history to build its baseline — run it OFF the main actor so a big
         // history doesn't stutter the UI. Snapshot the inputs (value types) into the detached task.
         let storedStress = await stressA

@@ -10,8 +10,12 @@ enum ServerScoringSettings {
     /// During an active offload, flush push at most once per this interval (spec: ≤10 s).
     static let syncPushIntervalSeconds: TimeInterval = 10
 
-    /// When true, sync/offload must not run a local `analyzeRecent`; VPS scores HRV/sleep.
-    static var skipsSyncCoupledRescore: Bool { isEnabled }
+    /// When true, sync/offload must not run a local `analyzeRecent`; the hosted scorer owns HRV/sleep/Charge.
+    /// Skip local work only after a live overlay has actually arrived. Otherwise Today stays blank
+    /// on every phone while the queue is still catching up.
+    static var skipsSyncCoupledRescore: Bool {
+        isEnabled && CloudScoreIdentity.overlayLive
+    }
 
     /// Clear any in-flight deferred rescore debt when server scoring owns the score path.
     @MainActor

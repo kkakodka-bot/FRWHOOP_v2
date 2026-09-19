@@ -10,13 +10,22 @@ object ServerScoringSettings {
     const val AUTH_EMAIL_KEY = "noop.serverScoring.authEmail"
     const val POLL_INTERVAL_SECONDS = 60L
     const val ALGORITHM_VERSION = "frwhoop-physiology-2"
+    const val OVERLAY_LIVE_KEY = "noop.serverScoring.overlayLive"
     /** Foreground idle push cadence when server scoring is on (spec: 30–60 s). */
     const val IDLE_PUSH_INTERVAL_MS = 45_000L
     /** During an active offload, flush push at most once per this interval (spec: ≤10 s). */
     const val SYNC_PUSH_INTERVAL_MS = 10_000L
 
-    fun skipsSyncCoupledRescore(context: Context): Boolean = isEnabled(context)
-    fun skipsSyncCoupledRescore(prefs: SharedPreferences): Boolean = isEnabled(prefs)
+    fun skipsSyncCoupledRescore(context: Context): Boolean = skipsSyncCoupledRescore(prefs(context))
+    fun skipsSyncCoupledRescore(prefs: SharedPreferences): Boolean =
+        isEnabled(prefs) && overlayLive(prefs)
+
+    fun overlayLive(prefs: SharedPreferences): Boolean = prefs.getBoolean(OVERLAY_LIVE_KEY, false)
+    fun markOverlayLive(prefs: SharedPreferences, live: Boolean) {
+        prefs.edit().putBoolean(OVERLAY_LIVE_KEY, live).apply()
+    }
+    fun overlayIsLive(cache: ServerScoreDayCache): Boolean =
+        cache.daily != null && cache.features.values.any { it.status == "available" || it.status == "stale" }
 
     fun prefs(context: Context): SharedPreferences =
         context.getSharedPreferences("noop_server_scoring", Context.MODE_PRIVATE)

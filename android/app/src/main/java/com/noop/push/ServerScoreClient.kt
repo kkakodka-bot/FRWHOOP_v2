@@ -86,7 +86,9 @@ object ServerScoreClient {
             sleepDeepMin = d.num("sleep_deep_min"), sleepRemMin = d.num("sleep_rem_min"),
             sleepEfficiency = d.num("sleep_efficiency"), respRateBpm = d.num("resp_rate_bpm"), computedAt = d.str("computed_at"),
             sleepUnstagedMin = d.num("sleep_unstaged_min"), stateUnknownMin = d.num("state_unknown_min"),
-            offBodyMin = d.num("off_body_min"), opportunityKind = d.str("opportunity_kind")) }
+            offBodyMin = d.num("off_body_min"), opportunityKind = d.str("opportunity_kind"),
+            recovery = d.num("recovery"), strain = d.num("strain"), spo2Pct = d.num("spo2_pct"),
+            skinTempC = d.num("skin_temp_c"), skinTempDevC = d.num("skin_temp_dev_c")) }
         val nights = (o.optJSONArray("nights") ?: JSONArray()).objects().map { n ->
             val device = n.str("device_id")
             require(features["sleep"]?.deviceId == null || device == features["sleep"]?.deviceId) { "night device scope mismatch" }

@@ -105,7 +105,8 @@ class RawSignalCatalogueIntegrationTest {
             assertEquals("client_claimed", string("select sha256_source from object_manifests where id='$objectId'"))
             assertEquals(0L, number("select count(*) from object_manifests where id='$objectId' and " +
                 "(verified_at is not null or decode_verified_at is not null or decoder_version is not null)"))
-            assertEquals(revision + 1, number("select input_revision from physiology_work_items where user_id='$user' and day='2026-08-01'"))
+            assertEquals(revision, number("select input_revision from physiology_work_items where user_id='$user' and day='2026-08-01'"))
+            assertEquals(0L, number("select count(*) from physiology_work_items where user_id='$user' and day='2026-08-01' and done_at is not null"))
             sql("update object_manifests set $column=$restored where id='$objectId'")
         }
     }

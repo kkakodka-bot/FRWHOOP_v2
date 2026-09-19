@@ -16,6 +16,11 @@ data class ServerScoreDailyCache(
     val stateUnknownMin: Double? = null,
     val offBodyMin: Double? = null,
     val opportunityKind: String? = null,
+    val recovery: Double? = null,
+    val strain: Double? = null,
+    val spo2Pct: Double? = null,
+    val skinTempC: Double? = null,
+    val skinTempDevC: Double? = null,
 )
 
 data class ServerScoreNightCache(

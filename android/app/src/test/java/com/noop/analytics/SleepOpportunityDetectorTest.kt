@@ -37,6 +37,9 @@ class SleepOpportunityDetectorTest {
         assertTrue(SleepOpportunityDetector.detect(day,day+86400,low,gap).episodes.isEmpty())
         val burst=List(100) { GravitySample("device",nap,0.0,0.0,1.0) }
         assertTrue(SleepOpportunityDetector.detect(day,day+86400,low,burst).episodes.isEmpty())
+        val dynStill=(day until day+86400 step 5).map { GravitySample("device",it,0.0,0.0,0.0, dynAccel=0.0) }
+        val dynOut=SleepOpportunityDetector.detect(day,day+86400,low,dynStill)
+        assertEquals(listOf(nap to nap+1200),dynOut.episodes.map { it.start to it.end })
     }
     @Test fun enginePublishesTheAfternoonNapSeparatelyAndCausalModeNeverUsesRetrospectiveDetector() {
         val ranges=listOf(day+3600 until day+5*3600,nap until nap+1200)

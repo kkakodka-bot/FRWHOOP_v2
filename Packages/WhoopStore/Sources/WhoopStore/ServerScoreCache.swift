@@ -42,6 +42,11 @@ public struct ServerScoreDailyCache: Equatable, Codable {
     public var stateUnknownMin: Double?
     public var offBodyMin: Double?
     public var opportunityKind: String?
+    public var recovery: Double?
+    public var strain: Double?
+    public var spo2Pct: Double?
+    public var skinTempC: Double?
+    public var skinTempDevC: Double?
     public let hrvRmssdMs: Double?
     public let restingHrBpm: Int?
     public let sleepTotalMin: Double?
@@ -233,6 +238,11 @@ public enum ServerScoreCacheCodec {
             daily?.stateUnknownMin = number(d["state_unknown_min"])
             daily?.offBodyMin = number(d["off_body_min"])
             daily?.opportunityKind = d["opportunity_kind"] as? String
+            daily?.recovery = number(d["recovery"])
+            daily?.strain = number(d["strain"])
+            daily?.spo2Pct = number(d["spo2_pct"])
+            daily?.skinTempC = number(d["skin_temp_c"])
+            daily?.skinTempDevC = number(d["skin_temp_dev_c"])
         }
         var nights: [ServerScoreNightCache] = []
         for n in (o["nights"] as? [[String: Any]]) ?? [] {

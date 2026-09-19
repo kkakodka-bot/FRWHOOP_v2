@@ -6,8 +6,28 @@ enum SleepSignalValidity {
     static func heartRate(_ sample: HRSample) -> Bool { (25...240).contains(sample.bpm) }
     static func gravity(_ sample: GravitySample) -> Bool {
         let magnitudeSquared = sample.x*sample.x + sample.y*sample.y + sample.z*sample.z
+        let vectorOk = sample.x.isFinite && sample.y.isFinite && sample.z.isFinite
+            && magnitudeSquared.isFinite && magnitudeSquared > 1e-12
+        let dynOk = sample.dynAccel.map { $0.isFinite && (0.0...8.0).contains($0) } ?? false
+        // WHOOP 5 live projections often bank a 1 Hz zero vector plus the strap's own dynAccel.
+        return vectorOk || dynOk
+    }
+    static func hasOrientation(_ sample: GravitySample) -> Bool {
+        let magnitudeSquared = sample.x*sample.x + sample.y*sample.y + sample.z*sample.z
         return sample.x.isFinite && sample.y.isFinite && sample.z.isFinite
             && magnitudeSquared.isFinite && magnitudeSquared > 1e-12
+    }
+    static func movement(_ samples: [GravitySample]) -> Double? {
+        let unit = samples.filter(hasOrientation).map { row -> [Double] in
+            let norm = sqrt(row.x*row.x+row.y*row.y+row.z*row.z)
+            return [row.x/norm, row.y/norm, row.z/norm]
+        }
+        let changes = zip(unit, unit.dropFirst()).map { a, b in
+            sqrt(a.indices.reduce(0.0) { $0 + (a[$1]-b[$1])*(a[$1]-b[$1]) })
+        }
+        if !changes.isEmpty { return changes.reduce(0, +) / Double(changes.count) }
+        let dyn = samples.compactMap(\.dynAccel).filter { $0.isFinite && (0.0...8.0).contains($0) }
+        return dyn.isEmpty ? nil : dyn.reduce(0, +) / Double(dyn.count)
     }
 }
 
@@ -19,6 +39,7 @@ public enum SleepOpportunityDetector {
         public var minimumSleepSeconds = 15 * 60
         public var minimumFeatureBinCoverage = 5.0 / 6
         public var maximumRelativeHr = 0.9
+        public var maximumRelativeHrWithoutOrientation = 0.85
         public var maximumMeanOrientationChange = 0.03
         public init() {}
     }
@@ -54,6 +75,7 @@ public enum SleepOpportunityDetector {
                               policy: Policy = Policy()) -> Result {
         precondition(end > start && end-start <= 76*3600 && (300...14400).contains(policy.minimumSleepSeconds))
         precondition((0.5...1).contains(policy.minimumFeatureBinCoverage) && (0.5...0.99).contains(policy.maximumRelativeHr)
+            && (0.5...0.99).contains(policy.maximumRelativeHrWithoutOrientation)
             && (0.001...0.2).contains(policy.maximumMeanOrientationChange))
         func floorBin(_ value: Int, _ width: Int) -> Int { Int(floor(Double(value)/Double(width))) }
         var seenHr = Set<Int>(), seenGravity = Set<Int>()
@@ -82,21 +104,16 @@ public enum SleepOpportunityDetector {
             let annotations = context.filter { $0.start < t+30 && $0.end > t }
             let offBody = annotations.contains { $0.kind == "off_body" }
             let awake = annotations.contains { ["awake","reading","phone_use"].contains($0.kind) }
-            let unit = motion.map { row -> [Double] in
-                let norm = sqrt(row.x*row.x+row.y*row.y+row.z*row.z)
-                return [row.x/norm,row.y/norm,row.z/norm]
-            }
-            let changes = zip(unit,unit.dropFirst()).map { a,b -> Double in
-                sqrt(a.indices.reduce(0.0) { $0+(a[$1]-b[$1])*(a[$1]-b[$1]) })
-            }
-            let movement = changes.isEmpty ? nil : changes.reduce(0,+)/Double(changes.count)
+            let movement = SleepSignalValidity.movement(motion)
+            let relativeHr = motion.filter(SleepSignalValidity.hasOrientation).count >= 2
+                ? policy.maximumRelativeHr : policy.maximumRelativeHrWithoutOrientation
             let state: String
             if offBody { state = "off_body" }
             else if awake || moving.contains(t) { state = "awake" }
             else if coverage < policy.minimumFeatureBinCoverage || movement == nil { state = "state_unknown" }
             else if movement! > policy.maximumMeanOrientationChange { state = "awake" }
             else if let reference, !rows.isEmpty,
-                    rows.reduce(0.0, { $0+Double($1.bpm) })/Double(rows.count) <= reference*policy.maximumRelativeHr { state = "sleep_unstaged" }
+                    rows.reduce(0.0, { $0+Double($1.bpm) })/Double(rows.count) <= reference*relativeHr { state = "sleep_unstaged" }
             else { state = "state_unknown" }
             let reason: String
             switch state {

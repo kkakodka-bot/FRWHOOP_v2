@@ -12,16 +12,20 @@ class ServerScoringRescoreSkipTest {
     @Before
     fun setUp() {
         ServerScoringSettings.setEnabled(context, false)
+        ServerScoringSettings.markOverlayLive(context, false)
     }
 
     @After
     fun tearDown() {
         ServerScoringSettings.setEnabled(context, false)
+        ServerScoringSettings.markOverlayLive(context, false)
     }
 
     @Test
-    fun skipsSyncCoupledRescoreWhenFlagOn() {
+    fun skipsSyncCoupledRescoreWhenFlagOnAndOverlayLive() {
         ServerScoringSettings.setEnabled(context, true)
+        assertFalse(ServerScoringSettings.skipsSyncCoupledRescore(context))
+        ServerScoringSettings.markOverlayLive(context, true)
         assertTrue(ServerScoringSettings.skipsSyncCoupledRescore(context))
     }
 
