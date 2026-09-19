@@ -1,7 +1,8 @@
 package com.noop.push
 
 import android.content.Context
-import androidx.test.core.app.ApplicationProvider
+import org.robolectric.RuntimeEnvironment
+import org.robolectric.annotation.Config
 import org.junit.After
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -11,8 +12,9 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 
 @RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34], application = android.app.Application::class)
 class ServerScoringRescoreSkipTest {
-    private val context: Context = ApplicationProvider.getApplicationContext()
+    private val context: Context = RuntimeEnvironment.getApplication()
 
     @Before
     fun setUp() {
@@ -25,9 +27,9 @@ class ServerScoringRescoreSkipTest {
     }
 
     @Test
-    fun skipsSyncCoupledRescoreWhenFlagOn() {
+    fun unactivatedToggleDoesNotDisableLocalProducer() {
         ServerScoringSettings.setEnabled(context, true)
-        assertTrue(ServerScoringSettings.skipsSyncCoupledRescore(context))
+        assertFalse(ServerScoringSettings.skipsSyncCoupledRescore(context))
     }
 
     @Test

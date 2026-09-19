@@ -7,6 +7,13 @@ SECRETS="${ROOT}/infra/vps/secrets.env"
 DROPLET_ENV="${ROOT}/infra/vps/droplet.env"
 SSH_KEY="${ROOT}/infra/vps/keys/frwhoop_deploy"
 
+: "${SYNC_ACCEPTANCE_EVIDENCE:?NOT_READY: captured deployment/canary/device evidence is required}"
+node "${ROOT}/infra/vps/scripts/verify-sync-evidence.mjs" "$SYNC_ACCEPTANCE_EVIDENCE"
+[[ "${ALLOW_RESTORE_DRILL:-}" == yes ]] || {
+  echo "NOT_READY: this script includes a restore drill; explicit ALLOW_RESTORE_DRILL=yes is required" >&2
+  exit 3
+}
+
 source "$DROPLET_ENV"
 source "$SECRETS"
 
@@ -64,4 +71,4 @@ ssh -i "$SSH_KEY" "deploy@${DROPLET_IP}" "ss -tlnp | grep -E ':(22|80|443|5432|8
 ssh -i "$SSH_KEY" "deploy@${DROPLET_IP}" \
   "! ss -tlnp | grep -E '0\\.0\\.0\\.0:(5432|8000|3000)|\\[::\\]:(5432|8000|3000)' || (echo 'FAIL: internal service bound publicly' >&2; exit 1)"
 
-echo "All acceptance checks finished."
+echo "Phase 1 checks passed for supplied evidence and executed checks."

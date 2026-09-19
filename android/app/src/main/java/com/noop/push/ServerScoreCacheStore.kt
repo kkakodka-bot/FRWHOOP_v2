@@ -6,7 +6,8 @@ import org.json.JSONObject
 
 /** SharedPreferences-backed last-known server score cache (twin of GRDB serverScoreCache). */
 class ServerScoreCacheStore(context: Context) {
-    private val prefs = context.getSharedPreferences("noop_server_score_cache", Context.MODE_PRIVATE)
+    private val prefs = com.noop.account.AccountStorageContext.capture(context)
+        .getSharedPreferences("noop_server_score_cache", Context.MODE_PRIVATE)
 
     fun upsert(cache: ServerScoreDayCache) {
         val json = JSONObject()

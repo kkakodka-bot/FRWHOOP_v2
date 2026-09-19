@@ -2,6 +2,7 @@ import Foundation
 import CoreBluetooth
 import WhoopProtocol
 import WhoopStore
+import NoopPush
 import StrandAnalytics
 // #78/#747 hole-4: the one-shot bond-loop salvage probe listens for the app-foreground notification,
 // which lives in UIKit on iOS and AppKit on macOS (see installForegroundSalvageProbe).
@@ -638,6 +639,7 @@ public final class BLEManager: NSObject, ObservableObject {
         let sessionID: UUID?
         let submittedAt: ContinuousClock.Instant
         let commitID: UUID?
+        var ackInterval: SyncPipelineTrace.Interval?
     }
     private var confirmedCommandWriteQueue: [ConfirmedCommandWrite] = []
     private var historyCommandWriterForTesting: ((WhoopCommand, [UInt8]) -> Bool)?
@@ -913,6 +915,17 @@ public final class BLEManager: NSObject, ObservableObject {
     /// so the alarm re-arm doesn't fire GET_ALARM_TIME before the strap's reply channel is actually live.
     /// Reset on disconnect alongside `connectHandshakeDone`.
     private var cmdNotifyConfirmedActive = false
+    private var confirmedNotifyUUIDs = Set<CBUUID>()
+    private var pendingReadyTrigger: BackfillTrigger?
+    private var readinessTimeout: DispatchWorkItem?
+    private var readinessGeneration = UUID()
+    private var historyTransportReady: Bool {
+        if historyCommandWriterForTesting != nil { return true }
+        let required = selectedModel.deviceFamily == .whoop5
+            ? Self.whoop5NotifyChars : [Self.cmdNotifyChar, Self.eventNotifyChar, Self.dataNotifyChar]
+        return !accountShutdown && connectHandshakeDone && cmdCharacteristic != nil
+            && required.allSatisfy { confirmedNotifyUUIDs.contains($0) }
+    }
     /// #34: latches once `state.connectSettled` has been bumped for the CURRENT connection, so a
     /// didUpdateNotificationStateFor re-fire (or any other later call into the check) can't double-bump.
     /// Reset on disconnect.
@@ -960,7 +973,28 @@ public final class BLEManager: NSObject, ObservableObject {
     /// hardware start/stop lifecycle, and the continuous local store — deliberately separate from
     /// bounded `startSensorCapture` and `noopRawCaptureEnabled` (frame retention), so neither can
     /// silently keep this producer running after the user turns it off.
-    let imuRecorder = ImuContinuousRecorder()
+    let imuRecorder: ImuContinuousRecorder
+    let imuSessionStore: ImuSessionFileStore
+    let imuContinuousStore: ImuSessionFileStore
+    private let imuPushBootstrap: ImuPushSourceBootstrap
+    /// Read-only, set-once account mux. Nil means not ready, never an empty successful lane.
+    /// Await prepareImuPushSource before binding any writer.
+    var imuPushSource: (any ImuSessionPushSource)? { imuPushBootstrap.source }
+    private static let captureBootstrapFailure = "Capture storage or IMU upload index is unavailable. Local data is retained; bootstrap must retry."
+    private(set) lazy var rawDataSessionStore: RawDataSessionStore = {
+        guard let storageDirectory else { return .shared }
+        return RawDataSessionStore(directory: storageDirectory.appendingPathComponent("RawDataSessions"),
+                                   imuStore: imuSessionStore)
+    }()
+    let databasePath: String?
+    let storageDirectory: URL?
+    let accountScope: AccountScope?
+    private let defaults: UserDefaults
+    private(set) var accountShutdown = false
+    /// Root retains a retired runtime until this succeeds. A false result leaves exact pending
+    /// work in the old collector; retry via drainCaptureAfterAccountChange(), never a new store.
+    private(set) var accountChangeDrainTask: Task<Bool, Never>?
+    private(set) var ingestStore: WhoopStore?
     /// Admits the raw-data command family to the 5/MG send() allowlist for the duration of the
     /// recorder's OWN start/stop sends (and the unexpected-producer fail-safe's). Held only around
     /// those sends; never left on — a default install can never form these bytes.
@@ -1325,7 +1359,7 @@ public final class BLEManager: NSObject, ObservableObject {
     /// The strap family the user chose to pair. Drives which service we scan for
     /// and which service we discover after connecting. Hydrated from the persisted
     /// pick so restoration/reconnect after a relaunch target the right strap.
-    private var selectedModel: WhoopModel = .persisted
+    private var selectedModel: WhoopModel = .whoop4
     private var lastStandardHRLogAt: Date?
 
     /// True when the selected/connected strap is a WHOOP 5/MG. Read-only window onto the private
@@ -1400,9 +1434,32 @@ public final class BLEManager: NSObject, ObservableObject {
         return ref.device + (wallNow - ref.wall)
     }
 
-    public init(state: LiveState, deviceId: String = "my-whoop", startCentral: Bool = true) {
+    public init(state: LiveState, deviceId: String = "my-whoop", startCentral: Bool = true,
+                databasePath: String? = nil, storageDirectory: URL? = nil,
+                accountScope: AccountScope? = nil, defaults: UserDefaults = .standard) {
         self.state = state
         self.deviceId = deviceId
+        self.databasePath = databasePath ?? (try? StorePaths.defaultDatabasePath())
+        self.storageDirectory = storageDirectory
+        self.accountScope = accountScope
+        self.defaults = defaults
+        self.selectedModel = defaults.string(forKey: "selectedWhoopModel").flatMap(WhoopModel.init(rawValue:)) ?? .whoop4
+        let capturedScope = DurableIngestScope(environment: accountScope?.projectURL,
+                                               accountID: accountScope?.userID, deviceID: deviceId)
+        self.imuSessionStore = storageDirectory.map {
+            ImuSessionFileStore(directory: $0.appendingPathComponent("RawImuSessions"), defaults: defaults,
+                                captureScope: capturedScope)
+        } ?? .shared
+        let continuousStore = storageDirectory.map {
+            ImuSessionFileStore(directory: $0.appendingPathComponent("RawImuContinuous"),
+                                defaultsKey: "imu-continuous-windows-v1", defaults: defaults,
+                                captureScope: capturedScope)
+        } ?? .continuous
+        self.imuContinuousStore = continuousStore
+        self.imuRecorder = ImuContinuousRecorder(store: continuousStore, defaults: defaults,
+                                                tickInterval: startCentral ? 2 : nil)
+        self.imuPushBootstrap = ImuPushSourceBootstrap(scope: accountScope, directory: storageDirectory,
+            sessionStore: self.imuSessionStore, continuousStore: continuousStore)
         self.router = FrameRouter(state: state)
         // WhoopStore.init is now async, so it can't run here.
         // bootstrapStore() is called once the CBCentralManager reaches poweredOn
@@ -1425,7 +1482,7 @@ public final class BLEManager: NSObject, ObservableObject {
         // CoreBluetooth relaunch the app into the background and deliver willRestoreState after
         // a suspend-then-jettison. Without it, willRestoreState is never called.
         central = CBCentralManager(delegate: self, queue: .main,
-                                   options: [CBCentralManagerOptionRestoreIdentifierKey: BLEManager.restoreID])
+                                   options: [CBCentralManagerOptionRestoreIdentifierKey: scopedRestoreID])
         #else
         // Strand (macOS desktop): no state-restoration identifier (iOS background feature).
         central = CBCentralManager(delegate: self, queue: .main)
@@ -1461,7 +1518,7 @@ public final class BLEManager: NSObject, ObservableObject {
         let rows = (try? registry.all()) ?? []
         let activeId = (try? registry.activeDeviceId()) ?? nil
         let activeAddr = rows.first(where: { $0.id == activeId })?.peripheralId
-        let d = UserDefaults.standard
+        let d = defaults
         guard let seed = LastSyncAttribution.resolve(
             perDevice: LastSyncAttribution.prefKey(peripheralId: activeAddr)
                 .flatMap { d.object(forKey: $0) as? Double },
@@ -1476,30 +1533,111 @@ public final class BLEManager: NSObject, ObservableObject {
 
     private let storeBootstrap = BackfillStoreBootstrap()
 
+    private var scopedRestoreID: String {
+        guard let storageDirectory else { return Self.restoreID }
+        return Self.restoreID + "." + (accountScope?.namespace ?? AccountScope.digest(storageDirectory.path))
+    }
+
+    /// Synchronous session fence; the already-running transaction keeps its old store alive.
+    public func shutdownForAccountChange() {
+        guard !accountShutdown else { return }
+        accountShutdown = true
+        collector?.shutdownForAccountChange()
+        imuPushBootstrap.shutdownForAccountChange()
+        readinessTimeout?.cancel()
+        readinessGeneration = UUID()
+        pendingReadyTrigger = nil
+        uploadTimer?.cancel()
+        backfillTimer?.cancel()
+        invalidateBackfillDelivery()
+        intentionalDisconnect = true
+        cancelScanFallback()
+        cancelPendingConnectProbe()
+        if let foregroundSalvageObserver {
+            NotificationCenter.default.removeObserver(foregroundSalvageObserver)
+            self.foregroundSalvageObserver = nil
+        }
+        router.onSyncTrigger = nil
+        router.onStrapSerial = nil
+        imuRecorder.shutdownForAccountChange()
+        central?.stopScan()
+        if let peripheral { central?.cancelPeripheralConnection(peripheral) }
+        peripheral?.delegate = nil
+        central?.delegate = nil
+        state.connected = false
+        state.bonded = false
+        state.encryptedBond = false
+        let retiringCollector = collector
+        let retiringActor = backfillActor
+        let sessionStore = imuSessionStore, continuousStore = imuContinuousStore
+        accountChangeDrainTask = Task {
+            await retiringActor?.drainAfterInvalidation()
+            let collected = await retiringCollector?.drainForShutdown() ?? true
+            let files = await Task.detached(priority: .utility) {
+                let sessions = sessionStore.flushPendingForShutdown()
+                let continuous = continuousStore.flushPendingForShutdown()
+                return sessions && continuous
+            }.value
+            return collected && files
+        }
+    }
+
+    @discardableResult
+    func drainCaptureAfterAccountChange() async -> Bool {
+        guard accountShutdown else { return false }
+        _ = await accountChangeDrainTask?.value
+        let collected = await collector?.drainForShutdown() ?? true
+        let sessionStore = imuSessionStore, continuousStore = imuContinuousStore
+        let files = await Task.detached(priority: .utility) {
+            let sessions = sessionStore.flushPendingForShutdown()
+            let continuous = continuousStore.flushPendingForShutdown()
+            return sessions && continuous
+        }.value
+        return collected && files
+    }
+
     func bootstrapStore() async {
+        guard !accountShutdown else { return }
         await storeBootstrap.run { [self] in await performBootstrapStore() }
     }
 
+    /// Both BLE's writer and Repository's writer must bind this same source. Construction opens
+    /// the captured membership index off-main; failure propagates without a replacement source.
+    func prepareImuPushSource() async throws -> any ImuSessionPushSource {
+        guard !accountShutdown else { throw ImuPushSourceBootstrap.Failure.retired }
+        let source = try await imuPushBootstrap.prepare()
+        guard !accountShutdown else { throw ImuPushSourceBootstrap.Failure.retired }
+        return source
+    }
+
     private func performBootstrapStore() async {
-        guard collector == nil else { return }
+        guard !accountShutdown, collector == nil else { return }
         // Surface store-open failures instead of swallowing them with `try?` (#222): a silent failure
         // here left `backfiller` nil forever and the only visible symptom was the downstream
         // "store not ready" tick, with no clue why. On iOS a background reconnect that opens the
         // data-protected store while the device is locked throws SQLITE_IOERR/CANTOPEN — logging the
         // code proves it; the periodic tick (see beginBackfill) re-attempts so it self-heals on unlock.
-        let path: String
-        do {
-            path = try StorePaths.defaultDatabasePath()
-        } catch {
-            log("Backfill: bootstrap FAILED resolving DB path — \(error)")
-            return
-        }
+        guard let path = databasePath else { return }
         let store: WhoopStore
         do {
             store = try await WhoopStore(path: path)
+            if let accountScope {
+                try await store.bindAccountOwner(projectURL: accountScope.projectURL, userID: accountScope.userID)
+                let imuSource = try await prepareImuPushSource()
+                guard !accountShutdown else { return }
+                try CloudPushCaptureBindings.bind(db: store.registryWriter, scope: accountScope,
+                    sourceID: CloudPushSettings.sourceId(scope: accountScope), imuSource: imuSource)
+            }
+            var quarantinePage: String?
+            repeat {
+                guard !accountShutdown else { return }
+                quarantinePage = try await store.enqueuePendingQuarantineArchives(afterID: quarantinePage)
+            } while quarantinePage != nil
         } catch {
+            guard !accountShutdown else { return }
             let ns = error as NSError
             log("Backfill: bootstrap FAILED opening store — \(ns.domain) code=\(ns.code): \(ns.localizedDescription)")
+            state.lastSyncError = Self.captureBootstrapFailure
             return
         }
         // Route deviceId through the device registry: use the active device's id (migration v15 seeds
@@ -1508,6 +1646,9 @@ public final class BLEManager: NSObject, ObservableObject {
         // crash and no behaviour change. registryWriter is nonisolated/Sendable (the Pool manages
         // its own concurrency).
         let registry = DeviceRegistryStore(dbQueue: store.registryWriter)
+        guard !accountShutdown else { return }
+        if state.lastSyncError == Self.captureBootstrapFailure { state.lastSyncError = nil }
+        self.ingestStore = store
         self.registryStore = registry
         seedLastSyncFromActiveStrap(registry: registry)
         if let activeId = try? registry.activeDeviceId(), !activeId.isEmpty {
@@ -1535,6 +1676,7 @@ public final class BLEManager: NSObject, ObservableObject {
         // the `deviceRowForTest` helper), so this is dormant, but still wrong data on disk.
         let registeredName = (try? registry.all())?.first(where: { $0.id == deviceId })?.displayName
         try? await store.upsertDevice(id: deviceId, mac: nil, name: registeredName)
+        guard !accountShutdown else { return }
         // Raw capture defaults OFF (upstream NOOP). Set "enableRawCapture" to true to opt in.
         let enableRawCapture = UserDefaults.standard.noopRawCaptureEnabled
         // Research push: the live-banked hook below needs a DatabaseWriter, and `store` is local to
@@ -1544,15 +1686,24 @@ public final class BLEManager: NSObject, ObservableObject {
                               enableRawCapture: enableRawCapture,
                               log: { [weak self] line in self?.log(line) },
                               onBanked: { [weak self] c in
+                                  guard let self, !self.accountShutdown else { return }
                                   // Live path: hr/rr are all the realtime decoder yields.
-                                  self?.liveHr += c.hr; self?.liveRr += c.rr
+                                  self.liveHr += c.hr; self.liveRr += c.rr
                                   // Research push: migrate live rows to B2 on a cadence, not only
                                   // after full offload. Covers hrSample, skinTempSample, gravitySample,
                                   // and the binary lane (ppgWaveformSample, v18AuxSample, rawImuSession).
                                   let pushInterval = CloudPushPeriodicScheduler.effectiveInterval(
                                       serverScoringEnabled: ServerScoringSettings.isEnabled)
+                                  guard self.accountScope != nil else { return }
                                   CloudPushPeriodicScheduler.pushIfDue(
                                       db: pushWriter, interval: pushInterval, reason: "live")
+                              }, imuStore: imuSessionStore,
+                              captureScope: DurableIngestScope(environment: accountScope?.projectURL,
+                                  accountID: accountScope?.userID, deviceID: deviceId),
+                              onDurabilityFailure: { [weak self] in
+                                  guard let self, !self.accountShutdown else { return }
+                                  self.state.lastSyncError = "Capture storage failed. Buffered data is retained for retry."
+                                  self.disconnect()
                               })
         // The store can finish bootstrapping AFTER connect(model:) already ran (both wait on
         // poweredOn), so apply the family/clock configuration here too — whichever runs last wins.
@@ -1563,7 +1714,7 @@ public final class BLEManager: NSObject, ObservableObject {
         let postOffloadJobKinds = [SyncJobKind.rescore.rawValue]
         #endif
         let actor = BackfillActor()
-        let hooks = BackfillMainHooks(
+        var hooks = BackfillMainHooks(
             ackTrim: { [weak self, weak actor] trim, endData in
                 await MainActor.run { [self, actor] in
                     guard actor?.deliverySessionIsCurrent == true else { return }
@@ -1577,7 +1728,7 @@ public final class BLEManager: NSObject, ObservableObject {
                     self.offloadHr += c.hr; self.offloadRr += c.rr
                     self.offloadGravity += c.gravity; self.offloadResp += c.resp
                     self.offloadSkinTemp += c.skinTemp; self.offloadSpo2 += c.spo2
-                    if ServerScoringSettings.isEnabled {
+                    if self.accountScope != nil, ServerScoringSettings.isEnabled {
                         CloudPushPeriodicScheduler.pushIfDue(
                             db: pushWriter,
                             interval: ServerScoringSettings.syncPushIntervalSeconds,
@@ -1589,12 +1740,8 @@ public final class BLEManager: NSObject, ObservableObject {
                 guard actor?.deliverySessionIsCurrent == true else { return }
                 self?.log(s)
             } },
-            rejectedSink: { [weak self, weak actor] frames, trim, family in
-                await MainActor.run { [self, actor] in
-                    guard actor?.deliverySessionIsCurrent == true else { return false }
-                    return self?.archiveRejectedFrames(frames, trim: trim, family: family) ?? false
-                }
-            },
+            // Production uses the instance WhoopStore quarantine in Backfiller.
+            rejectedSink: { _, _, _ in false },
             onChunk: { [weak self, weak actor] decoded, console in
                 await MainActor.run { [self, actor] in
                     guard actor?.deliverySessionIsCurrent == true else { return }
@@ -1657,30 +1804,27 @@ public final class BLEManager: NSObject, ObservableObject {
                     }
                 }
             })
+        hooks.onQuarantined = { [weak self, weak actor] count in
+            await MainActor.run {
+                guard let self, !self.accountShutdown, actor?.deliverySessionIsCurrent == true else { return }
+                self.state.rejectedFramesThisSession += count
+            }
+        }
         await actor.configure(store: store, deviceId: deviceId, hooks: hooks,
                               enableRawCapture: enableRawCapture,
-                              postOffloadJobKinds: postOffloadJobKinds)
+                              postOffloadJobKinds: postOffloadJobKinds,
+                              captureScope: DurableIngestScope(environment: accountScope?.projectURL,
+                                  accountID: accountScope?.userID, deviceID: deviceId),
+                              imuStore: imuSessionStore)
+        guard !accountShutdown else {
+            actor.invalidateSession()
+            await actor.drainAfterInvalidation()
+            return
+        }
         backfillActor = actor
         // Strand: no server uploader/sync — all data stays on-device.
 
-        // Retro-decode: when the decoder gains a historical layout (e.g. WHOOP 4.0 v25), re-run every
-        // archived undecodable frame through it and insert whatever now decodes — the only path by
-        // which already-acked banked history backfills after an update. Run ONCE per app version (no
-        // manual decoder-version constant to forget to bump); idempotent if it re-runs (rows dedupe
-        // by ts) and the archive is small, so the once-per-update cost is negligible. (#152)
-        // Note: the archive carries no deviceId, so replayed rows attribute to the current strap.
-        let replayKey = "rejectArchiveReplayedAppVersion"
-        if UserDefaults.standard.string(forKey: replayKey) != AppChangelog.currentVersion {
-            do {
-                let rows = try await rejectedHistoryArchive.replay(into: store, deviceId: deviceId)
-                if rows > 0 { log("Backfill: retro-decoded \(rows) record(s) from the reject archive after an update.") }
-                // Advance the gate ONLY on success — a failed insert must retry next launch, because
-                // the archive holds the only surviving copy of these records. (#152)
-                UserDefaults.standard.set(AppChangelog.currentVersion, forKey: replayKey)
-            } catch {
-                log("Backfill: reject-archive retro-decode deferred (store insert failed) — will retry next launch.")
-            }
-        }
+        // Legacy diagnostic archives have no capture owner and are never adopted automatically.
 
         // Battery "~X days left" seed (#7): `LiveState.batterySamples` is fed ONLY by live BLE events, so
         // after a reconnect the runtime estimate restarted from an empty buffer and ignored the discharge
@@ -1698,7 +1842,7 @@ public final class BLEManager: NSObject, ObservableObject {
                 guard let soc = row.soc else { return nil }
                 return (ts: row.ts, soc: soc)
             }
-            state.seedBatterySamples(seed)
+            if !accountShutdown { state.seedBatterySamples(seed) }
         }
     }
 
@@ -1706,9 +1850,22 @@ public final class BLEManager: NSObject, ObservableObject {
     init(state: LiveState, deviceId: String = "my-whoop", collector: Collector?) {
         self.state = state
         self.deviceId = deviceId
+        self.databasePath = try? StorePaths.defaultDatabasePath()
+        self.storageDirectory = nil
+        self.accountScope = nil
+        self.defaults = .standard
+        self.selectedModel = .persisted
+        self.imuSessionStore = .shared
+        self.imuContinuousStore = .continuous
+        self.imuRecorder = ImuContinuousRecorder(tickInterval: nil)
+        self.imuPushBootstrap = ImuPushSourceBootstrap(scope: nil, directory: nil,
+            sessionStore: self.imuSessionStore, continuousStore: .continuous)
         self.router = FrameRouter(state: state)
         self.collector = collector
         super.init()
+        #if DEBUG
+        guard ProcessInfo.processInfo.environment["NOOP_TEST_DISABLE_BLUETOOTH"] != "1" else { return }
+        #endif
         // Deliberately NOT seeded from the global key here. It belongs to whichever strap synced last,
         // which on a two-strap install is not the one the screens are scoped to — the misattribution this
         // whole change removes. `seedLastSyncFromActiveStrap` fills it from the ACTIVE strap once the
@@ -1791,7 +1948,8 @@ public final class BLEManager: NSObject, ObservableObject {
     /// old single entry point let every poweredOn event (a Bluetooth toggle, a bluetoothd restart)
     /// silently un-pause the give-up and re-run the full refusal hammer, forever, one burst per event
     /// (#78 hole-2; Android's onBluetoothRadioOn always had the correct one-attempt-latched shape).
-    public func connect(model: WhoopModel = .persisted) {
+    public func connect(model: WhoopModel? = nil) {
+        guard !accountShutdown else { return }
         // #747/#750: re-arm on the user's explicit retry: clear the give-up streak + pause so this fresh
         // attempt isn't immediately re-paused and the auto-reconnect works again if it bonds.
         if autoReconnectPausedForBondLoop {
@@ -1810,7 +1968,7 @@ public final class BLEManager: NSObject, ObservableObject {
         // Deliberately NOT in connectCore: a system-initiated reconnect must not.
         helloRetryRequested = true
         bondGiveUp.reset()
-        connectCore(model: model)
+        connectCore(model: model ?? selectedModel)
     }
 
     /// SYSTEM-initiated connect: byte-identical to `connect()` except it NEVER resets the bond-loop
@@ -1819,17 +1977,28 @@ public final class BLEManager: NSObject, ObservableObject {
     /// (`BondRefusalGiveUp.gaveUp` latches, `recordRefusal()` returns false) and the paused disconnect
     /// path schedules nothing afterwards, so the hammer loop cannot restart. A genuine bond still fully
     /// resets via the didWriteValueFor path, so a strap freed since the give-up self-heals.
-    func connectFromSystem(model: WhoopModel = .persisted) {
+    func connectFromSystem(model: WhoopModel? = nil) {
         // #1881: the gate belongs HERE, not in the shared `connectCore`. This file already draws the line
         // the fix needs — `connect()` is the user's explicit Connect button, and every system-initiated
         // path "MUST use connectFromSystem()" — and the report's complaint is only ever about NOOP acting
         // on its own. Gating the shared core instead would have made the Connect button silently dead
         // while the Devices screen showed a "Reconnecting…" toast.
         guard whoopConnectAllowed("connect-from-system") else { return }
-        connectCore(model: model)
+        connectCore(model: model ?? selectedModel)
     }
 
     private func connectCore(model: WhoopModel) {
+        guard !accountShutdown else { return }
+        guard central != nil else { return }
+        if collector == nil {
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                await self.bootstrapStore()
+                guard !self.accountShutdown, self.collector != nil else { return }
+                self.connectCore(model: model)
+            }
+            return
+        }
         intentionalDisconnect = false
         // Connection test mode: stamp when this connect attempt began so didConnect can report the connect
         // latency. A plain Date() assignment, no behaviour change; only read behind the .connection gate.
@@ -1927,7 +2096,7 @@ public final class BLEManager: NSObject, ObservableObject {
         if let p = peripheral {
             central.cancelPeripheralConnection(p)   // cancels a live OR a pending (standing) connect
         }
-        central.stopScan()
+        central?.stopScan()
     }
 
     /// #78: fully RELEASE a strap when the user removes it from the Devices screen. Archiving the registry
@@ -2246,6 +2415,15 @@ public final class BLEManager: NSObject, ObservableObject {
     /// says which path tried. Logged only on the transition into blocking, so a rotation timer cannot
     /// flood the log.
     private func whoopConnectAllowed(_ reason: String) -> Bool {
+        guard !accountShutdown else { return false }
+        if storageDirectory != nil {
+            guard accountScope != nil, let registry = registryStore,
+                  let activeID = try? registry.activeDeviceId(),
+                  let row = (try? registry.all())?.first(where: { $0.id == activeID }),
+                  SourceIdentity.isWhoop(row), let peripheralID = row.peripheralId,
+                  let pin = UUID(uuidString: peripheralID) else { return false }
+            preferredPeripheralUUID = pin
+        }
         if whoopIsActiveDevice { return true }
         // The flag is a CACHE of a registry fact, and the registry is the authority. Re-validate before
         // refusing, so the gate can never latch: it is set from the coordinator's stop/start closures and
@@ -2301,6 +2479,7 @@ public final class BLEManager: NSObject, ObservableObject {
     /// The wizard MUST call `stopWhoopScan()` before any normal connect resumes — this mode owns the
     /// central while active. No-op-to-the-connect-path: it never touches `peripheral`/bond state.
     public func scanForWhoops() {
+        guard !accountShutdown, central != nil else { return }
         guard central.state == .poweredOn else {
             log("Add-a-WHOOP scan: Bluetooth not powered on (state=\(central.state.rawValue))")
             return
@@ -2409,7 +2588,7 @@ public final class BLEManager: NSObject, ObservableObject {
     private func beginStockImuAcquisition(duration: TimeInterval) -> Bool {
         guard collector != nil,
               let peripheralID = peripheral?.identifier.uuidString,
-              let session = RawDataSessionStore.shared.active,
+              let session = rawDataSessionStore.active,
               session.peripheralId == peripheralID else {
             log("Sensor capture: start rejected; durable session and connected peripheral do not match")
             return false
@@ -2685,7 +2864,7 @@ public final class BLEManager: NSObject, ObservableObject {
                 self.sensorCaptureCloseTask = nil
                 return
             }
-            let published = RawDataSessionStore.shared.reconcileProducerStopped(
+            let published = rawDataSessionStore.reconcileProducerStopped(
                 sessionId: sessionID,
                 peripheralId: owner
             )
@@ -2759,7 +2938,7 @@ public final class BLEManager: NSObject, ObservableObject {
         guard persistedSensorCleanupDebts()[id] == family.rawValue,
               sensorCleanupPeripheralID == nil || sensorCleanupPeripheralID == id else { return }
         sensorCleanupPeripheralID = id
-        if let active = RawDataSessionStore.shared.active, active.peripheralId == id {
+        if let active = rawDataSessionStore.active, active.peripheralId == id {
             sensorCaptureSessionID = active.id
             sensorCaptureDeviceID = active.deviceId
         }
@@ -2768,7 +2947,7 @@ public final class BLEManager: NSObject, ObservableObject {
     }
 
     private func persistedSensorCleanupDebts() -> [String: String] {
-        UserDefaults.standard.dictionary(
+        defaults.dictionary(
             forKey: Self.sensorProducerCleanupOwedPeripheralsKey
         ) as? [String: String] ?? [:]
     }
@@ -2776,21 +2955,21 @@ public final class BLEManager: NSObject, ObservableObject {
     private func markSensorCleanupOwed(for peripheralID: String, family: DeviceFamily) {
         var value = persistedSensorCleanupDebts()
         value[peripheralID] = family.rawValue
-        UserDefaults.standard.set(value, forKey: Self.sensorProducerCleanupOwedPeripheralsKey)
+        defaults.set(value, forKey: Self.sensorProducerCleanupOwedPeripheralsKey)
     }
 
     private func clearSensorCleanupOwed(for peripheralID: String) {
         var value = persistedSensorCleanupDebts()
         value.removeValue(forKey: peripheralID)
         if value.isEmpty {
-            UserDefaults.standard.removeObject(forKey: Self.sensorProducerCleanupOwedPeripheralsKey)
+            defaults.removeObject(forKey: Self.sensorProducerCleanupOwedPeripheralsKey)
         } else {
-            UserDefaults.standard.set(value, forKey: Self.sensorProducerCleanupOwedPeripheralsKey)
+            defaults.set(value, forKey: Self.sensorProducerCleanupOwedPeripheralsKey)
         }
     }
 
     private func persistedSensorRecoveryAttempts() -> [String: Int] {
-        let raw = UserDefaults.standard.dictionary(
+        let raw = defaults.dictionary(
             forKey: Self.sensorProducerRecoveryAttemptsKey
         ) ?? [:]
         return raw.reduce(into: [:]) { result, entry in
@@ -2812,7 +2991,7 @@ public final class BLEManager: NSObject, ObservableObject {
             (value[peripheralID] ?? 0) + 1
         )
         value[peripheralID] = next
-        UserDefaults.standard.set(value, forKey: Self.sensorProducerRecoveryAttemptsKey)
+        defaults.set(value, forKey: Self.sensorProducerRecoveryAttemptsKey)
         return next
     }
 
@@ -2820,9 +2999,9 @@ public final class BLEManager: NSObject, ObservableObject {
         var value = persistedSensorRecoveryAttempts()
         value.removeValue(forKey: peripheralID)
         if value.isEmpty {
-            UserDefaults.standard.removeObject(forKey: Self.sensorProducerRecoveryAttemptsKey)
+            defaults.removeObject(forKey: Self.sensorProducerRecoveryAttemptsKey)
         } else {
-            UserDefaults.standard.set(value, forKey: Self.sensorProducerRecoveryAttemptsKey)
+            defaults.set(value, forKey: Self.sensorProducerRecoveryAttemptsKey)
         }
     }
 
@@ -2939,7 +3118,7 @@ public final class BLEManager: NSObject, ObservableObject {
     private func recordGroundTruthImuFrame(_ frame: [UInt8]) {
         guard Whoop5RawImu.rawColumns(frame) != nil,
               verifyFrame(frame, family: .whoop5).crc32OK == true else { return }
-        _ = ImuSessionFileStore.shared.append(deviceId: deviceId, frame: frame,
+        _ = imuSessionStore.append(deviceId: deviceId, frame: frame,
             receivedAtMs: Int64(Date().timeIntervalSince1970 * 1_000))
     }
 
@@ -2963,6 +3142,7 @@ public final class BLEManager: NSObject, ObservableObject {
     @discardableResult
     public func send(_ command: WhoopCommand, payload: [UInt8] = [0x00],
                      writeType: CBCharacteristicWriteType = .withoutResponse) -> Bool {
+        guard !accountShutdown else { return false }
         // #314 parity: CoreBluetooth already covers both Android defects here — this `p.state == .connected`
         // guard makes a write a no-op once the radio powers off (no DeadObjectException to crash on), and
         // centralManagerDidUpdateState publishes state.connected = false on .poweredOff, so the iOS/macOS UI
@@ -3156,10 +3336,12 @@ public final class BLEManager: NSObject, ObservableObject {
             ? backfillSessionID : nil
         confirmedCommandWriteQueue.append(ConfirmedCommandWrite(command: command, sessionID: sessionID,
                                                                  submittedAt: .now,
-                                                                 commitID: command == .historicalDataResult ? backfillCommitWatchdogID : nil))
+                                                                 commitID: command == .historicalDataResult ? backfillCommitWatchdogID : nil,
+                                                                 ackInterval: command == .historicalDataResult ? SyncPipelineTrace.begin(.ackWait, correlation: CaptureJobTrace.correlation ?? UUID()) : nil))
     }
 
     private func submitHistoryCommand(_ command: WhoopCommand, payload: [UInt8]) -> Bool {
+        guard !accountShutdown else { return false }
         if let writer = historyCommandWriterForTesting {
             guard writer(command, payload) else { return false }
             recordConfirmedCommandWrite(command, writeType: .withResponse)
@@ -3233,7 +3415,11 @@ public final class BLEManager: NSObject, ObservableObject {
     }
 
     private func historicalWriteCompleted(_ write: ConfirmedCommandWrite, error: Error?) {
+        var outcome: SyncPipelineTrace.Outcome = .cancelled
+        defer { if let interval = write.ackInterval { SyncPipelineTrace.end(interval, outcome: outcome) } }
+        guard !accountShutdown else { return }
         guard let sessionID = write.sessionID, sessionID == backfillSessionID, backfilling else { return }
+        outcome = error == nil ? .succeeded : .failed
         if let error {
             let action = write.command == .historicalDataResult ? "chunk acknowledgement" : "history request"
             log("Backfill: \(action) failed: \(error.localizedDescription)")
@@ -3277,6 +3463,7 @@ public final class BLEManager: NSObject, ObservableObject {
     /// flag, kick the strap with sendHistoricalData, and arm the idle timeout.
     @discardableResult
     private func beginBackfill(sessionID: UUID) async -> Bool {
+        guard !accountShutdown, historyTransportReady else { return false }
         guard backfillStartingSessionID == sessionID,
               state.connected, state.bonded, !intentionalDisconnect else { return false }
         guard sensorAcquisition.permitsHistoryStart else {
@@ -3333,7 +3520,7 @@ public final class BLEManager: NSObject, ObservableObject {
         let began = await actor.begin(family: selectedModel.deviceFamily,
                                       continuedAfterRows: consecutiveAutoContinues > 0,
                                       sessionID: sessionID)
-        guard began, backfillStartingSessionID == sessionID,
+        guard began, !accountShutdown, historyTransportReady, backfillStartingSessionID == sessionID,
               state.connected, state.bonded, connectHandshakeDone,
               !intentionalDisconnect, sensorAcquisition.permitsHistoryStart else {
             actor.invalidateSession(sessionID)
@@ -3372,8 +3559,12 @@ public final class BLEManager: NSObject, ObservableObject {
     /// Feed a frame to the Backfiller preserving exact arrival order. `yieldFrame` is synchronous
     /// from the BLE notify path; `BackfillActor` drains FIFO on one task.
     private func routeBackfillFrame(_ frame: [UInt8]) {
-        guard backfilling, let sessionID = backfillSessionID else { return }
-        backfillActor?.yieldFrame(frame, sessionID: sessionID)
+        guard !accountShutdown, backfilling, let sessionID = backfillSessionID else { return }
+        if backfillActor?.yieldFrame(frame, sessionID: sessionID) == false {
+            state.lastSyncError = "History sync paused: the local save queue is full. Unsaved history remains on the strap."
+            exitBackfilling(reason: "bounded queue full")
+            if let peripheral { central?.cancelPeripheralConnection(peripheral) }
+        }
     }
 
     /// Called when a backfill session completes (HISTORY_COMPLETE). Exits the backfill session cleanly.
@@ -3562,6 +3753,12 @@ public final class BLEManager: NSObject, ObservableObject {
     }
 
     private func invalidateBackfillDelivery() {
+        for index in confirmedCommandWriteQueue.indices {
+            if let interval = confirmedCommandWriteQueue[index].ackInterval {
+                SyncPipelineTrace.end(interval, outcome: .cancelled)
+                confirmedCommandWriteQueue[index].ackInterval = nil
+            }
+        }
         backfillActor?.invalidateSession()
         backfillStateRevision = UUID()
         backfillStartTimeout?.cancel()
@@ -3679,7 +3876,7 @@ public final class BLEManager: NSObject, ObservableObject {
         // a heal re-run so the next analyze tick purges any such pollution — not gated behind the one-shot
         // done flag. Pure UserDefaults set (no engine handle here); IntelligenceEngine honours it next tick.
         if (snapshot?.sessionDroppedImplausible ?? 0) > 0 {
-            IntelligenceEngine.requestTimestampReheal()
+            IntelligenceEngine.requestTimestampReheal(defaults: defaults)
         }
         // #364 auto-continue spin-detector: did THIS session move the strap's trim cursor? Compare the
         // Backfiller's current high-water trim against where it stood when the previous session ended.
@@ -3752,7 +3949,7 @@ public final class BLEManager: NSObject, ObservableObject {
             // #57 debug: write-health for the export. Distinguish "rows actually landed" from "an offload
             // STALLED on a persist failure" — the latter (usually a restore without a restart) is otherwise
             // invisible in a report that just shows "0 synced".
-            let du = UserDefaults.standard
+            let du = defaults
             // Per strap, not per install. The global keys reported one strap's write health on another's
             // screen — see LastSyncAttribution. This site has the peripheral, so it is the one place that
             // can attribute them honestly (same argument as #1634's firmware write).
@@ -3834,13 +4031,13 @@ public final class BLEManager: NSObject, ObservableObject {
             // key reported one strap's sync on another's screen, and it read as reassuring rather than
             // wrong — see LastSyncAttribution. Kotlin twin: NoopPrefs.setLastSyncAtFor.
             if let key = LastSyncAttribution.prefKey(peripheralId: peripheral?.identifier.uuidString) {
-                UserDefaults.standard.set(state.lastSyncedAt, forKey: key)
+                defaults.set(state.lastSyncedAt, forKey: key)
             }
             // Global kept for the same reason as the write-health pair above: the prefs-only debug header
             // is its only remaining reader and cannot resolve per device, so dropping this write would
             // freeze that line rather than fix it. It is also what `seedLastSyncFromActiveStrap`'s
             // single-strap fallback reads across the upgrade.
-            UserDefaults.standard.set(state.lastSyncedAt, forKey: "lastSyncedAt")
+            defaults.set(state.lastSyncedAt, forKey: "lastSyncedAt")
             // NOTE: the auto-continue streak is NOT reset here. A HISTORY_COMPLETE is no longer assumed to
             // mean "caught up" (#25): a strap whose firmware segments a deep offload into many small
             // HISTORY_COMPLETE slices would otherwise reset the streak on every slice and never engage the
@@ -3980,32 +4177,6 @@ public final class BLEManager: NSObject, ObservableObject {
         }
     }
 
-    /// On-device archive for HISTORICAL_DATA record frames that failed decode (#77 / #91).
-    private let rejectedHistoryArchive = RawHistoryArchive()
-
-    /// Durably archive undecodable record frames (append-only JSONL, fsynced) BEFORE the Backfiller
-    /// acks the trim — the user's only remaining copy of an unmapped firmware's records once the
-    /// strap frees them, and the corpus a later layout mapping re-ingests. Updates the session
-    /// counters that drive the honest sync status. Returns false ONLY on a genuine write failure,
-    /// which makes the Backfiller hold the cursor/ack so the strap re-sends the chunk (no data loss
-    /// either way). Frames carry sensor payloads, not identifiers — no serials/MACs are archived.
-    private func archiveRejectedFrames(_ frames: [[UInt8]], trim: UInt32, family: DeviceFamily) -> Bool {
-        switch rejectedHistoryArchive.archive(frames, trim: trim, family: family) {
-        case .written(let count):
-            state.rejectedFramesThisSession += count
-            return true
-        case .capReached(let count):
-            // Cap reached: succeed WITHOUT writing (wedging the offload over a full archive would be
-            // worse; ample sample bytes exist by now), counted separately so the sync status never
-            // claims "saved" for bytes that were not.
-            state.rejectedFramesUnarchived += count
-            log("Backfill: rejected-frame archive is FULL — \(count) frame(s) NOT preserved (acking anyway so the offload can finish)")
-            return true
-        case .failed:
-            log("Backfill: rejected-frame archive FAILED — holding ack so the strap re-sends")
-            return false
-        }
-    }
 
     /// After an offload, judge liveness: stuck = strap reports records newer than our frontier AND our
     /// frontier (max persisted HR ts) hasn't advanced for the detector window. Off-wrist / caught up
@@ -4252,7 +4423,7 @@ public final class BLEManager: NSObject, ObservableObject {
         }
         let comps = Calendar.current.dateComponents([.hour, .minute], from: now)
         let minuteOfDay = (comps.hour ?? 0) * 60 + (comps.minute ?? 0)
-        let d = UserDefaults.standard
+        let d = defaults
         return ContinuousHrvSchedule.streamWanted(
             continuousHrv: true,
             overnightOnly: PuffinExperiment.continuousHrvOvernightOnlyEnabled,
@@ -4854,12 +5025,12 @@ public final class BLEManager: NSObject, ObservableObject {
     /// #592: format a GET_EXTENDED_BATTERY_INFO COMMAND_RESPONSE and publish it, diffing against the
     /// persisted previous payload. Called from the inbound frame handler for both families.
     private func handleExtendedBatteryProbeResponse(_ frame: [UInt8], isWhoop5: Bool) {
-        let prev = UserDefaults.standard.string(forKey: BLEManager.extendedBatteryPrevPayloadKey)
+        let prev = defaults.string(forKey: BLEManager.extendedBatteryPrevPayloadKey)
         let (text, payHex) = ExtendedBatteryProbe.format(
             frame: frame, cmdOff: isWhoop5 ? 10 : 6, isWhoop5: isWhoop5, prevPayloadHex: prev)
         log("Extended-battery probe (#592):\n\(text)")
         state.extendedBatteryProbe = text
-        if let payHex { UserDefaults.standard.set(payHex, forKey: BLEManager.extendedBatteryPrevPayloadKey) }
+        if let payHex { defaults.set(payHex, forKey: BLEManager.extendedBatteryPrevPayloadKey) }
     }
 
     /// #690 opcode probe: send the read-only GET_BODY_LOCATION_AND_STATUS(84) and surface the strap's reply
@@ -5138,12 +5309,12 @@ public final class BLEManager: NSObject, ObservableObject {
     /// and this is a strictly user-triggered diagnostic, so a stray match must never surface a result.
     private func handleBodyLocationProbeResponse(_ frame: [UInt8], isWhoop5: Bool) {
         guard state.bodyLocationProbe == BLEManager.bodyLocationProbeWaiting else { return }
-        let prev = UserDefaults.standard.string(forKey: BLEManager.bodyLocationPrevPayloadKey)
+        let prev = defaults.string(forKey: BLEManager.bodyLocationPrevPayloadKey)
         let (text, payHex) = BodyLocationProbe.format(
             frame: frame, cmdOff: isWhoop5 ? 10 : 6, isWhoop5: isWhoop5, prevPayloadHex: prev)
         log("Body-location probe (#690):\n\(text)")
         state.bodyLocationProbe = text
-        if let payHex { UserDefaults.standard.set(payHex, forKey: BLEManager.bodyLocationPrevPayloadKey) }
+        if let payHex { defaults.set(payHex, forKey: BLEManager.bodyLocationPrevPayloadKey) }
     }
 
     // MARK: - WHOOP MG ECG ("Labrador") experimental probe
@@ -5583,12 +5754,31 @@ public final class BLEManager: NSObject, ObservableObject {
     /// gate AND the BackfillPolicy rate-limiter for the trigger. On a go: records the attempt time
     /// (persisted) and starts the offload.
     func requestSync(_ trigger: BackfillTrigger) {
+        guard !accountShutdown else { return }
         guard backfillStartingSessionID == nil, backfillEndingSessionID == nil,
               !intentionalDisconnect else { return }
         guard BLEManager.shouldRunPeriodicBackfill(
             connected: state.connected, bonded: state.bonded, backfilling: backfilling) else { return }
+        guard historyTransportReady else {
+            pendingReadyTrigger = trigger
+            state.historyReady = false
+            if readinessTimeout == nil {
+                let generation = readinessGeneration
+                let work = DispatchWorkItem { [weak self] in
+                    guard let self, !self.accountShutdown, self.readinessGeneration == generation,
+                          !self.historyTransportReady else { return }
+                    self.pendingReadyTrigger = nil
+                    self.readinessTimeout = nil
+                    self.state.lastSyncError = "History sync is waiting for Bluetooth subscriptions. Reconnect to retry."
+                    if let peripheral = self.peripheral { self.central?.cancelPeripheralConnection(peripheral) }
+                }
+                readinessTimeout = work
+                DispatchQueue.main.asyncAfter(deadline: .now() + 20, execute: work)
+            }
+            return
+        }
         let now = Date().timeIntervalSince1970
-        let last = UserDefaults.standard.object(forKey: BLEManager.backfillLastAtKey) as? Double
+        let last = defaults.object(forKey: BLEManager.backfillLastAtKey) as? Double
         // #160: a future-dated-clock strap's recurring automatic offloads (#928/#1012) are near-useless
         // AND each ~60s session blocks the WHOOP4 realtime-HR keep-alive re-arm (guard !backfilling), so
         // live HR lapses. Feed the already-tracked future-dated signal into BackfillPolicy, which SKIPS
@@ -5625,7 +5815,7 @@ public final class BLEManager: NSObject, ObservableObject {
         Task { @MainActor [weak self] in
             guard let self else { return }
             if await self.beginBackfill(sessionID: sessionID) {
-                UserDefaults.standard.set(now, forKey: BLEManager.backfillLastAtKey)
+                defaults.set(now, forKey: BLEManager.backfillLastAtKey)
             } else if self.backfillStartingSessionID == sessionID {
                 self.backfillActor?.invalidateSession(sessionID)
                 self.backfillStartingSessionID = nil
@@ -5696,6 +5886,7 @@ public final class BLEManager: NSObject, ObservableObject {
     }
 
     private func discoverPrimaryServices(on p: CBPeripheral) {
+        guard !accountShutdown, p === peripheral else { return }
         p.discoverServices([
             selectedModel.scanService, BLEManager.heartRateService, BLEManager.batteryService,
             BLEManager.disService,
@@ -5703,6 +5894,11 @@ public final class BLEManager: NSObject, ObservableObject {
     }
 
     private func resetCharacteristics() {
+        confirmedNotifyUUIDs.removeAll()
+        readinessGeneration = UUID()
+        readinessTimeout?.cancel()
+        readinessTimeout = nil
+        pendingReadyTrigger = nil
         cmdCharacteristic = nil
         cmdNotifyCharacteristic = nil
         eventNotifyCharacteristic = nil
@@ -5729,6 +5925,7 @@ public final class BLEManager: NSObject, ObservableObject {
     /// from the already-gated `connectFromSystem` — and this method's own family-rotation timer, which
     /// cannot start a scan that one of those did not. Gating here as well would block the user's Connect.
     private func startScan(for model: WhoopModel, allowFallback: Bool) {
+        guard !accountShutdown else { return }
         advertisementLogged = false
         cancelScanFallback()
         selectedModel = model
@@ -5885,7 +6082,7 @@ public final class BLEManager: NSObject, ObservableObject {
         // attempt that never happened, which is precisely what a diagnostic may not do.
         guard state.connected, let p = peripheral else { return }
         let refused = disRefusedPrefKey(p.identifier.uuidString)
-            .map { UserDefaults.standard.bool(forKey: $0) } ?? false
+            .map { defaults.bool(forKey: $0) } ?? false
         guard shouldReadDisUnbonded(isWhoop5: selectedModel.deviceFamily == .whoop5,
                                     bonded: didBond,
                                     alreadyReadThisLink: disRead,
@@ -5919,7 +6116,7 @@ public final class BLEManager: NSObject, ObservableObject {
             return
         }
         guard let key = disRefusedPrefKey(peripheral?.identifier.uuidString) else { return }
-        UserDefaults.standard.set(true, forKey: key)
+        defaults.set(true, forKey: key)
     }
 
     /// Resolve + log the 5/MG hardware variant once a DIS string lands (#520). Both characteristics
@@ -6167,7 +6364,7 @@ public final class BLEManager: NSObject, ObservableObject {
     /// #34: persist the last alarm arm for the debug export's Alarm block (sent epoch + when + whether the
     /// strap was connected when we sent it), so a "didn't buzz" report shows sent-vs-strap-reports at a glance.
     private func recordAlarmArm(sentEpoch: Int) {
-        let d = UserDefaults.standard
+        let d = defaults
         d.set(sentEpoch, forKey: "alarm.lastArmSentEpoch")
         // #1706: WHICH strap this arm went to. Without it the export, and the reject streak, compare
         // this epoch against a readback that on a multi-strap install may be a different device.
@@ -6195,7 +6392,7 @@ public final class BLEManager: NSObject, ObservableObject {
     func disableStrapAlarm() {
         // #34: clear the "strap keeps rejecting the alarm" streak/warning — it's about an ACTIVE arm being
         // refused, and there's nothing armed to refuse once disarmed.
-        UserDefaults.standard.set(0, forKey: "alarm.rejectStreak")
+        defaults.set(0, forKey: "alarm.rejectStreak")
         // #730: report the OUTCOME, not the intent — using the SAME `commandChannelReady` gate the arm
         // path already uses (it reports "queued" rather than a false "armed"). The disarm never adopted
         // it: `send` drops the write when the link isn't up and logs "ignored — not connected", then this
@@ -6428,6 +6625,7 @@ extension BLEManager: @preconcurrency CBCentralManagerDelegate {
     }
 
     public func centralManagerDidUpdateState(_ central: CBCentralManager) {
+        guard !accountShutdown else { return }
         log("Central state: \(central.state.rawValue) (5 = poweredOn)")
         // #391: ANY state update means the cold-start settling window moved on — a pending
         // unauthorized-settle escalation is obsolete whether the new state is good news (poweredOn)
@@ -6488,19 +6686,19 @@ extension BLEManager: @preconcurrency CBCentralManagerDelegate {
             radioStateErrorShown = false
         }
         // Bootstrap the async store once on first poweredOn (idempotent if already set).
-        Task { @MainActor in await bootstrapStore() }
-        if let p = restoredPeripheral {
-            log("poweredOn with restored peripheral — reconnecting \(p.identifier)")
-            if p.state != .connected {
-                connectRestored(p, reason: "poweredOn")
-            } else {
-                discoverPrimaryServices(on: p)
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.bootstrapStore()
+            guard !self.accountShutdown, self.collector != nil else { return }
+            if let p = self.restoredPeripheral {
+                if p.state != .connected {
+                    self.connectRestored(p, reason: "poweredOn")
+                } else {
+                    self.discoverPrimaryServices(on: p)
+                }
+            } else if !self.launchedViaStateRestoration {
+                self.connectFromSystem()
             }
-        } else {
-            // #78 hole-2: poweredOn is SYSTEM-initiated (every Bluetooth toggle / bluetoothd restart
-            // lands here), so it must not reset a latched bond-loop give-up - it gets ONE bounded
-            // attempt with the give-up intact (Android onBluetoothRadioOn parity), not a fresh hammer.
-            connectFromSystem()
         }
     }
 
@@ -6508,6 +6706,7 @@ extension BLEManager: @preconcurrency CBCentralManagerDelegate {
                                didDiscover peripheral: CBPeripheral,
                                advertisementData: [String: Any],
                                rssi RSSI: NSNumber) {
+        guard !accountShutdown else { return }
         let name = (advertisementData[CBAdvertisementDataLocalNameKey] as? String) ?? peripheral.name ?? "unknown"
         // The raw name goes to the DEVICE LIST (the user's own screen, where they need to recognise
         // their strap); only the log gets the model-only form. See LiveState.logSafeDeviceName.
@@ -6595,6 +6794,11 @@ extension BLEManager: @preconcurrency CBCentralManagerDelegate {
     }
 
     public func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
+        guard !accountShutdown else { central.cancelPeripheralConnection(peripheral); return }
+        guard self.peripheral == nil || peripheral === self.peripheral else {
+            central.cancelPeripheralConnection(peripheral)
+            return
+        }
         cancelScanFallback()
         cancelPendingConnectProbe()   // #730: the connect resolved; no pending-connect log needed
         failedConnectAttempts = 0   // a successful connect clears the reconnect backoff (#414)
@@ -6725,6 +6929,12 @@ extension BLEManager: @preconcurrency CBCentralManagerDelegate {
     public func centralManager(_ central: CBCentralManager,
                                didDisconnectPeripheral peripheral: CBPeripheral,
                                error: Error?) {
+        guard !accountShutdown, peripheral === self.peripheral else { return }
+        readinessGeneration = UUID()
+        confirmedNotifyUUIDs.removeAll()
+        readinessTimeout?.cancel()
+        readinessTimeout = nil
+        pendingReadyTrigger = nil
         invalidateBackfillDelivery()
         confirmedCommandWriteQueue.removeAll()
         Task { @MainActor in await collector?.flush() }
@@ -7032,6 +7242,7 @@ extension BLEManager: @preconcurrency CBCentralManagerDelegate {
     public func centralManager(_ central: CBCentralManager,
                                didFailToConnect peripheral: CBPeripheral,
                                error: Error?) {
+        guard !accountShutdown, peripheral === self.peripheral else { return }
         cancelPendingConnectProbe()   // #730: it FAILED rather than pending — this log is the answer
         log("Failed to connect\(error.map { " — \($0.localizedDescription)" } ?? "")")
         // The strap wiped its bond (a firmware update, or the official WHOOP app re-bonding it). macOS keeps
@@ -7100,67 +7311,47 @@ extension BLEManager: @preconcurrency CBCentralManagerDelegate {
     /// notifications are re-routed without user interaction.
     public func centralManager(_ central: CBCentralManager,
                                willRestoreState dict: [String: Any]) {
+        guard !accountShutdown,
+              let peripherals = dict[CBCentralManagerRestoredStatePeripheralsKey] as? [CBPeripheral] else { return }
         launchedViaStateRestoration = true
-        guard let peripherals = dict[CBCentralManagerRestoredStatePeripheralsKey] as? [CBPeripheral],
-              let p = peripherals.first else {
-            log("Restore: no peripherals in state dict")
-            return
-        }
-        self.peripheral = p
-        self.restoredPeripheral = p
-        p.delegate = self
-        resetCharacteristics()
-        // Re-derive the inbound-decode family from the persisted model. connect()/startScan() set the
-        // reassembler + router family, but NEITHER runs on the restore path — so without this a restored
-        // WHOOP 5/MG would decode its puffin notify frames with the default .whoop4 framing (different
-        // length offset + constant), producing corrupt/empty data for the whole unattended session until
-        // the user manually taps connect.
-        selectedModel = .persisted
-        reassembler = CharacteristicReassembler(family: selectedModel.deviceFamily)
-        router.family = selectedModel.deviceFamily
-        router.deviceId = deviceId   // #1706: attribute this connection's alarm readback
-        configureCollectorFamily()
-        // Collection only runs post-bond, so a restored link was already bonded;
-        // seed those flags now. `didWriteValueFor` won't re-fire on its own.
-        state.bonded = true
-        didBond = true
-        // #613: didConnect never fires for an ALREADY-connected restored peripheral, so publish the strap
-        // identity HERE — BEFORE encryptedBond flips true — so SourceCoordinator sees the ordinary
-        // (encryptedBond == false) identity semantics `didConnect` uses (adopt-if-unknown / never clobber a
-        // different registered strap), NOT the #52 post-bond re-adoption seam. Without it
-        // connectedPeripheralUUID stays nil the whole session: no identity to SourceCoordinator, and the
-        // alarm diagnostics read "strap not connected" though the link is up.
-        if p.state == .connected { connectedPeripheralUUID = p.identifier.uuidString }
-        state.encryptedBond = true   // a restored link was genuinely encrypted-bonded before (#69)
-        noteGenuineBond(of: p)   // #52: a restored link was genuinely bonded; eligible as a re-adopt target
-        // clockRef is nil in the fresh process after restore, so we must re-request it.
-        // Reset the flag so the post-restore didWriteValueFor issues exactly one getClock.
-        clockRequested = false
-        clockRetries = 0
-        // Ensure the store is ready before restored BLE data arrives (idempotent; no-op if already built).
-        Task { @MainActor in
-            await bootstrapStore()
-            // #1881: `didConnect` never fires on this path (see above), so the identity adoption that lives
-            // there would be skipped for a restored link — the very path a radio toggle and a relaunch take.
-            // After `bootstrapStore`, because it is what creates `registryStore`.
-            if let p = self.peripheral ?? self.restoredPeripheral { self.adoptSourceIdentity(for: p) }
-        }
-        if p.state == .connected {
-            state.connected = true
-            // #613: the inherited notify subscriptions come back reported-active but dead. Force one real
-            // off→on re-subscribe this session (see `requestNotify`) so live HR/R-R resume AND
-            // `didUpdateNotificationStateFor` fires → `cmdNotifyConfirmedActive` → `connectSettled` → the
-            // alarm re-arm. Cleared when `connectSettled` bumps.
-            restoreNeedsResubscribe = true
-            log("Restored CONNECTED peripheral \(p.identifier) — re-discovering services")
-            discoverPrimaryServices(on: p)
-        } else {
-            state.connected = false
-            log("Restored DISCONNECTED peripheral \(p.identifier) — reconnect on poweredOn")
-            if central.state == .poweredOn {
-                connectRestored(p, reason: "willRestoreState")
-            } else {
-                log("Restore: central not poweredOn yet (state=\(central.state.rawValue)) — deferring to poweredOn")
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.bootstrapStore()
+            guard !self.accountShutdown, let registry = self.registryStore,
+                  let active = try? registry.activeDeviceId(),
+                  let row = (try? registry.all())?.first(where: { $0.id == active }),
+                  SourceIdentity.isWhoop(row), let registeredID = row.peripheralId,
+                  let selected = peripherals.first(where: { $0.identifier.uuidString == registeredID }) else {
+                for candidate in peripherals { central.cancelPeripheralConnection(candidate) }
+                return
+            }
+            for candidate in peripherals where candidate !== selected {
+                central.cancelPeripheralConnection(candidate)
+            }
+            self.peripheral = selected
+            self.restoredPeripheral = selected
+            self.deviceId = row.id
+            selected.delegate = self
+            self.resetCharacteristics()
+            self.confirmedNotifyUUIDs.removeAll()
+            self.readinessGeneration = UUID()
+            self.reassembler = CharacteristicReassembler(family: self.selectedModel.deviceFamily)
+            self.router.family = self.selectedModel.deviceFamily
+            self.router.deviceId = row.id
+            self.configureCollectorFamily()
+            self.state.bonded = false
+            self.didBond = false
+            self.state.encryptedBond = false
+            self.connectHandshakeDone = false
+            self.clockRequested = false
+            self.clockRetries = 0
+            if selected.state == .connected {
+                self.state.connected = true
+                self.connectedPeripheralUUID = selected.identifier.uuidString
+                self.restoreNeedsResubscribe = true
+                self.discoverPrimaryServices(on: selected)
+            } else if central.state == .poweredOn {
+                self.connectRestored(selected, reason: "restored registered source")
             }
         }
     }
@@ -7176,8 +7367,8 @@ extension BLEManager: @preconcurrency CBPeripheralDelegate {
     /// two would share `.whoop5`, and a raw-value compare would then reset on a same-family switch. Mirrors
     /// the Kotlin `persistSelectedModel` service compare.
     private func persistSelectedModel(_ model: WhoopModel) {
-        let previous = UserDefaults.standard.string(forKey: "selectedWhoopModel")
-        UserDefaults.standard.set(model.rawValue, forKey: "selectedWhoopModel")
+        let previous = defaults.string(forKey: "selectedWhoopModel")
+        defaults.set(model.rawValue, forKey: "selectedWhoopModel")
         guard let previous,
               let previousModel = WhoopModel(rawValue: previous),
               previousModel.deviceFamily != model.deviceFamily else { return }
@@ -7186,6 +7377,7 @@ extension BLEManager: @preconcurrency CBPeripheralDelegate {
     }
 
     public func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
+        guard !accountShutdown, peripheral === self.peripheral else { return }
         if let error {
             log("Service discovery failed: \(error.localizedDescription)")
             return
@@ -7235,6 +7427,7 @@ extension BLEManager: @preconcurrency CBPeripheralDelegate {
     public func peripheral(_ peripheral: CBPeripheral,
                            didDiscoverCharacteristicsFor service: CBService,
                            error: Error?) {
+        guard !accountShutdown, peripheral === self.peripheral else { return }
         if let error {
             log("Characteristic discovery failed for \(service.uuid): \(error.localizedDescription)")
             return
@@ -7372,7 +7565,7 @@ extension BLEManager: @preconcurrency CBPeripheralDelegate {
     public func peripheral(_ peripheral: CBPeripheral,
                            didWriteValueFor characteristic: CBCharacteristic,
                            error: Error?) {
-        guard peripheral === self.peripheral, characteristic === cmdCharacteristic else { return }
+        guard !accountShutdown, peripheral === self.peripheral, characteristic === cmdCharacteristic else { return }
         let completedWrite = confirmedCommandWriteQueue.isEmpty ? nil : confirmedCommandWriteQueue.removeFirst()
         if let completedWrite, completedWrite.sessionID != nil {
             if confirmedCommandWritesOutstanding > 0 { confirmedCommandWritesOutstanding -= 1 }
@@ -7571,7 +7764,7 @@ extension BLEManager: @preconcurrency CBPeripheralDelegate {
                 // Deferred ~1.5s so the puffin notify subscriptions settle before SEND_HISTORICAL_DATA,
                 // mirroring the WHOOP4 kick. requestSync → beginBackfill is itself gated on
                 // connectHandshakeDone, so a racing foreground/restore trigger can't fire it early.
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.requestSync(.connect) }
+                requestSync(.connect)
                 startBackfillTimer()            // re-offload the type-47 store every backfillIntervalSeconds
                 // #34: signal settled directly (skip the cmd-notify gate `maybeSignalConnectSettled()`
                 // uses) — armStrapAlarm's 5/MG branch never sends GET_ALARM_TIME (log-only readback is
@@ -7641,7 +7834,7 @@ extension BLEManager: @preconcurrency CBPeripheralDelegate {
         // throttled by BackfillPolicy). Deferred ~1.5s so SET_CLOCK/GET_DATA_RANGE round-trip first and
         // SEND_HISTORICAL runs on a settled link, like the paced Mac prototype. beginBackfill is itself
         // gated on connectHandshakeDone so a racing foreground/restore trigger can't fire it early.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.requestSync(.connect) }
+        requestSync(.connect)
         startBackfillTimer()   // re-offload the type-47 store every backfillIntervalSeconds
         startKeepAlive()       // always-ping: re-arm realtime, poll battery, watchdog the link
         enableLiveNotifications(reason: "post-bond")   // includes 0x2A37 standard HR — the fallback path
@@ -7852,6 +8045,7 @@ extension BLEManager: @preconcurrency CBPeripheralDelegate {
     public func peripheral(_ peripheral: CBPeripheral,
                            didUpdateValueFor characteristic: CBCharacteristic,
                            error: Error?) {
+        guard !accountShutdown, peripheral === self.peripheral else { return }
         if let error {
             // A DIS refusal is a FINDING, not noise — report it specifically and latch it, or a capture
             // cannot tell a refusal from a read that was never issued (#490, #1635).
@@ -7918,7 +8112,7 @@ extension BLEManager: @preconcurrency CBPeripheralDelegate {
                 // NoopPrefs.setFirmwareFor beside the same publish.
                 if let key = FirmwareAttribution.prefKey(peripheralId: peripheral.identifier.uuidString),
                    let fw = disFirmware {
-                    UserDefaults.standard.set(fw, forKey: key)
+                    defaults.set(fw, forKey: key)
                 }
                 // Named as the DIS source, because it is not the same reading as the decoded one a 4.0
                 // shows and a capture must not have to guess which it is looking at.
@@ -8147,6 +8341,19 @@ extension BLEManager: @preconcurrency CBPeripheralDelegate {
     public func peripheral(_ peripheral: CBPeripheral,
                            didUpdateNotificationStateFor characteristic: CBCharacteristic,
                            error: Error?) {
+        guard !accountShutdown, peripheral === self.peripheral else { return }
+        if error == nil, characteristic.isNotifying {
+            confirmedNotifyUUIDs.insert(characteristic.uuid)
+        } else {
+            confirmedNotifyUUIDs.remove(characteristic.uuid)
+        }
+        state.historyReady = historyTransportReady
+        if historyTransportReady, let trigger = pendingReadyTrigger {
+            pendingReadyTrigger = nil
+            readinessTimeout?.cancel()
+            readinessTimeout = nil
+            requestSync(trigger)
+        }
         if let error = error {
             log("Notify enable failed for \(characteristic.uuid): \(error.localizedDescription)")
         } else {

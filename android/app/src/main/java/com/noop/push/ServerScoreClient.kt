@@ -5,31 +5,14 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
 import java.util.UUID
 
 object ServerScoreClient {
     suspend fun fetchDaySnapshot(context: Context, day: String): ServerScoreDayCache =
         withContext(Dispatchers.IO) {
-            val base = ServerScoringSettings.supabaseProjectUrl() ?: error("not configured")
-            val anon = ServerScoringSettings.anonKey() ?: error("not configured")
-            val token = CloudAuthClient.validAccessToken(context)
-            val url = URL("$base/rest/v1/rpc/get_day_snapshot")
-            val conn = (url.openConnection() as HttpURLConnection).apply {
-                requestMethod = "POST"
-                setRequestProperty("Content-Type", "application/json")
-                setRequestProperty("apikey", anon)
-                setRequestProperty("Authorization", "Bearer $token")
-                doOutput = true
-            }
-            conn.outputStream.use {
-                it.write(JSONObject(mapOf("p_day" to day)).toString().toByteArray())
-            }
-            if (conn.responseCode == 401 || conn.responseCode == 403) error("unauthorized")
-            if (conn.responseCode != 200) error("fetch failed")
-            val body = conn.inputStream.bufferedReader().readText()
-            parseSnapshot(body, day)
+            val response = AccountScoringRpc(com.noop.account.AccountStorageContext.capture(context)).snapshot(day)
+            val snapshot = response.snapshot ?: error("Server calculation pending or unavailable")
+            snapshot.legacy(System.currentTimeMillis(), response.pending)
         }
 
     fun parseSnapshot(body: String, day: String): ServerScoreDayCache {

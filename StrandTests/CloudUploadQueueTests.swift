@@ -7,10 +7,24 @@ import Darwin
 @testable import Strand
 #endif
 
+private func uploadQueueFixtureBaseDirectory() throws -> URL {
+    guard let path = ProcessInfo.processInfo.environment["NARA_TEST_FIXTURE_ROOT"] else {
+        return FileManager.default.temporaryDirectory
+    }
+    var isDirectory: ObjCBool = false
+    guard path.hasPrefix("/"), !path.utf8.contains(0),
+          FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory), isDirectory.boolValue else {
+        throw NSError(domain: "NARATestFixtureRoot", code: 1, userInfo: [
+            NSLocalizedDescriptionKey: "NARA_TEST_FIXTURE_ROOT must name an existing absolute directory"
+        ])
+    }
+    return URL(fileURLWithPath: path, isDirectory: true)
+}
+
 final class CloudUploadQueueTests: XCTestCase {
     private let endpoint = "https://project.example/functions/v1/push"
     private func fixture() throws -> (URL, AccountSessionContext, AccountStorageLayout) {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("w5-" + UUID().uuidString)
+        let url = try uploadQueueFixtureBaseDirectory().appendingPathComponent("w5-" + UUID().uuidString)
         let scope = try AccountScope(projectURL: "https://project.example", userID: "11111111-1111-1111-1111-111111111111")
         return (url, .init(scope: scope, generation: UUID()), .init(baseDirectory: url, scope: scope))
     }
@@ -767,6 +781,201 @@ final class CloudUploadQueueTests: XCTestCase {
         XCTAssertNotNil(remaining[spare.id])
         XCTAssertEqual(try Data(contentsOf: journal.bodyURL(spare)), Data([2, 4, 6]))
     }
+    private func admissionSelection(_ context: AccountSessionContext, row: Int64 = 1,
+                                    device: String = "admission-device") throws -> CloudPushPreparedSelection {
+        let batch = try PushProtocol.appendBatch(table: .hrSample, sourceId: W5ReceiptFixture.source,
+            deviceId: device, startCursor: nil,
+            records: [.init(rowId: row, key: ["ts": .int(row)], data: ["bpm": .int(60)])])
+        return try .init(context: context, endpoint: endpoint, receiverStateID: "admission-receiver", progressVersion: "1.2",
+            selection: .init(inline: [batch], commit: .init(kind: .append, table: "hrSample", deviceID: device,
+                batchIDs: [batch.batchId], cursor: batch.endCursor)), inlineGzip: [CloudPushTransport.gzip(batch.body)])
+    }
+
+    private func admissionFiles(_ layout: AccountStorageLayout) throws -> [String: Data] {
+        var result: [String: Data] = [:]
+        for url in try FileManager.default.contentsOfDirectory(at: layout.uploadDirectory, includingPropertiesForKeys: [.isRegularFileKey]) {
+            if try url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true {
+                result[url.lastPathComponent] = try Data(contentsOf: url)
+            }
+        }
+        return result
+    }
+
+    func testFreshPreferenceBoundaryRejectsBeforeAnyReservationOrBodyWrite() async throws {
+        let (root, context, layout) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let adapter = UploadAdapter(), calls = UploadAdmissionCount()
+        let q = try queue(context, layout, adapter, capacity: 8_000_000)
+        let selection = try admissionSelection(context)
+        let before = try admissionFiles(layout)
+        do {
+            try await q.prepareSelection(selection, captured: context, beforeFreshAdmission: {
+                calls.add(); throw CancellationError()
+            })
+            XCTFail("revoked preference admitted a new immutable selection")
+        } catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertEqual(calls.value, 1)
+        XCTAssertEqual(try admissionFiles(layout), before)
+        XCTAssertTrue(try CloudUploadJournal(directory: layout.uploadDirectory).load().isEmpty)
+        let saved = try await q.preparedSelections(sourceID: selection.sourceID, endpoint: endpoint,
+            receiverStateID: selection.receiverStateID, captured: context)
+        XCTAssertTrue(saved.isEmpty)
+        try await q.reconcile()
+        XCTAssertEqual(adapter.count, 0)
+    }
+
+    func testExactReservedReplaySkipsFreshBoundaryButChangedSameIDBytesAreRejected() async throws {
+        let (root, context, layout) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let adapter = UploadAdapter(), calls = UploadAdmissionCount()
+        let q = try queue(context, layout, adapter, capacity: 8_000_000)
+        let selection = try admissionSelection(context)
+        try await q.prepareSelection(selection, captured: context, beforeFreshAdmission: { calls.add() })
+        XCTAssertEqual(calls.value, 1)
+        let before = try admissionFiles(layout)
+        let replay = try admissionSelection(.init(scope: context.scope, generation: UUID()))
+        XCTAssertEqual(replay.id, selection.id)
+        XCTAssertNotEqual(replay.capturedGeneration, selection.capturedGeneration)
+        try await q.prepareSelection(replay, captured: context, beforeFreshAdmission: {
+            XCTFail("exact reservation required new preference authority"); throw CancellationError()
+        })
+        XCTAssertEqual(try admissionFiles(layout), before, "first capture generation/correlation/bytes must survive replay")
+        let changed = try admissionSelection(context, row: 2)
+        XCTAssertNotEqual(changed.id, selection.id)
+        var forged = try XCTUnwrap(JSONSerialization.jsonObject(with: changed.encoded()) as? [String: Any])
+        forged["id"] = selection.id
+        XCTAssertThrowsError(try CloudPushPreparedSelection.decode(JSONSerialization.data(withJSONObject: forged))) {
+            XCTAssertEqual($0 as? CloudUploadError, .corruptJournal)
+        }
+        do {
+            try await q.prepareSelection(changed, captured: context, beforeFreshAdmission: { throw CancellationError() })
+            XCTFail("new bytes borrowed the old reservation's admission")
+        } catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertEqual(try admissionFiles(layout), before)
+        XCTAssertEqual(adapter.count, 0)
+        // Existing-ID replay must still verify the published body's immutable bytes.
+        let journal = try CloudUploadJournal(directory: layout.uploadDirectory)
+        let job = try XCTUnwrap(journal.load()[selection.jobID(batchID: selection.commit.batchIDs[0], representation: "identity")])
+        let bodyPath = try journal.bodyURL(job)
+        let changedBody = Data("changed bytes under the same reserved identity".utf8)
+        try changedBody.write(to: bodyPath)
+        do {
+            try await q.prepareSelection(selection, captured: context, beforeFreshAdmission: {
+                XCTFail("immutable replay corruption is not a request for new admission"); throw CancellationError()
+            })
+            XCTFail("existing ID hid changed immutable bytes")
+        } catch { XCTAssertEqual(error as? CloudUploadError, .changedPayload) }
+        XCTAssertEqual(try Data(contentsOf: bodyPath), changedBody, "rejection must retain corrupt evidence, not overwrite it")
+    }
+
+    func testTornReservedPublicationKeepsExactAdmissionAfterPreferenceRevocation() async throws {
+        let (root, context, _) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let selection = try admissionSelection(context)
+        for position in [1, 3, 7] {
+            let layout = AccountStorageLayout(baseDirectory: root.appendingPathComponent("write-\(position)"), scope: context.scope)
+            let writes = UploadAdmissionCount(), checks = UploadAdmissionCount(), adapter = UploadAdapter()
+            let q = try CloudUploadQueue(context: context, layout: layout, adapter: adapter,
+                authorize: { _ in XCTFail("preparation cannot authorize delivery"); throw CloudUploadError.unavailable },
+                isCurrent: { _ in true }, policy: { .init(concurrency: 2, allowsCellular: false, allowsConstrained: false) },
+                control: { _ in throw CloudUploadError.unavailable }, maximumBytes: 8_000_000,
+                journalWriteObserver: { _ in
+                    XCTAssertEqual(checks.value, 1, "every write follows the original boundary check")
+                    writes.add()
+                    if writes.value == position { throw CloudUploadError.unavailable }
+                })
+            do {
+                try await q.prepareSelection(selection, captured: context, beforeFreshAdmission: { checks.add() })
+                XCTFail("missing injected publication failure")
+            } catch { XCTAssertEqual(error as? CloudUploadError, .unavailable) }
+            try await q.prepareSelection(selection, captured: context, beforeFreshAdmission: {
+                XCTFail("torn reservation recaptured preference authority"); throw CancellationError()
+            })
+            let journal = try CloudUploadJournal(directory: layout.uploadDirectory)
+            try journal.loadSelections(owner: context.scope)
+            XCTAssertEqual(journal.continuations[selection.id]?.published, true)
+            XCTAssertEqual(try Data(contentsOf: layout.uploadDirectory.appendingPathComponent(selection.id + ".selection")), try selection.encoded())
+            let jobs = try journal.load()
+            XCTAssertEqual(jobs.count, 2)
+            for job in jobs.values { try journal.verifyBody(job); XCTAssertEqual(job.deliveryAdmitted, false) }
+            try await q.reconcile()
+            XCTAssertEqual(adapter.count, 0)
+            XCTAssertEqual(checks.value, 1)
+            await q.suspend()
+        }
+    }
+
+    func testReservedReplayStillRequiresCurrentCapturedAccount() async throws {
+        let (root, context, layout) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let account = UploadFence(), adapter = UploadAdapter()
+        let q = try queue(context, layout, adapter, current: { _ in account.current }, capacity: 8_000_000)
+        let selection = try admissionSelection(context)
+        try await q.prepareSelection(selection, captured: context)
+        let before = try admissionFiles(layout)
+        account.revoke()
+        do {
+            try await q.prepareSelection(selection, captured: context, beforeFreshAdmission: {
+                XCTFail("account revocation must precede preference admission")
+            })
+            XCTFail("exact bytes bypassed account fencing")
+        } catch { XCTAssertEqual(error as? CloudUploadError, .staleOwner) }
+        XCTAssertEqual(try admissionFiles(layout), before)
+        XCTAssertEqual(adapter.count, 0)
+    }
+
+    func testPreferenceRevocationDuringAuthorizationAllowsOnlyAlreadyReservedBytes() async throws {
+        let (root, context, layout) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let preference = UploadFence(), adapter = UploadAdapter(), gate = UploadAuthorizationGate()
+        let entered = expectation(description: "admitted delivery awaiting synthetic credentials")
+        defer { Task { await gate.release() } }
+        let q = try CloudUploadQueue(context: context, layout: layout, adapter: adapter,
+            authorize: { _ in entered.fulfill(); return await gate.token() }, isCurrent: { _ in true },
+            policy: { .init(concurrency: 2, allowsCellular: false, allowsConstrained: false) },
+            control: { _ in throw CloudUploadError.unavailable }, maximumBytes: 8_000_000)
+        let selection = try admissionSelection(context), batch = try selection.selection.restoredInlineBatches()[0]
+        let check: @Sendable () throws -> Void = { guard preference.current else { throw CancellationError() } }
+        try await q.prepareSelection(selection, captured: context, beforeFreshAdmission: check)
+        let headers = ["Content-Type": "application/x-ndjson; charset=utf-8", "Content-Encoding": "gzip"]
+        let pending = Task {
+            try await q.request(endpoint: endpoint, body: selection.inlineGzip[0], headers: headers,
+                captured: context, receiverStateID: selection.receiverStateID, batchID: batch.batchId, selectionID: selection.id)
+        }
+        defer { pending.cancel() }
+        await fulfillment(of: [entered], timeout: 2)
+        preference.revoke()
+        let unrelated = try admissionSelection(context, device: "not-previously-admitted")
+        do {
+            try await q.prepareSelection(unrelated, captured: context, beforeFreshAdmission: check)
+            XCTFail("authorization suspension admitted new preference bytes")
+        } catch { XCTAssertTrue(error is CancellationError) }
+        await gate.release()
+        try await eventually { adapter.count == 1 }
+        let task = try XCTUnwrap(adapter.first)
+        XCTAssertEqual(try Data(contentsOf: task.file), selection.inlineGzip[0])
+        let receipt = try W5ReceiptFixture.bytes(W5ReceiptFixture.inline(batch, owner: context.scope.userID))
+        await q.receive(task.task, status: 200, body: receipt, error: false)
+        let response = try await pending.value
+        try await q.validateResponse(batch: batch, response: response, captured: context,
+            receiverStateID: selection.receiverStateID, selectionID: selection.id)
+        let journal = try CloudUploadJournal(directory: layout.uploadDirectory)
+        let saved = try journal.load()
+        XCTAssertEqual(saved.count, 2)
+        XCTAssertNotNil(saved[selection.jobID(batchID: batch.batchId, representation: "gzip")]?.validatedReceipt)
+        XCTAssertTrue(saved.values.allSatisfy { $0.preparedSelectionID == selection.id && !$0.acknowledged })
+        XCTAssertEqual(adapter.count, 1)
+        // A transfer receipt alone is not source cleanup or current preference-job settlement.
+        try journal.loadSelections(owner: context.scope)
+        XCTAssertEqual(journal.continuations[selection.id]?.sourceCommitted, false)
+    }
+}
+
+private final class UploadAdmissionCount: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    func add() { lock.lock(); defer { lock.unlock() }; count += 1 }
+    var value: Int { lock.lock(); defer { lock.unlock() }; return count }
 }
 
 private final class UploadFence: @unchecked Sendable {

@@ -268,7 +268,7 @@ private struct ScoringInputConflictControls: View {
             if actions.loadPhase == .loaded, actions.conflicts.isEmpty {
                 Text("No changes currently need conflict review. This does not confirm that all pending uploads reached the server.")
             }
-            if let message = actions.listMessage { Text(message).foregroundStyle(StrandPalette.statusWarning) }
+            if let message = actions.listMessage { Text(message).foregroundStyle(StrandPalette.textPrimary) }
             LazyVStack(alignment: .leading, spacing: NoopMetrics.space2) {
                 ForEach(actions.conflicts, id: \.pending.id) { conflict in
                     Button {
@@ -322,7 +322,7 @@ private struct ScoringInputConflictSheet: View {
                             Text("Reviewed server head revision: \(head.headRevision)")
                         } else { Text("Server head revision has not been verified for this review.") }
                         Text(ScoringInputConflictActions.unknownServerValues)
-                            .foregroundStyle(StrandPalette.statusWarning)
+                            .foregroundStyle(StrandPalette.textPrimary)
                         Button(actions.reviewPhase == .checking ? "Checking server revision…" : "Check server revision") {
                             Task { await actions.checkHead() }
                         }
@@ -385,7 +385,7 @@ private struct ScoringInputConflictSheet: View {
                 ScoringPayloadTextView(text: text).frame(height: 260)
                     .accessibilityLabel("Complete read-only queued JSON payload")
             }
-            if let error = actions.payloadError { Text(error).foregroundStyle(StrandPalette.statusWarning) }
+            if let error = actions.payloadError { Text(error).foregroundStyle(StrandPalette.textPrimary) }
             Button("Close payload") { actions.closePayload() }
                 .keyboardShortcut(.cancelAction).frame(minHeight: 44)
         }

@@ -16,13 +16,14 @@ object ServerScoringSettings {
     /** During an active offload, flush push at most once per this interval (spec: ≤10 s). */
     const val SYNC_PUSH_INTERVAL_MS = 10_000L
 
-    fun skipsSyncCoupledRescore(context: Context): Boolean = isEnabled(context)
+    // Android has not activated complete per-metric server ownership yet.
+    fun skipsSyncCoupledRescore(context: Context): Boolean = false
 
     fun prefs(context: Context): SharedPreferences =
-        context.getSharedPreferences("noop_server_scoring", Context.MODE_PRIVATE)
+        com.noop.account.AccountStorageContext.capture(context).getSharedPreferences("noop_server_scoring", Context.MODE_PRIVATE)
 
     fun isEnabled(context: Context): Boolean =
-        prefs(context).getBoolean(DEFAULTS_KEY, true)
+        prefs(context).getBoolean(DEFAULTS_KEY, false)
 
     fun setEnabled(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(DEFAULTS_KEY, enabled).apply()

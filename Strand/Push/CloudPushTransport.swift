@@ -10,18 +10,22 @@ struct CloudPushTransport: PushTransport {
     private let bearerToken: String
     private let session: URLSession
     private let context: AccountSessionContext?
+    private let dependentAdmission: SyncEngine.DependentStageAdmission?
     private let destination = CloudPushReceiverBinding()
 
     init(
         endpoint: PushValidEndpoint,
         bearerToken: String,
         context: AccountSessionContext? = nil,
-        session: URLSession = CloudPushTransport.makeSession()
+        session: URLSession = CloudPushTransport.makeSession(),
+        dependentAdmission: SyncEngine.DependentStageAdmission? = nil
     ) {
         self.endpoint = endpoint
         self.bearerToken = bearerToken
         self.session = session
         self.context = context
+        self.dependentAdmission = dependentAdmission
+        if dependentAdmission != nil { destination.requirePrepared() }
     }
 
     func capabilities() async throws -> PushCapabilitiesResult {
@@ -62,6 +66,8 @@ struct CloudPushTransport: PushTransport {
     }
 
     func postBinary(_ batch: PushBinaryBatch) async throws -> PushTransportResponse {
+        // Guarded raw uploads use the prepared object lane, never the unprepared legacy POST.
+        guard dependentAdmission == nil else { throw CloudUploadError.invalidRequest }
         let manifestHeader = batch.manifestJSON.base64EncodedString()
         return try await execute(
             body: batch.payload,
@@ -172,7 +178,15 @@ struct CloudPushTransport: PushTransport {
         let value = try CloudPushPreparedSelection(context: captured, endpoint: endpoint.url,
             receiverStateID: state, progressVersion: progressVersion, selection: selection,
             inlineGzip: selection.restoredInlineBatches().map { try Self.gzip($0.body) })
-        try await queue.prepareSelection(value, captured: captured)
+        // Validate the captured evaluation AFTER encoding. The actor-local check closes the hop
+        // to reservation; neither step recaptures preferences or downgrades a failed admission.
+        // False may still replay an exact existing reservation under its W5 account/source rules.
+        let validated = await dependentAdmission?.validate() ?? true
+        let capturedAdmission = dependentAdmission
+        try await queue.prepareSelection(value, captured: captured, beforeFreshAdmission: {
+            guard validated else { throw CancellationError() }
+            try capturedAdmission?.checkBoundary()
+        })
     }
 
     func preparedSelectionID(batchID: String, sourceID: String) async throws -> String {

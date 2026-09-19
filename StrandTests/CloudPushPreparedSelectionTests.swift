@@ -9,6 +9,20 @@ import GRDB
 @testable import Strand
 #endif
 
+private func preparedSelectionFixtureBaseDirectory() throws -> URL {
+    guard let path = ProcessInfo.processInfo.environment["NARA_TEST_FIXTURE_ROOT"] else {
+        return FileManager.default.temporaryDirectory
+    }
+    var isDirectory: ObjCBool = false
+    guard path.hasPrefix("/"), !path.utf8.contains(0),
+          FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory), isDirectory.boolValue else {
+        throw NSError(domain: "NARATestFixtureRoot", code: 1, userInfo: [
+            NSLocalizedDescriptionKey: "NARA_TEST_FIXTURE_ROOT must name an existing absolute directory"
+        ])
+    }
+    return URL(fileURLWithPath: path, isDirectory: true)
+}
+
 final class CloudPushPreparedSelectionTests: XCTestCase {
     private let endpoint = "https://project.example/functions/v1/push"
     private let receiver = "99999999-9999-4999-8999-999999999999"
@@ -27,8 +41,10 @@ final class CloudPushPreparedSelectionTests: XCTestCase {
         let imuSource: (any ImuSessionPushSource)?
         var snapshot: CloudPushSnapshot { .init(db: store.registryWriter, imuPushSource: imuSource) }
     }
-    private func fixture(root: URL? = nil, imuSource: (any ImuSessionPushSource)? = nil) async throws -> Fixture {
-        let root = root ?? FileManager.default.temporaryDirectory.appendingPathComponent("prepared-selection-" + UUID().uuidString)
+    private func fixture(root: URL? = nil, imuSource: (any ImuSessionPushSource)? = nil,
+                         dependentAdmission: SyncEngine.DependentStageAdmission? = nil) async throws -> Fixture {
+        let temporary = try preparedSelectionFixtureBaseDirectory()
+        let root = root ?? temporary.appendingPathComponent("prepared-selection-" + UUID().uuidString)
         let scope = try AccountScope(projectURL: "https://project.example", userID: W5ReceiptFixture.owner)
         let context = AccountSessionContext(scope: scope, generation: UUID())
         let layout = AccountStorageLayout(baseDirectory: root, scope: scope)
@@ -43,7 +59,7 @@ final class CloudPushPreparedSelectionTests: XCTestCase {
             sessionConfiguration: configuration)
         CloudPushBackgroundRuntime.install(runtime)
         let transport = CloudPushTransport(endpoint: .init(url: endpoint, host: "project.example"), bearerToken: "synthetic",
-            context: context, session: session)
+            context: context, session: session, dependentAdmission: dependentAdmission)
         try transport.bindReceiverState(receiver); transport.requirePreparedSelections()
         return .init(root: root, context: context, layout: layout, store: store, runtime: runtime, session: session, transport: transport, imuSource: imuSource)
     }
@@ -938,6 +954,257 @@ final class CloudPushPreparedSelectionTests: XCTestCase {
         } catch { await close(f); throw error }
         await close(f)
     }
+    @MainActor
+    private func preferenceAdmission(_ fence: PreparedPreferenceFence, reportCurrent: Bool? = nil,
+                                     revalidate: @escaping () async -> Bool = { true }) -> SyncEngine.DependentStageAdmission {
+        .init(current: { reportCurrent ?? fence.current }, revalidate: revalidate,
+              boundaryCheck: { try fence.check() },
+              settleCaptured: { XCTFail("transport must not settle the current preference job"); return false })
+    }
+
+    private func assertNoPreparedPublication(_ f: Fixture, file: StaticString = #filePath, line: UInt = #line) async throws {
+        let saved = try await f.runtime.queue.preparedSelections(sourceID: source, endpoint: endpoint,
+            receiverStateID: receiver, captured: f.context)
+        XCTAssertTrue(saved.isEmpty, file: file, line: line)
+        XCTAssertTrue(try CloudUploadJournal(directory: f.layout.uploadDirectory).load().isEmpty, file: file, line: line)
+        let files = try FileManager.default.contentsOfDirectory(at: f.layout.uploadDirectory, includingPropertiesForKeys: nil)
+        XCTAssertFalse(files.contains { ["selection", "continuation", "body", "json"].contains($0.pathExtension) }, file: file, line: line)
+    }
+
+    func testCapturedPreferenceRevokedDuringPostEncodingValidationCannotFallBackToNil() async throws {
+        let fence = PreparedPreferenceFence(), gate = PreparedValidationGate()
+        let entered = expectation(description: "encoded payload reached async preference validation")
+        let admission = await preferenceAdmission(fence, revalidate: { entered.fulfill(); return await gate.value() })
+        let f = try await fixture(dependentAdmission: admission)
+        defer { Task { await gate.release() } }
+        do {
+            PreparedURLProtocol.set { _ in XCTFail("invalid admission issued network work"); throw PreparedStop.crash }
+            let saved = try append(f)
+            let pending = Task { try await f.transport.prepareSelection(saved.selection, progressVersion: saved.progressVersion) }
+            defer { pending.cancel() }
+            await fulfillment(of: [entered], timeout: 2)
+            fence.revoke()
+            await gate.release()
+            do { try await pending.value; XCTFail("revoked validation became an unguarded selection") }
+            catch { XCTAssertTrue(error is CancellationError) }
+            XCTAssertEqual(fence.boundaryChecks, 0, "failed metadata validation must deny fresh admission itself")
+            try await assertNoPreparedPublication(f)
+        } catch { await close(f); throw error }
+        await close(f)
+    }
+
+    func testSynchronousPreferenceBoundaryRejectsAfterEncodingBeforeQueueActorEntry() async throws {
+        let fence = PreparedPreferenceFence()
+        let validated = expectation(description: "encoded payload's metadata was validated")
+        // Keep the async metadata answer true to isolate the independent synchronous fence.
+        let admission = await preferenceAdmission(fence, reportCurrent: true, revalidate: { validated.fulfill(); return true })
+        let f = try await fixture(dependentAdmission: admission)
+        let entered = expectation(description: "queue actor held before reservation")
+        let barrier = PreparedQueueEntryBarrier(entered: entered)
+        defer { barrier.release() }
+        do {
+            PreparedURLProtocol.set { _ in XCTFail("stale actor entry issued network work"); throw PreparedStop.crash }
+            let saved = try append(f)
+            let holding = Task { await f.runtime.queue.holdPreparedPreferenceTestEntry(barrier) }
+            await fulfillment(of: [entered], timeout: 2)
+            let pending = Task { try await f.transport.prepareSelection(saved.selection, progressVersion: saved.progressVersion) }
+            defer { pending.cancel() }
+            await fulfillment(of: [validated], timeout: 2)
+            fence.revoke()
+            barrier.release()
+            await holding.value
+            do { try await pending.value; XCTFail("actor hop bypassed the captured boundary fence") }
+            catch { XCTAssertTrue(error is CancellationError) }
+            XCTAssertEqual(fence.boundaryChecks, 1)
+            try await assertNoPreparedPublication(f)
+        } catch { barrier.release(); await close(f); throw error }
+        await close(f)
+    }
+
+    func testCurrentPreferenceReservationReplaysExactBytesAfterRevokeButRefusesFreshDevice() async throws {
+        let fence = PreparedPreferenceFence()
+        let admission = await preferenceAdmission(fence)
+        let f = try await fixture(dependentAdmission: admission)
+        do {
+            let saved = try append(f), batch = try saved.selection.restoredInlineBatches()[0]
+            try await f.transport.prepareSelection(saved.selection, progressVersion: saved.progressVersion)
+            XCTAssertEqual(fence.boundaryChecks, 1)
+            let path = f.layout.uploadDirectory.appendingPathComponent(saved.id + ".selection")
+            let original = try Data(contentsOf: path)
+            fence.revoke()
+            try await f.transport.prepareSelection(saved.selection, progressVersion: saved.progressVersion)
+            XCTAssertEqual(fence.boundaryChecks, 1, "exact replay must not acquire a replacement admission")
+            XCTAssertEqual(try Data(contentsOf: path), original)
+            let fresh = try append(f, device: "not-admitted")
+            do {
+                try await f.transport.prepareSelection(fresh.selection, progressVersion: fresh.progressVersion)
+                XCTFail("revoked preference selected new device bytes")
+            } catch { XCTAssertTrue(error is CancellationError) }
+            let requests = PreparedRequestCount()
+            let response = try W5ReceiptFixture.bytes(W5ReceiptFixture.inline(batch, owner: f.context.scope.userID))
+            PreparedURLProtocol.set { request in
+                requests.add()
+                XCTAssertEqual(try PreparedURLProtocol.body(request), saved.inlineGzip[0])
+                return (200, response)
+            }
+            let received = try await f.transport.post(batch)
+            XCTAssertEqual(received.body, response)
+            XCTAssertEqual(requests.value, 1)
+            let journal = try CloudUploadJournal(directory: f.layout.uploadDirectory)
+            let jobs = try journal.load()
+            XCTAssertEqual(jobs.count, 2)
+            XCTAssertTrue(jobs.values.allSatisfy { $0.preparedSelectionID == saved.id && !$0.acknowledged })
+            XCTAssertNotNil(jobs[saved.jobID(batchID: batch.batchId, representation: "gzip")]?.validatedReceipt)
+            XCTAssertEqual(try Data(contentsOf: path), original)
+        } catch { await close(f); throw error }
+        await close(f)
+    }
+
+    func testAccountTransportKeepsCapturedPreferenceAcrossCapabilityResponse() async throws {
+        let fence = PreparedPreferenceFence()
+        let admission = await preferenceAdmission(fence)
+        let f = try await fixture()
+        do {
+            let requests = PreparedRequestCount()
+            let capabilities = try W5ReceiptFixture.bytes(["type": "capabilities", "protocolVersion": "1.2",
+                "receiverStateId": receiver, "userId": f.context.scope.userID,
+                "streams": ["hrSample"], "maxRecords": 1000, "maxBodyBytes": 1_048_576])
+            PreparedURLProtocol.set { request in
+                requests.add(); XCTAssertEqual(request.httpMethod, "GET")
+                fence.revoke() // Accepted while the actual synthetic capability await is in flight.
+                return (200, capabilities)
+            }
+            let transport = try CloudAccountPushTransport(endpoint: .init(url: endpoint, host: "project.example"),
+                context: f.context, accessToken: "synthetic", session: f.session, isCurrent: { _ in true },
+                dependentAdmission: admission)
+            guard case .available = try await transport.capabilities() else { throw PreparedStop.crash }
+            let saved = try append(f)
+            do {
+                try await transport.base.prepareSelection(saved.selection, progressVersion: saved.progressVersion)
+                XCTFail("capability response lost the captured preference")
+            } catch { XCTAssertTrue(error is CancellationError) }
+            XCTAssertEqual(requests.value, 1)
+            try await assertNoPreparedPublication(f)
+        } catch { await close(f); throw error }
+        await close(f)
+    }
+
+    func testGuardedTransportCannotBypassReservationWithDirectPayloadHelpers() async throws {
+        let fence = PreparedPreferenceFence()
+        let admission = await preferenceAdmission(fence)
+        let f = try await fixture()
+        do {
+            PreparedURLProtocol.set { _ in XCTFail("unprepared helper started a request"); throw PreparedStop.crash }
+            // Deliberately do NOT call requirePreparedSelections: carrying the capability is enough.
+            let transport = CloudPushTransport(endpoint: .init(url: endpoint, host: "project.example"),
+                bearerToken: "synthetic", context: f.context, session: f.session, dependentAdmission: admission)
+            try transport.bindReceiverState(receiver)
+            let inline = try append(f).selection.restoredInlineBatches()[0]
+            let (binary, _) = try await raw(f)
+            do { _ = try await transport.post(inline); XCTFail("unguarded inline POST") }
+            catch { XCTAssertEqual(error as? CloudUploadError, .invalidRequest) }
+            do { _ = try await transport.postBinary(binary); XCTFail("unguarded legacy binary POST") }
+            catch { XCTAssertEqual(error as? CloudUploadError, .invalidRequest) }
+            do { _ = try await transport.createObjectIntent(.init(batch: binary), lane: lane); XCTFail("unguarded object intent") }
+            catch { XCTAssertEqual(error as? CloudUploadError, .invalidRequest) }
+            try await assertNoPreparedPublication(f)
+            let unsynced = try await f.store.registryWriter.read {
+                try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM rawBatch WHERE syncedAt IS NULL")
+            }
+            XCTAssertEqual(unsynced, 1)
+        } catch { await close(f); throw error }
+        await close(f)
+    }
+
+    func testPreferenceRevocationAfterObjectAdmissionPreservesReceiptAssociationAndSourceCleanup() async throws {
+        let fence = PreparedPreferenceFence()
+        let admission = await preferenceAdmission(fence)
+        let f = try await fixture(dependentAdmission: admission)
+        do {
+            let (batch, _) = try await raw(f)
+            try serveObject(batch)
+            let p = try progress(f, version: "1.2")
+            let result = await coordinator(f, p, version: "1.2", beforeAssociation: { fence.revoke() }, freshSource: true)
+                .pushObjects(.rawBatch, deviceId: device, lane: lane)
+            guard case .accepted = result else { throw PreparedStop.rejected(String(describing: result)) }
+            XCTAssertFalse(fence.current)
+            XCTAssertEqual(fence.boundaryChecks, 1)
+            let synced = try await f.store.registryWriter.read {
+                try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM rawBatch WHERE syncedAt IS NOT NULL")
+            }
+            XCTAssertEqual(synced, 1)
+            XCTAssertTrue(try CloudUploadJournal(directory: f.layout.uploadDirectory).load().isEmpty)
+            let debt = await p.pendingCommits(); XCTAssertTrue(debt.isEmpty)
+            let selections = try await f.runtime.queue.preparedSelections(sourceID: source, endpoint: endpoint,
+                receiverStateID: receiver, captured: f.context)
+            XCTAssertTrue(selections.isEmpty)
+        } catch { await close(f); throw error }
+        await close(f)
+    }
+
+    func testLegacyReservedObjectRecoveryDoesNotRequireOrCertifyCurrentPreference() async throws {
+        let fence = PreparedPreferenceFence()
+        fence.revoke()
+        let admission = await preferenceAdmission(fence)
+        let f = try await fixture(dependentAdmission: admission)
+        do {
+            let (batch, rows) = try await raw(f)
+            let saved = try binarySelection(f, batch: batch, rows: rows)
+            // Legacy caller's immutable W5 operation carries no retroactive preference certificate.
+            try await f.runtime.queue.prepareSelection(saved, captured: f.context)
+            try serveObject(batch)
+            let blocked = try await CloudPushPreparedRecovery.recover(queue: f.runtime.queue, context: f.context,
+                sourceID: source, endpoint: endpoint, receiverStateID: receiver, directory: f.runtime.progressDirectory,
+                coordinator: { self.coordinator(f, $0, version: $1) })
+            XCTAssertFalse(blocked)
+            XCTAssertEqual(fence.boundaryChecks, 0)
+            let current = await admission.validate(); XCTAssertFalse(current)
+            let synced = try await f.store.registryWriter.read {
+                try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM rawBatch WHERE syncedAt IS NOT NULL")
+            }
+            XCTAssertEqual(synced, 1)
+            XCTAssertTrue(try CloudUploadJournal(directory: f.layout.uploadDirectory).load().isEmpty)
+        } catch { await close(f); throw error }
+        await close(f)
+    }
+}
+
+private final class PreparedPreferenceFence: @unchecked Sendable {
+    private let lock = NSLock()
+    private var valid = true
+    private var checks = 0
+    var current: Bool { lock.lock(); defer { lock.unlock() }; return valid }
+    var boundaryChecks: Int { lock.lock(); defer { lock.unlock() }; return checks }
+    func revoke() { lock.lock(); defer { lock.unlock() }; valid = false }
+    func check() throws {
+        lock.lock(); defer { lock.unlock() }; checks += 1
+        guard valid else { throw CancellationError() }
+    }
+}
+
+private actor PreparedValidationGate {
+    private var open = false
+    private var waiting: CheckedContinuation<Bool, Never>?
+    func value() async -> Bool {
+        if open { return true }
+        return await withCheckedContinuation { waiting = $0 }
+    }
+    func release() { open = true; waiting?.resume(returning: true); waiting = nil }
+}
+
+private final class PreparedQueueEntryBarrier: @unchecked Sendable {
+    private let entered: XCTestExpectation
+    private let released = DispatchSemaphore(value: 0)
+    init(entered: XCTestExpectation) { self.entered = entered }
+    func hold() {
+        entered.fulfill()
+        XCTAssertEqual(released.wait(timeout: .now() + 5), .success, "test queue barrier timed out")
+    }
+    func release() { released.signal() }
+}
+
+private extension CloudUploadQueue {
+    func holdPreparedPreferenceTestEntry(_ barrier: PreparedQueueEntryBarrier) { barrier.hold() }
 }
 
 private enum PreparedStop: Error { case crash, rejected(String) }
@@ -1034,7 +1301,7 @@ final class PreparedWriteErrorReviewTests: XCTestCase {
     private func fixture() throws -> (AccountStorageLayout, AccountSessionContext) {
         let scope = try AccountScope(projectURL: "https://project.example", userID: "11111111-1111-4111-8111-111111111111")
         let context = AccountSessionContext(scope: scope, generation: UUID())
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("prepared-write-review-" + UUID().uuidString)
+        let directory = try preparedSelectionFixtureBaseDirectory().appendingPathComponent("prepared-write-review-" + UUID().uuidString)
         roots.append(directory)
         return (.init(baseDirectory: directory, scope: scope), context)
     }

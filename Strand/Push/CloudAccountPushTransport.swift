@@ -10,14 +10,17 @@ struct CloudAccountPushTransport: PushTransport {
     private let isCurrent: @Sendable (AccountSessionContext) -> Bool
     private let session: URLSession
 
-    init(endpoint: PushValidEndpoint, authorization: AuthorizedCloudSession) throws {
+    init(endpoint: PushValidEndpoint, authorization: AuthorizedCloudSession,
+         dependentAdmission: SyncEngine.DependentStageAdmission? = nil) throws {
         try self.init(endpoint: endpoint, context: authorization.context, accessToken: authorization.accessToken,
-                      session: CloudPushTransport.makeSession(), isCurrent: { CloudAuthClient.isCurrent($0) })
+                      session: CloudPushTransport.makeSession(), isCurrent: { CloudAuthClient.isCurrent($0) },
+                      dependentAdmission: dependentAdmission)
         base.requirePreparedSelections()
     }
 
     init(endpoint: PushValidEndpoint, context: AccountSessionContext, accessToken: String,
-         session: URLSession, isCurrent: @escaping @Sendable (AccountSessionContext) -> Bool) throws {
+         session: URLSession, isCurrent: @escaping @Sendable (AccountSessionContext) -> Bool,
+         dependentAdmission: SyncEngine.DependentStageAdmission? = nil) throws {
         let expected = context.scope.projectURL + "/functions/v1/push"
         guard endpoint.url.trimmingCharacters(in: CharacterSet(charactersIn: "/")) == expected else {
             throw AccountAuthError.invalidIdentity
@@ -26,7 +29,7 @@ struct CloudAccountPushTransport: PushTransport {
         self.context = context; self.accessToken = accessToken
         self.isCurrent = isCurrent; self.session = session
         self.base = CloudPushTransport(endpoint: endpoint, bearerToken: accessToken,
-                                       context: context, session: session)
+                                       context: context, session: session, dependentAdmission: dependentAdmission)
     }
 
     func capabilities() async throws -> PushCapabilitiesResult {

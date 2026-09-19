@@ -396,8 +396,8 @@ fun TodayScreen(
         if (selectedDayOffset == 0) today?.day ?: selectedDay.toString() else selectedDay.toString()
     }
     val context = LocalContext.current
-    val lastServerFetch by viewModel.serverScores.lastFetchedAtMs.collectAsStateWithLifecycle()
-    val serverOverlay = remember(selectedDayKey, lastServerFetch) {
+    val serverDays by viewModel.serverScores.days.collectAsStateWithLifecycle()
+    val serverOverlay = remember(selectedDayKey, serverDays) {
         viewModel.serverScores.overlay(selectedDayKey)
     }
     LaunchedEffect(selectedDayKey) {
@@ -439,7 +439,6 @@ fun TodayScreen(
     }
     // Display-only unit system + the SI profile weight, read once like every other Settings-backed
     // preference (SharedPreferences isn't reactive, a Settings write triggers recomposition).
-    val context = LocalContext.current
     val unitSystem = UnitPrefs.system(context)
     // Effort display scale (#268), drives the Effort tile's value + caption. Display-only.
     val effortScale = UnitPrefs.effortScale(context)

@@ -75,10 +75,16 @@ actor CloudUploadQueue {
         AccountScope.digest("object-v1\u{0}\(endpoint)\u{0}\(receiverStateID)\u{0}\(objectID)")
     }
 
-    func prepareSelection(_ value: CloudPushPreparedSelection, captured: AccountSessionContext) throws {
+    func prepareSelection(_ value: CloudPushPreparedSelection, captured: AccountSessionContext,
+                          beforeFreshAdmission: @Sendable () throws -> Void = {}) throws {
         try check(captured)
         guard value.owner == context.scope else { throw CloudUploadError.staleOwner }
-        try journal.reserve(value, legacyJobs: jobs.values.filter { $0.preparedSelectionID == nil }.count)
+        let legacyJobs = jobs.values.filter { $0.preparedSelectionID == nil }.count
+        // This synchronous actor-local boundary precedes any new reservation/body publication.
+        // An exact existing reservation (including interrupted publication) keeps its original
+        // authority. reserve still verifies its immutable bytes; it is not a new preference claim.
+        if journal.selections[value.id] == nil { try beforeFreshAdmission() }
+        try journal.reserve(value, legacyJobs: legacyJobs)
         guard let saved = journal.selections[value.id], var state = journal.continuations[value.id], !state.sourceCommitted else {
             throw CloudUploadError.corruptJournal
         }

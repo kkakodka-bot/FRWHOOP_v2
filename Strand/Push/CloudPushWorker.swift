@@ -34,7 +34,8 @@ enum CloudPushWorker {
         db: any DatabaseWriter,
         trigger: String,
         markOwed: (@Sendable () async -> Void)? = nil,
-        settleOwed: (@Sendable () async -> Bool)? = nil
+        settleOwed: (@Sendable () async -> Bool)? = nil,
+        dependentAdmission: SyncEngine.DependentStageAdmission? = nil
     ) async -> CloudPushRunOutcome {
         var traceOutcome = SyncPipelineTrace.Outcome.pending
         defer { SyncPipelineTrace.event(.uploadScheduling, outcome: traceOutcome) }
@@ -65,13 +66,15 @@ enum CloudPushWorker {
             authorization = try await CloudAuthClient.authorizedSession()
             guard authorization.context == initial else { throw AccountAuthError.staleOperation }
             try await CloudPushCaptureBindings.validateOwner(db: db, scope: initial.scope)
+            guard await validate(dependentAdmission) else { throw CancellationError() }
             admission = try AccountPushAdmission(
                 context: initial, captureScope: binding.scope, sourceID: binding.sourceID,
                 isCurrent: { context in
                     CloudAuthClient.isCurrent(context) && CloudPushSettings.enabledEndpoint()?.url == endpoint.url
                 }
             )
-            accountTransport = try CloudAccountPushTransport(endpoint: endpoint, authorization: authorization)
+            accountTransport = try CloudAccountPushTransport(endpoint: endpoint, authorization: authorization,
+                                                             dependentAdmission: dependentAdmission)
             accountTransport.base.requirePreparedSelections()
             transport = AccountFencedTransport(
                 transport: accountTransport,
@@ -86,6 +89,9 @@ enum CloudPushWorker {
                     message: "unboundCapture: upload is waiting for the captured database owner.")
             }
             return .deferred
+        } catch is CancellationError {
+            traceOutcome = .cancelled
+            return .deferred
         } catch {
             traceOutcome = .failed
             return .deferred
@@ -97,7 +103,10 @@ enum CloudPushWorker {
             let interval = SyncPipelineTrace.begin(.uploadPreparation)
             var preparationOutcome = SyncPipelineTrace.Outcome.failed
             defer { SyncPipelineTrace.end(interval, outcome: preparationOutcome) }
-            switch try await transport.capabilities() {
+            let result = try await transport.capabilities()
+            guard await validate(dependentAdmission) else { throw CancellationError() }
+            try admission.check()
+            switch result {
             case .available(let value): capabilities = value
             case .rejected(_, let retryable, let failure):
                 traceOutcome = failure?.code == .httpAuth ? .authenticationRequired : .failed
@@ -107,6 +116,9 @@ enum CloudPushWorker {
             }
             try admission.check()
             preparationOutcome = .succeeded
+        } catch is CancellationError {
+            traceOutcome = .cancelled
+            return .deferred
         } catch {
             traceOutcome = CloudAuthClient.isCurrent(initial) ? .failed : .cancelled
             return .deferred
@@ -164,18 +176,23 @@ enum CloudPushWorker {
             preparedBlocked = try await CloudPushPreparedRecovery.recover(queue: runtime.queue, context: initial,
                 sourceID: binding.sourceID, endpoint: endpoint.url, receiverStateID: capabilities.receiverStateId,
                 directory: runtime.progressDirectory, coordinator: makeCoordinator)
+            guard await validate(dependentAdmission) else { throw CancellationError() }
+            try admission.check()
             // Recovery may have changed the current namespace through a separately opened actor.
             // Reopen it before fresh selection rather than retaining a stale in-memory cursor.
             let refreshed = try CloudPushProgressStore(namespace: namespace, directory: runtime.progressDirectory,
                 auxiliaryIdentityV2: capabilities.protocolVersion == PushProtocol.auxiliaryIdentityVersion)
             coordinator = makeCoordinator(refreshed, capabilities.protocolVersion)
-        } catch { traceOutcome = .failed; return .deferred }
+        } catch is CancellationError { traceOutcome = .cancelled; return .deferred }
+        catch { traceOutcome = .failed; return .deferred }
         let run = await coordinator.pushKnownDevices(
             startDeviceIndex: CloudPushSettings.nextDeviceIndex(namespace: namespace),
             maxDevices: maxDevicesPerRun, capabilities: capabilities,
             binaryEnabled: CloudPushSettings.binaryObjectsEnabled
         )
-        guard (try? admission.check()) != nil else { traceOutcome = .cancelled; return .deferred }
+        guard await validate(dependentAdmission), (try? admission.check()) != nil else {
+            traceOutcome = .cancelled; return .deferred
+        }
         if !run.hasRetryableFailure && !preparedBlocked {
             CloudPushSettings.saveNextDeviceIndex(namespace: namespace, index: run.nextDeviceIndex)
         }
@@ -207,12 +224,23 @@ enum CloudPushWorker {
             return .deferred
         }
         guard (try? admission.check()) != nil else { traceOutcome = .cancelled; return .deferred }
-        // Callback belongs to the same captured writer; root must never close over a mutable active store.
-        _ = await settleOwed?()
-        guard (try? admission.check()) != nil else { traceOutcome = .cancelled; return .deferred }
+        // Legacy receipt replay is not proof of the current preference evaluation. A guarded
+        // caller settles separately through SyncEngine's captured, permit-fenced transaction.
+        // The legacy callback remains unchanged for callers without dependent admission.
+        if dependentAdmission == nil { _ = await settleOwed?() }
+        guard await validate(dependentAdmission), (try? admission.check()) != nil else {
+            traceOutcome = .cancelled; return .deferred
+        }
         CloudPushSettings.recordScopedRun(context: initial, state: .complete,
             batches: run.acceptedBatches, records: run.acceptedRecords)
         traceOutcome = .succeeded
         return .completed
+    }
+
+    private static func validate(_ admission: SyncEngine.DependentStageAdmission?) async -> Bool {
+        guard let admission else { return true }
+        guard await admission.validate() else { return false }
+        do { try admission.checkBoundary(); return true }
+        catch { return false }
     }
 }

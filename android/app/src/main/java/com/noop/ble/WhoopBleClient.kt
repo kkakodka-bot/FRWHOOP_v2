@@ -3043,7 +3043,7 @@ class WhoopBleClient(
      * one having never synced — this correctly leaves the display empty and the 5/MG reads "never".
      */
     private fun seedLastSyncFromActiveStrap() {
-        val registry = (context.applicationContext as? com.noop.NoopApplication)?.deviceRegistry ?: return
+        val registry = com.noop.account.AccountStorageContext.runtime(context)?.deviceRegistry ?: return
         ioScope.launch {
             val rows = runCatching { registry.all() }.getOrDefault(emptyList())
             val activeId = runCatching { registry.activeDeviceId() }.getOrNull()
@@ -3221,7 +3221,7 @@ class WhoopBleClient(
                         // WHOOP 4.0's raw ADC (~772) is read as centidegrees (7.7 C), missing the 28-42 C
                         // worn gate entirely. The sync pass would persist that, and the next UI pass would
                         // silently correct it — so the stored value depended on which pass wrote last.
-                        ownerSource = (context.applicationContext as? NoopApplication)
+                        ownerSource = com.noop.account.AccountStorageContext.runtime(context)
                             ?.deviceRegistry?.let { RegistryDayOwnerSource(it) },
                         maxHROverride = profileStore.hrMaxOverride.takeIf { it > 0 }?.toDouble(),
                         // Steps-estimate calibration: honor the user's manual override and persist the fit
@@ -3332,6 +3332,7 @@ class WhoopBleClient(
                 if (!repository.settleSyncJob(rescoreJob)) {
                     analyzeAfterBackfillPending.set(true)
                     return@launch
+                }
                 }
                 }
 
@@ -3828,6 +3829,8 @@ class WhoopBleClient(
 
     @SuppressLint("MissingPermission")
     private fun connectInternal(model: WhoopModel, userInitiated: Boolean) {
+        val account = context as? com.noop.account.AccountStorageContext
+        if (account != null && (account.identity.scope == null || !account.isCurrent())) return
         // #1881: only the SYSTEM path is gated. This class already draws that line — `connect()` is the
         // user's explicit Connect button, `connectFromSystem()` is every automatic path — and the report's
         // complaint is only ever about NOOP acting on its own. Gating both would have made the Connect
@@ -4308,7 +4311,7 @@ class WhoopBleClient(
 
     /** Re-read whether a WHOOP is active and un-block the gate if it is. See [whoopConnectAllowed]. */
     private fun revalidateWhoopIsActive() {
-        val registry = (context.applicationContext as? com.noop.NoopApplication)?.deviceRegistry ?: return
+        val registry = com.noop.account.AccountStorageContext.runtime(context)?.deviceRegistry ?: return
         ioScope.launch {
             val activeId = runCatching { registry.activeDeviceId() }.getOrNull() ?: return@launch
             val rows = runCatching { registry.all() }.getOrNull() ?: return@launch
@@ -4340,7 +4343,7 @@ class WhoopBleClient(
      */
     private fun adoptSourceIdentity(address: String?) {
         val addr = address ?: return
-        val registry = (context.applicationContext as? com.noop.NoopApplication)?.deviceRegistry ?: return
+        val registry = com.noop.account.AccountStorageContext.runtime(context)?.deviceRegistry ?: return
         ioScope.launch {
             val rows = runCatching { registry.all() }.getOrNull() ?: return@launch
             val resolved = SourceIdentity.resolve(addr, rows, deviceId) ?: return@launch
@@ -10164,7 +10167,7 @@ class WhoopBleClient(
         ack.await()
     }
 
-    private fun startBackfillDrain(lease: BackfillDrainGate<BackfillPipelineItem>.Lease) {
+    private fun startBackfillDrain(lease: BackfillDrainGate.Lease) {
         ioScope.launch {
             var ownsDrain = true
             try {
@@ -11366,8 +11369,11 @@ class WhoopBleClient(
      * (e.g. AppViewModel.onCleared) AFTER [disconnect]. Idempotent.
      */
     fun shutdown() {
-        flushDurableLogTail()   // #1263: persist the last partial tail batch before we go away
-        ioScope.cancel()
+        try {
+            continuousImuRecorder.shutdown()
+            ImuSessionFileStore(context).flushAll()
+            flushDurableLogTail()
+        } finally { ioScope.cancel() }
     }
 
     // ====================================================================================

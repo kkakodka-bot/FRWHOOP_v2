@@ -146,7 +146,7 @@ private struct ScoringContextSharingControls: View {
                 .font(StrandFont.caption).foregroundStyle(StrandPalette.textSecondary)
             if let message = actions.message ?? (consent.error == nil ? nil : ScoringContextSharingActions.unconfirmedMessage) {
                 Text(message).fixedSize(horizontal: false, vertical: true)
-                    .foregroundStyle(actions.phase == .failed ? StrandPalette.statusWarning : StrandPalette.textSecondary)
+                    .foregroundStyle(actions.phase == .failed ? StrandPalette.textPrimary : StrandPalette.textSecondary)
             }
             if actions.phase == .failed {
                 Button("Reload saved choices") { Task { await actions.load() } }
