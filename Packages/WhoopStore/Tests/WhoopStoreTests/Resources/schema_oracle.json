@@ -54,9 +54,12 @@
     "v49-durable-ingest-receipts",
     "v50-account-store-owner",
     "v51-v18-aux-record-identity",
-    "v52-scalar-provenance"
+    "v52-scalar-provenance",
+    "v53-standard-hr-capture-journal",
+    "v54-workout-preference-evaluation"
   ],
   "divergenceReasons": {
+    "workout-preference-window-ios-only": "GRDB v54 adds the bounded workout preference evaluation scan index. Android has no equivalent evaluation lane; Room44 remains unchanged. The index does not change workout values or their shared primary key.",
     "integer-rowid-pk-nullability": "GRDB's INTEGER PRIMARY KEY AUTOINCREMENT is a non-null rowid alias although PRAGMA table_info reports notnull=0. Room declares its non-null Long primary key NOT NULL explicitly. Both allocate an integer identity for a null/omitted SQL id; this records the declaration difference without rewriting deployed migrations.",
     "android-orphan-synced-column": "REAL COLUMN DRIFT: `synced` exists on Android only. GRDB's v10 note is explicit that stepSample gets no `synced` column ('unused; see StreamStore'), and v12's ppgHrSample never had one either; the Room entities copied the flag from the older per-second entities. Nothing reads it on Android \u2014 the per-row upload flag belongs to an upload path that does not exist there \u2014 so it is dead width, not divergent data. Removing it needs a Room table rebuild.",
     "battery-alter-append-order": "REAL COLUMN-ORDER DRIFT (CLAUDE.md: 'column order in a Room CREATE TABLE must match the entity field order'). GRDB appended `synced` (v5) then `charging` (v6) with ALTER TABLE, which can only append; the Room entity declares `charging` before `synced`. Same columns, same types, different positions \u2014 so any positional copy (INSERT INTO battery SELECT * FROM \u2026) swaps them. Fixing it means reordering the Room entity's fields, which changes Room's identity hash and therefore needs a version bump plus a no-op migration.",
@@ -69,6 +72,257 @@
     "ppg-record-index-default": "Both platforms preserve device/timestamp/recordIndex identity. Room v40 declares DEFAULT -1 for the explicit unknown legacy identity; GRDB retains its deployed no-default column. Both writers bind the index explicitly, and the wire maps unknown to null."
   },
   "tables": {
+    "workoutPreferenceEvaluation": {
+      "platform": "ios_only",
+      "reason": "Bounded local workout preference evaluation and revision fencing; no health rows, cloud receipt, or pruning authority.",
+      "columns": [
+        {
+          "name": "singleton",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "formatVersion",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "storeID",
+          "affinity": "BLOB",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "workoutRevision",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "revisionOverflow",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "stateSerial",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "stateBytes",
+          "affinity": "BLOB",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "stateSHA256",
+          "affinity": "BLOB",
+          "notNull": true,
+          "default": null
+        }
+      ],
+      "primaryKey": [
+        "singleton"
+      ],
+      "indices": []
+    },
+    "standardHRCaptureSession": {
+      "platform": "ios_only",
+      "reason": "Account-bound local StandardHR capture session and retained-capacity accounting. No cloud receipt or pruning authority.",
+      "columns": [
+        {
+          "name": "ordinal",
+          "affinity": "INTEGER",
+          "notNull": false,
+          "default": null
+        },
+        {
+          "name": "sessionID",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "projectURL",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "userID",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "runtimeGeneration",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "openedAt",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "sealed",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": "0"
+        },
+        {
+          "name": "nextSequence",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": "0"
+        },
+        {
+          "name": "retainedCount",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": "0"
+        },
+        {
+          "name": "retainedBytes",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": "0"
+        },
+        {
+          "name": "sessionChargeBytes",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": null
+        }
+      ],
+      "primaryKey": [
+        "ordinal"
+      ],
+      "indices": []
+    },
+    "standardHRCaptureOccurrence": {
+      "platform": "ios_only",
+      "reason": "Retained exact StandardHR notification bytes, immutable one-notification projection and pending local projection state. Canonical SQL rows do not replace the original occurrence.",
+      "columns": [
+        {
+          "name": "sessionID",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "sequence",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "deviceID",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "hostTimestampSeconds",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "schemaVersion",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "decoderVersion",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "mappingVersion",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "rawBytes",
+          "affinity": "BLOB",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "projectionJSON",
+          "affinity": "BLOB",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "rawSHA256",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "intentSHA256",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "chargeBytes",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "projectionState",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": "0"
+        },
+        {
+          "name": "attempts",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": "0"
+        },
+        {
+          "name": "lastFailureCode",
+          "affinity": "TEXT",
+          "notNull": false,
+          "default": null
+        },
+        {
+          "name": "projectedAt",
+          "affinity": "INTEGER",
+          "notNull": false,
+          "default": null
+        }
+      ],
+      "primaryKey": [
+        "sessionID",
+        "sequence"
+      ],
+      "indices": [
+        {
+          "name": "standardHRCaptureOccurrence_pending",
+          "unique": false,
+          "columns": [
+            "projectionState",
+            "sessionID",
+            "sequence"
+          ]
+        }
+      ]
+    },
     "gpsDestinationBarrier": {
       "platform": "android_only",
       "reason": "Room44 bounded local control state for a fresh destination commit and checked checkpoint before GPS handoff cleanup. Its value is never a reusable durability receipt or physiological input.",
@@ -2765,7 +3019,15 @@
         "startTs",
         "sport"
       ],
-      "indices": []
+      "indices": [
+        {
+          "name": "workout_preference_window_v1",
+          "unique": false,
+          "columns": ["startTs", "deviceId", "sport"],
+          "androidAbsent": true,
+          "divergence": "workout-preference-window-ios-only"
+        }
+      ]
     }
   }
 }

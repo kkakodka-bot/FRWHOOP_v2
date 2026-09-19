@@ -202,8 +202,8 @@ class SchemaOracleTest {
                 problems += "$name: PRIMARY KEY — oracle $wantPk, room ${actual.primaryKey}"
             }
             val wantIdx = spec.getJSONArray("indices").let { arr ->
-                (0 until arr.length()).map { i ->
-                    val o = arr.getJSONObject(i)
+                (0 until arr.length()).map { arr.getJSONObject(it) }
+                    .filterNot { it.optBoolean("androidAbsent", false) }.map { o ->
                     Idx(o.getString("name"), o.getBoolean("unique"), o.getJSONArray("columns").strings())
                 }.sortedBy { it.name }
             }
@@ -288,6 +288,33 @@ class SchemaOracleTest {
             "schema_oracle.json copies differ — keep the Android and Swift copies in lockstep",
             androidBytes.contentEquals(swiftFile!!.readBytes()),
         )
+    }
+
+    @Test
+    fun absentIndexOverridesAreDocumentedAndStillAbsent() {
+        val oracle = loadOracle()
+        val reasons = oracle.getJSONObject("divergenceReasons")
+        val tables = oracle.getJSONObject("tables")
+        val room = roomTables(loadRoomSchema(oracle.getInt("roomVersion")))
+        for (name in tables.keys()) {
+            val table = tables.getJSONObject(name)
+            val indices = table.getJSONArray("indices")
+            for (i in 0 until indices.length()) {
+                val index = indices.getJSONObject(i)
+                if (!index.has("androidAbsent")) {
+                    assertTrue("index reason without an override", !index.has("divergence"))
+                    continue
+                }
+                assertTrue("false absence override changes nothing", index.getBoolean("androidAbsent"))
+                assertEquals("absence override requires a shared table", "both", table.getString("platform"))
+                val reason = index.getString("divergence")
+                assertTrue("missing reason for $name index", reasons.has(reason))
+                assertTrue("empty divergence reason", reasons.getString(reason).isNotBlank())
+                val actual = room.getValue(name)
+                assertTrue("$name index gained an Android twin; remove the override",
+                    actual.indices.none { it.name == index.getString("name") })
+            }
+        }
     }
 }
 

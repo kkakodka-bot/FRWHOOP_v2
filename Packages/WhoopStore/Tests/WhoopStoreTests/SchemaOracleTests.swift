@@ -55,6 +55,8 @@ final class SchemaOracleTests: XCTestCase {
         let name: String
         let unique: Bool
         let columns: [String]
+        let androidAbsent: Bool?
+        let divergence: DivergenceKeys?
     }
     struct AndroidOverride: Decodable {
         let affinity: String?
@@ -234,6 +236,7 @@ final class SchemaOracleTests: XCTestCase {
         var used = Set<String>()
         for table in oracle.tables.values {
             for column in table.columns { column.divergence?.keys.forEach { used.insert($0) } }
+            for index in table.indices { index.divergence?.keys.forEach { used.insert($0) } }
             if let key = table.androidColumnOrderDivergence { used.insert(key) }
         }
         let unused = Set(oracle.divergenceReasons.keys).subtracting(used).sorted()
@@ -248,6 +251,16 @@ final class SchemaOracleTests: XCTestCase {
     func testDivergenceOverridesAreWellFormed() throws {
         let oracle = try loadOracle()
         for (name, table) in oracle.tables {
+            for index in table.indices {
+                if index.androidAbsent == true {
+                    XCTAssertEqual(table.platform, "both", "\(name).\(index.name): absence override requires a shared table")
+                    XCTAssertNotNil(index.divergence, "\(name).\(index.name): platform-absent index with no reason key")
+                    XCTAssertFalse(index.divergence?.keys.isEmpty ?? true)
+                } else {
+                    XCTAssertNil(index.androidAbsent, "\(name).\(index.name): false absence override changes nothing")
+                    XCTAssertNil(index.divergence, "\(name).\(index.name): index reason without a real override")
+                }
+            }
             for column in table.columns {
                 if let android = column.android {
                     XCTAssertNotNil(column.divergence,

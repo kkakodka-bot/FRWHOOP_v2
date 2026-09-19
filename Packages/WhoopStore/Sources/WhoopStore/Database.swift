@@ -1012,6 +1012,12 @@ extension WhoopStore {
         migrator.registerMigration("v52-scalar-provenance") { db in
             try WhoopStore.installScalarProvenanceSchema(db)
         }
+        migrator.registerMigration("v53-standard-hr-capture-journal") { db in
+            try WhoopStore.installStandardHRCaptureSchema(db)
+        }
+        migrator.registerMigration("v54-workout-preference-evaluation") { db in
+            try WhoopStore.installWorkoutPreferenceEvaluationSchema(db)
+        }
         return migrator
     }
 }
