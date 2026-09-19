@@ -44,12 +44,12 @@ public struct ScalarProvenance: Codable, Equatable, Sendable {
         self.inputStartTs = inputStartTs; self.inputEndTs = inputEndTs; self.inputSHA256 = inputSHA256
         self.inputSelection = inputSelection
         guard v == 1 else { throw ScalarProvenanceError.unsupportedShape }
-        let jsonSafeLimit = 9_007_199_254_740_991
+        let jsonSafeLimit: Int64 = 9_007_199_254_740_991
         guard [v, recordIndex, sampleRateHz, windowSettingSeconds, inputStartTs, inputEndTs]
-            .compactMap({ $0 }).allSatisfy({ (-jsonSafeLimit...jsonSafeLimit).contains($0) }) else {
+            .compactMap({ $0 }).allSatisfy({ (-jsonSafeLimit...jsonSafeLimit).contains(Int64($0)) }) else {
             throw ScalarProvenanceError.invalidValue
         }
-        if let recordIndex, !(0...Int(UInt32.max)).contains(recordIndex) { throw ScalarProvenanceError.invalidValue }
+        if let recordIndex, UInt32(exactly: recordIndex) == nil { throw ScalarProvenanceError.invalidValue }
         for digest in [frameSHA256, inputSHA256].compactMap({ $0 }) {
             guard digest.utf8.count == 64, digest.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) })
             else { throw ScalarProvenanceError.invalidValue }
@@ -123,7 +123,7 @@ public struct ScalarProvenance: Codable, Equatable, Sendable {
                              frameSHA256: digest)
         }
         let hex = Array(frame.rawHex.utf8)
-        guard !hex.isEmpty, hex.count == frame.lenBytes * 2 else { return nil }
+        guard !hex.isEmpty, hex.count.isMultiple(of: 2), frame.lenBytes == hex.count / 2 else { return nil }
         func nibble(_ c: UInt8) -> UInt8? {
             switch c {
             case 48...57: return c - 48
@@ -143,26 +143,28 @@ public struct ScalarProvenance: Codable, Equatable, Sendable {
 
     /// Wire golden shared with Android: exact selected input bytes, before any filtering.
     public static func ppgInputBytes(_ records: [PpgWaveformSample]) throws -> Data {
-        guard !records.isEmpty, records.count <= Int(UInt32.max) else { throw ScalarProvenanceError.invalidValue }
+        guard !records.isEmpty, let recordCount = UInt32(exactly: records.count) else {
+            throw ScalarProvenanceError.invalidValue
+        }
         var bytes = Data("w1-ppg-input-v1\n".utf8)
         func append<T: FixedWidthInteger>(_ value: T) {
             var le = value.littleEndian
             withUnsafeBytes(of: &le) { bytes.append(contentsOf: $0) }
         }
-        append(UInt32(records.count))
+        append(recordCount)
         var previous: Int?
         for record in records {
             // Concatenating producers preserve encounter order within one second. The framing
             // retains every record boundary; it does not normalize their input to Swift's choice.
             guard previous.map({ $0 <= record.ts }) ?? true,
-                  record.samples.count <= Int(UInt32.max) else { throw ScalarProvenanceError.invalidValue }
+                  let sampleCount = UInt32(exactly: record.samples.count) else { throw ScalarProvenanceError.invalidValue }
             previous = record.ts
             append(Int64(record.ts))
             if let index = record.recordIndex {
-                guard (0...Int(UInt32.max)).contains(index) else { throw ScalarProvenanceError.invalidValue }
+                guard UInt32(exactly: index) != nil else { throw ScalarProvenanceError.invalidValue }
                 bytes.append(1); append(Int64(index))
             } else { bytes.append(0) }
-            append(UInt32(record.samples.count))
+            append(sampleCount)
             for sample in record.samples {
                 guard let i16 = Int16(exactly: sample) else { throw ScalarProvenanceError.invalidValue }
                 append(i16)
