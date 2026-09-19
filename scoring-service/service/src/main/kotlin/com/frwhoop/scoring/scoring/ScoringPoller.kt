@@ -4,6 +4,7 @@ import com.frwhoop.scoring.ScoringConfig
 import com.frwhoop.scoring.db.EngineIngestWriter
 import com.frwhoop.scoring.db.ScoreInputProvider
 import com.frwhoop.scoring.db.ScoringWorkQueue
+import com.frwhoop.scoring.db.ScoringInputGate
 import com.frwhoop.scoring.derived.DerivedArchiveOutbox
 import com.frwhoop.scoring.derived.ArchiveRetryWorker
 import com.frwhoop.scoring.health.HeartbeatReporter
@@ -45,19 +46,28 @@ class ScoringPoller(
     fun pollOnce() {
         heartbeat.recordPoll()
         repeat(8) {
-            val item = queue.claimOne() ?: return
-            processWorkItem(item)
+            val candidate = queue.peekOne() ?: return
+            val attempted = queue.withInputGate(candidate) { guard ->
+                val item = queue.claimOne(candidate.userId,candidate.deviceId,candidate.day)
+                if (item != null) processWorkItem(item,guard)
+                true
+            }
+            if (attempted == null) return
         }
     }
 
     fun scoreDay(userId: UUID, deviceId: UUID, day: String) {
         queue.dirtyWorkItem(userId, deviceId, day)
-        val item = queue.claimOne(userId, deviceId, day)
-            ?: error("Replay revision is owned by another worker")
-        check(processWorkItem(item)) { "Replay did not finish publication; inspect the durable work status" }
+        val candidate = ScoringWorkQueue.Candidate(userId,deviceId,day)
+        val done = queue.withInputGate(candidate) { guard ->
+            val item = queue.claimOne(userId, deviceId, day)
+                ?: error("Replay revision is owned by another worker")
+            processWorkItem(item,guard)
+        }
+        check(done == true) { "Replay did not finish publication; inspect the durable work status" }
     }
 
-    private fun processWorkItem(item: ScoringWorkQueue.WorkItem): Boolean {
+    private fun processWorkItem(item: ScoringWorkQueue.WorkItem, guard: ScoringInputGate.Guard): Boolean {
         val started = System.nanoTime()
         val leaseLost = AtomicBoolean(false)
         val renewal = Executors.newSingleThreadScheduledExecutor { task ->
@@ -73,6 +83,7 @@ class ScoringPoller(
             }
         }, periodMs, periodMs, TimeUnit.MILLISECONDS)
         try {
+            guard.requireActive()
             val inputs = inputs.loadDay(item.userId, item.day, item.deviceId, item.timezoneId)
             if (inputs == null) {
                 queue.markWaiting(item, "no device/inputs")
@@ -80,9 +91,11 @@ class ScoringPoller(
             }
             // Empty inputs can be an intentional correction/deletion. Publish an unavailable
             // snapshot so an old generated episode cannot survive a tombstone or removed data.
-            val bundle = scorer.score(inputs, config.algorithmVersion,item.inputRevision.toString())
+            val bundle = scorer.score(inputs, config.algorithmVersion,item.inputRevision.toString(),
+                shadowBudget = { guard.remainingDuration.minusSeconds(15) })
             check(!leaseLost.get()) { "Scoring lease was lost before publication" }
-            writer.write(bundle, item)
+            guard.requireActive()
+            writer.write(bundle, item,guard.remainingDuration)
             val durationMs = ((System.nanoTime() - started) / 1_000_000).toInt()
             val done = queue.markDone(item, durationMs)
             if (done) {

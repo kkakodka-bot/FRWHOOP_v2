@@ -2853,7 +2853,7 @@
     <string name="physiology_hrv_observed">Observed through: %1$s</string>
     <string name="physiology_hrv_context">Context: %1$s</string>
     <string name="physiology_hrv_source">Source: %1$s · %2$s</string>
-    <string name="physiology_hrv_coverage">Observed coverage: %1$s</string>
+    <string name="physiology_hrv_coverage">Verified timing coverage: %1$s</string>
     <string name="physiology_hrv_baseline">Baseline comparison: %1$s · n=%2$s</string>
     <string name="physiology_hrv_deviation">Baseline deviation: %1$s</string>
     <string name="physiology_hrv_eligible">Eligible</string>
@@ -2903,7 +2903,17 @@
     <string name="five_minute_hr_baseline_separate">Low motion does not establish physiological rest. The overnight resting baseline remains separate below.</string>
     <string name="five_minute_hr_insufficient">No complete window has enough heart-rate samples yet. Windows with missing data remain unavailable.</string>
     <string name="five_minute_hr_values">Sampled: %1$s bpm · Low motion: %2$s bpm</string>
-    <string name="five_minute_hr_coverage">Sample coverage: %1$d%% · With low motion: %2$d%%</string>
+    <string name="five_minute_hr_coverage">HR samples: %1$d%% · Low-motion qualified: %2$d%%</string>
     <string name="five_minute_hr_show_recent">Show latest 12 windows</string>
     <string name="five_minute_hr_show_all">Show all %1$d windows</string>
+    <string name="physiology_reason_newer_input_pending">Showing an older completed server result. Newer data is waiting to be scored.</string>
+    <string name="physiology_reason_no_observations">No beat-interval records were included in this server window. Heart-rate samples alone do not supply HRV.</string>
+    <string name="physiology_reason_timing_coverage">Beat-interval records are present, but their timing coverage has not been verified. More frequent scoring cannot resolve this input limitation.</string>
+    <string name="physiology_reason_timing_unverified">Verified beat timing is unavailable for this window. A respiratory-rate estimate cannot be calculated from these inputs.</string>
+    <string name="physiology_reason_continuity">Beat-interval records are present, but consecutive original beats have not been established.</string>
+    <string name="physiology_reason_no_eligible_windows">No windows met the signal and timing requirements for a respiratory-rate estimate.</string>
+    <string name="physiology_reason_sleep_context">No qualified sleep period was available for this overnight respiratory estimate.</string>
+    <string name="physiology_reason_window_missing">No server result was returned for this five-minute interval.</string>
+    <string name="physiology_spo2_unavailable_title">SpO₂ unavailable from this source</string>
+    <string name="physiology_spo2_unavailable_body">The current WHOOP data source has no verified blood-oxygen percentage. This is an input and calibration limitation, not sparse history. Imported readings can still appear here.</string>
 </resources>

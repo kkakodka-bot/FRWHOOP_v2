@@ -2,6 +2,32 @@ import SwiftUI
 import StrandDesign
 import WhoopStore
 
+/// Explains availability without turning missing evidence into a measurement or changing its status.
+enum PhysiologyAvailabilityCopy {
+    static func explanation(for reason: String) -> String? {
+        switch reason {
+        case "newer_input_pending":
+            return String(localized: "Showing an older completed server result. Newer data is waiting to be scored.")
+        case "no_observations":
+            return String(localized: "No beat-interval records were included in this server window. Heart-rate samples alone do not supply HRV.")
+        case "timing_coverage_unverified":
+            return String(localized: "Beat-interval records are present, but their timing coverage has not been verified. More frequent scoring cannot resolve this input limitation.")
+        case "timing_unverified":
+            return String(localized: "Verified beat timing is unavailable for this window. A respiratory-rate estimate cannot be calculated from these inputs.")
+        case "continuity_unverified":
+            return String(localized: "Beat-interval records are present, but consecutive original beats have not been established.")
+        case "no_quality_eligible_windows":
+            return String(localized: "No windows met the signal and timing requirements for a respiratory-rate estimate.")
+        case "sleep_context_unavailable":
+            return String(localized: "No qualified sleep period was available for this overnight respiratory estimate.")
+        case "window_missing":
+            return String(localized: "No server result was returned for this five-minute interval.")
+        default:
+            return nil
+        }
+    }
+}
+
 /// Five-minute server measurements stay separate from the local daily trend.
 struct ServerHrvSeriesView: View {
     @ObservedObject var scores: ServerScoreRepository
@@ -58,13 +84,16 @@ struct ServerHrvSeriesView: View {
 
     private func metadata(_ series: ServerHrvSeries) -> some View {
         let value = series.featureStatus ?? "unavailable"
-        let status = series.stale ? String(localized: "Stale · \(value)") : value
+        let status = series.stale && value != "stale" ? String(localized: "Stale · \(value)") : value
         return VStack(alignment: .leading, spacing: 4) {
             Text("Server status: \(status)")
             Text("Device: \(series.deviceId ?? "—")")
             Text("Model: \(series.algorithmVersion ?? "—")")
             Text("Observed through: \(series.observedThrough ?? "—")")
-            if let reason = series.featureReason { Text(reason) }
+            if let reason = series.featureReason {
+                if let explanation = PhysiologyAvailabilityCopy.explanation(for: reason) { Text(explanation) }
+                Text(reason)
+            }
         }
     }
 
@@ -79,11 +108,14 @@ struct ServerHrvSeriesView: View {
             Text("Context: \(window.context)")
             Text("Source: \(window.source ?? "—") · \(window.modality ?? "—")")
             Text("Model: \(window.methodVersion ?? "—")")
-            Text("Observed coverage: \(window.observedTimeFraction.map { decimal($0 * 100) + "%" } ?? "—")")
+            Text("Verified timing coverage: \(window.observedTimeFraction.map { decimal($0 * 100) + "%" } ?? "—")")
             Text("Baseline comparison: \(window.baselineEligible ? String(localized: "Eligible") : String(localized: "Excluded")) · n=\(window.baselineEffectiveSampleCount.map(String.init) ?? "—")")
             if let value = window.baselineRobustZ { Text("Baseline deviation: \(decimal(value))") }
-            if let reason = window.reason { Text(reason) }
-            if let reason = window.baselineReason { Text(reason) }
+            if let reason = window.reason {
+                if let explanation = PhysiologyAvailabilityCopy.explanation(for: reason) { Text(explanation) }
+                Text(reason)
+            }
+            if let reason = window.baselineReason, reason != window.reason { Text(reason) }
         }.accessibilityElement(children: .combine)
     }
 

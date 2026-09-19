@@ -70,7 +70,14 @@ fun ServerRespirationSummaryCard(vm: AppViewModel) {
                             Text(uiString(R.string.server_resp_method, summary.method ?: "—", summary.calibrationStatus ?: "—"), style = NoopType.footnote)
                         }
                     }
-                    (summary?.reason ?: feature?.reason)?.let { Text(it, style = NoopType.footnote) }
+                    (summary?.reason ?: feature?.reason)?.let { reason ->
+                        physiologyReasonResource(reason)?.let { Text(uiString(it), style = NoopType.footnote) }
+                        Text(reason, style = NoopType.footnote)
+                    }
+                    summary?.measurementReason?.takeIf { it != (summary.reason ?: feature?.reason) }?.let { reason ->
+                        physiologyReasonResource(reason)?.let { Text(uiString(it), style = NoopType.footnote) }
+                        Text(reason, style = NoopType.footnote)
+                    }
                     error?.let { Text(it, style = NoopType.footnote, color = Palette.statusCritical) }
                     Text(uiString(R.string.server_resp_separate), style = NoopType.footnote, color = Palette.textSecondary)
                 }

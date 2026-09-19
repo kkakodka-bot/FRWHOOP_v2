@@ -7,6 +7,7 @@ data class ServerRespirationSummary(
     val breathsPerMinute: Double?, val mean: Double?, val distribution: List<Double>, val coverage: Double?,
     val acceptedSeconds: Double?, val acceptedWindows: Int?, val totalWindows: Int?, val context: String?,
     val method: String?, val calibrationStatus: String?, val reason: String?, val legacy: Boolean,
+    val measurementReason: String? = null,
 ) {
     companion object {
         fun project(cache: ServerScoreDayCache?, day: String): ServerRespirationSummary? {
@@ -35,7 +36,8 @@ data class ServerRespirationSummary(
             val values = summary.optJSONArray("distribution_bpm")
             val distribution = (0 until (values?.length() ?: 0)).mapNotNull { number(values?.opt(it))?.takeIf { n -> n > 0 } }.sorted()
             val visible = feature.status in setOf("available", "fresh", "stale")
-            var reason = feature.reason ?: text(daily, "respiration_unavailable_reason")
+            val measurementReason = text(daily, "respiration_unavailable_reason")
+            var reason = feature.reason ?: measurementReason
             var primary = if (visible) scalar else null
             if (!visible) reason = reason ?: "respiration_unavailable"
             if (legacy) {
@@ -52,7 +54,8 @@ data class ServerRespirationSummary(
             return ServerRespirationSummary(primary, if (legacy) null else mean, if (legacy) emptyList() else distribution,
                 if (legacy) null else coverage, if (legacy) null else seconds, if (legacy) null else accepted,
                 if (legacy) null else total, if (legacy) null else context, if (legacy) null else text(summary, "method_version"),
-                if (legacy) null else text(summary, "calibration_status"), reason, legacy)
+                if (legacy) null else text(summary, "calibration_status"), reason, legacy,
+                if (primary == null) measurementReason else null)
         }
     }
 }

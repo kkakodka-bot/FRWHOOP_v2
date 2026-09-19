@@ -6,6 +6,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.nio.file.Files
 import java.nio.file.Path
+import java.time.Duration
 import java.util.UUID
 import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
@@ -60,19 +61,23 @@ class PhysiologyShadowRunner(
                 .put("total_windows", s.summary.totalWindows) }))
     }
 
-    fun evaluate(request: Request): Result {
+    fun evaluate(request: Request, remainingBudget: Duration? = null): Result {
         fun unavailable(reason: String) = Result(emptyList(), emptyList(), MODEL_IDS.map { id -> JSONObject()
             .put("model_id", id).put("publication_mode", "shadow").put("canonical_outputs_allowed", false)
             .put("status", "abstained").put("reason", reason).put("user_id", request.userId)
             .put("device_id", request.deviceId).put("input_revision", request.inputRevision) }, listOf(reason), 0)
+        val configured = Duration.ofSeconds(totalTimeoutSeconds)
+        val allowed = remainingBudget?.let { if (it < configured) it else configured } ?: configured
+        if (allowed.isNegative || allowed.isZero) return unavailable("shadow_publication_budget_exhausted")
         if (!requestSlot.tryAcquire()) return unavailable("shadow_request_busy")
+        val deadline = System.nanoTime() + allowed.toNanos()
         val progress = AtomicReference(unavailable("shadow_request_pending"))
-        val work = FutureTask { evaluateBounded(request) { progress.set(it) } }
+        val work = FutureTask { evaluateBounded(request,deadline) { progress.set(it) } }
         val thread = Thread({ try { work.run() } finally { requestSlot.release() } }, "physiology-shadow-bounded")
         thread.isDaemon = true
         try {
             thread.start()
-            return work.get(totalTimeoutSeconds, TimeUnit.SECONDS)
+            return work.get((deadline-System.nanoTime()).coerceAtLeast(1), TimeUnit.NANOSECONDS)
         } catch (_: TimeoutException) {
             work.cancel(true)
             val partial = progress.get()
@@ -80,6 +85,10 @@ class PhysiologyShadowRunner(
         } catch (_: InterruptedException) {
             work.cancel(true); Thread.currentThread().interrupt(); return unavailable("shadow_request_cancelled")
         } catch (error: java.util.concurrent.ExecutionException) {
+            if (error.cause is InterruptedException && System.nanoTime() >= deadline) {
+                val partial=progress.get()
+                return partial.copy(rawReasons=(partial.rawReasons+"shadow_request_timeout").distinct())
+            }
             val reason=if(error.cause is IllegalArgumentException) "shadow_input_contract_invalid" else "shadow_execution_failed"
             val partial=progress.get()
             return partial.copy(rawReasons=(partial.rawReasons+reason).distinct(),
@@ -87,10 +96,9 @@ class PhysiologyShadowRunner(
         }
     }
 
-    private fun evaluateBounded(request: Request, onProgress: (Result) -> Unit): Result {
+    private fun evaluateBounded(request: Request, deadline: Long, onProgress: (Result) -> Unit): Result {
         require(request.end > request.start && request.end - request.start <= 76 * 3600 && request.inputRevision.isNotBlank())
         require(request.intervals.size <= 300_000 && request.contexts.size <= 512 && models.size <= 8)
-        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(totalTimeoutSeconds)
         fun checkCancellation() {
             if (Thread.currentThread().isInterrupted || System.nanoTime() >= deadline) throw InterruptedException("shadow_cancelled")
         }

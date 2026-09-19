@@ -376,6 +376,15 @@ data class PushError(val protocolVersion: String, val code: String) {
     companion object {
         private val SAFE_CODE = Regex("[a-z][a-z0-9_]{0,63}")
 
+        /** Local stream identity wins; only allowlisted stage and UUID correlation are retained. */
+        fun httpFailure(status: Int, bytes: ByteArray, expectedVersion: String = PushProtocol.VERSION,
+                        table: PushTable? = null): PushFailure {
+            val code = parseCode(bytes, expectedVersion)
+            val obj = if (code == null) null else runCatching { org.json.JSONObject(bytes.toString(Charsets.UTF_8)) }.getOrNull()
+            return PushFailure.http(status, code, stream = table?.wireName,
+                stage = obj?.opt("stage") as? String, correlationId = obj?.opt("correlationId") as? String)
+        }
+
         fun parseCode(bytes: ByteArray, expectedVersion: String = PushProtocol.VERSION): String? {
             if (bytes.isEmpty() || bytes.size > PushProtocol.MAX_ACK_BYTES) return null
             return runCatching {

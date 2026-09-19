@@ -407,7 +407,7 @@ public struct PushCoordinator: Sendable {
                     case .rejected(_, let retryable, let failure):
                         rejected += 1
                         if selectedFailure == nil || (retryable && !retryableFailure) {
-                            selectedFailure = failure
+                            selectedFailure = failure?.attributed(to: table)
                         }
                         retryableFailure = retryableFailure || retryable
                     case .noData:
@@ -423,7 +423,7 @@ public struct PushCoordinator: Sendable {
                     case .rejected(_, let retryable, let failure):
                         rejected += 1
                         if selectedFailure == nil || (retryable && !retryableFailure) {
-                            selectedFailure = failure
+                            selectedFailure = failure?.attributed(to: table)
                         }
                         retryableFailure = retryableFailure || retryable
                     case .noData:
@@ -445,7 +445,7 @@ public struct PushCoordinator: Sendable {
                     case .rejected(_, let retryable, let failure):
                         rejected += 1
                         if selectedFailure == nil || (retryable && !retryableFailure) {
-                            selectedFailure = failure
+                            selectedFailure = failure?.attributed(to: table)
                         }
                         retryableFailure = retryableFailure || retryable
                     case .noData:
@@ -485,9 +485,9 @@ public struct PushCoordinator: Sendable {
             return .rejected(reason: PushFailure(code: .ackInvalid).safeCode, retryable: false, failure: PushFailure(code: .ackInvalid))
         }
         if response.statusCode < 200 || response.statusCode > 299 {
-            let failure = PushFailure.http(
+            let failure = PushError.httpFailure(
                 status: response.statusCode,
-                receiverCode: PushError.parseCode(response.body, expectedVersion: batch.protocolVersion)
+                body: response.body, expectedVersion: batch.protocolVersion, table: batch.table
             )
             return .rejected(reason: failure.safeCode, retryable: failure.retryable, failure: failure)
         }
@@ -659,9 +659,9 @@ public struct PushCoordinator: Sendable {
             return .rejected(reason: PushFailure(code: .ackInvalid).safeCode, retryable: false, failure: PushFailure(code: .ackInvalid))
         }
         if response.statusCode < 200 || response.statusCode > 299 {
-            let failure = PushFailure.http(
+            let failure = PushError.httpFailure(
                 status: response.statusCode,
-                receiverCode: PushError.parseCode(response.body, expectedVersion: batch.protocolVersion)
+                body: response.body, expectedVersion: batch.protocolVersion, table: batch.table
             )
             return .rejected(reason: failure.safeCode, retryable: failure.retryable, failure: failure)
         }

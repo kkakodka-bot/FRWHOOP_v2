@@ -61,6 +61,28 @@ final class ServerRespirationSummaryTests: XCTestCase {
         XCTAssertEqual(input.features["respiration"]?.status, "stale")
     }
 
+    func testPendingRevisionDoesNotHideWhyTheCompletedMeasurementWasUnavailable() throws {
+        let input = try cache(scalar: NSNull(), median: NSNull(), coverage: 0)
+        let bytes = try XCTUnwrap(input.rawSnapshotJSON?.data(using: .utf8))
+        var root = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+        var overlay = try XCTUnwrap(root["server_scoring"] as? [String: Any])
+        var features = try XCTUnwrap(overlay["features"] as? [String: [String: Any]])
+        features["respiration"]?["status"] = "stale"
+        features["respiration"]?["reason"] = "newer_input_pending"
+        overlay["features"] = features
+        var daily = try XCTUnwrap(overlay["daily"] as? [String: Any])
+        daily["respiration_unavailable_reason"] = "no_quality_eligible_windows"
+        overlay["daily"] = daily
+        root["server_scoring"] = overlay
+        let cache = try ServerScoreCacheCodec.parseSnapshot(JSONSerialization.data(withJSONObject: root),
+                                                            day: input.day, ownerId: input.ownerId)
+        let value = try XCTUnwrap(ServerRespirationSummary.project(cache, day: input.day))
+        XCTAssertNil(value.breathsPerMinute)
+        XCTAssertEqual(value.reason, "newer_input_pending")
+        XCTAssertEqual(value.measurementReason, "no_quality_eligible_windows")
+        XCTAssertEqual(cache.features["respiration"]?.status, "stale")
+    }
+
     func testWrongDayOwnerOrSelectedSourceCannotReadSummary() throws {
         var input = try cache()
         XCTAssertNil(ServerRespirationSummary.project(input, day: "2026-09-17"))

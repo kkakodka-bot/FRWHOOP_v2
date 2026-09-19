@@ -824,6 +824,8 @@ struct MetricDetailView: View {
                                 .buttonStyle(.plain)
                             }
                         }
+                    } else if metric.key == "spo2", metric.source == "my-whoop", repo.activeStrapIsWhoop5() {
+                        ComingSoon(what: "SpO₂ is unavailable from this strap’s current data source. A verified blood-oxygen percentage is not yet available; this is an input and calibration limitation, not sparse history. Imported readings can still appear here.")
                     } else {
                         ComingSoon(what: "Import your history first. A WHOOP export in Data Sources fills every metric you can explore here in about a minute.")
                     }

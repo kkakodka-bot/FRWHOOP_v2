@@ -51,7 +51,14 @@ struct ServerRespirationSummaryView: View {
                             Text("Method: \(summary.method ?? "—") · \(summary.calibrationStatus ?? "—")")
                         }
                     }
-                    if let reason = summary?.reason ?? feature?.reason { Text(reason) }
+                    if let reason = summary?.reason ?? feature?.reason {
+                        if let explanation = PhysiologyAvailabilityCopy.explanation(for: reason) { Text(explanation) }
+                        Text(reason)
+                    }
+                    if let reason = summary?.measurementReason, reason != (summary?.reason ?? feature?.reason) {
+                        if let explanation = PhysiologyAvailabilityCopy.explanation(for: reason) { Text(explanation) }
+                        Text(reason)
+                    }
                     if let error = scores.lastError { Text(error).foregroundStyle(StrandPalette.statusCritical) }
                     Text("This server result is separate from local history below.")
                 }

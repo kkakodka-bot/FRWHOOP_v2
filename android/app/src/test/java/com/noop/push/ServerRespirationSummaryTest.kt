@@ -60,6 +60,21 @@ class ServerRespirationSummaryTest {
         assertEquals("stale", input.features["respiration"]!!.status)
     }
 
+    @Test fun pendingRevisionDoesNotHideWhyTheCompletedMeasurementWasUnavailable() {
+        val input = cache(scalar = JSONObject.NULL, median = JSONObject.NULL, coverage = 0)
+        val root = JSONObject(input.rawSnapshotJSON!!)
+        val overlay = root.getJSONObject("server_scoring")
+        overlay.getJSONObject("features").getJSONObject("respiration")
+            .put("status", "stale").put("reason", "newer_input_pending")
+        overlay.getJSONObject("daily").put("respiration_unavailable_reason", "no_quality_eligible_windows")
+        val cache = ServerScoreClient.parseSnapshot(root.toString(), input.day, input.ownerId)
+        val value = ServerRespirationSummary.project(cache, input.day)!!
+        assertNull(value.breathsPerMinute)
+        assertEquals("newer_input_pending", value.reason)
+        assertEquals("no_quality_eligible_windows", value.measurementReason)
+        assertEquals("stale", cache.features["respiration"]!!.status)
+    }
+
     @Test fun wrongDayOwnerOrSelectedSourceCannotReadSummary() {
         val input = cache()
         assertNull(ServerRespirationSummary.project(input, "2026-09-17"))

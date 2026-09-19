@@ -50,7 +50,7 @@ class PushHttpTransport(
             return PushCapabilitiesResult.Rejected(failure.safeCode, failure.retryable, failure)
         }
         if (response.statusCode !in 200..299) {
-            val failure = PushFailure.http(response.statusCode, PushError.parseCode(response.body))
+            val failure = PushError.httpFailure(response.statusCode, response.body)
             return PushCapabilitiesResult.Rejected(failure.safeCode, failure.retryable, failure)
         }
         return try {
@@ -95,9 +95,10 @@ class PushHttpTransport(
         val response = executeRequest(request)
         if (response.statusCode !in 200..299) {
             throw PushTransportException(
-                PushFailure.http(
+                PushError.httpFailure(
                     response.statusCode,
-                    PushError.parseCode(response.body, PushProtocol.OBJECT_VERSION),
+                    response.body, PushProtocol.OBJECT_VERSION,
+                    PushBinaryTable.entries.firstOrNull { it.wireName == manifest.stream },
                 ),
             )
         }
@@ -140,9 +141,9 @@ class PushHttpTransport(
         val response = executeRequest(request)
         if (response.statusCode !in 200..299) {
             throw PushTransportException(
-                PushFailure.http(
+                PushError.httpFailure(
                     response.statusCode,
-                    PushError.parseCode(response.body, PushProtocol.OBJECT_VERSION),
+                    response.body, PushProtocol.OBJECT_VERSION,
                 ),
             )
         }

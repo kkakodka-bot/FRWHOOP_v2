@@ -32,7 +32,7 @@ struct FiveMinuteHeartRateView: View {
                     VStack(alignment: .leading, spacing: 3) {
                         Text("\(time(row.start))–\(time(row.end))").monospacedDigit()
                         Text("Average: \(bpm(row.meanBpm)) · Low motion: \(bpm(row.lowMotionBpm))")
-                        Text("HR samples: \(Int((row.sampleFraction * 100).rounded()))% · motion-matched: \(Int((row.lowMotionSampleFraction * 100).rounded()))%")
+                        Text("HR samples: \(Int((row.sampleFraction * 100).rounded()))% · low-motion qualified: \(Int((row.lowMotionSampleFraction * 100).rounded()))%")
                         if let reason = row.reason ?? row.lowMotionReason { Text(reasonText(reason)) }
                     }.padding(.vertical, 3)
                 }

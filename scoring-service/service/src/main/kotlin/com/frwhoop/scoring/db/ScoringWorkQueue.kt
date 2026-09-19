@@ -12,6 +12,33 @@ class ScoringWorkQueue(
     val claimLease: Duration = Duration.ofMinutes(5),
     private val maxAttempts: Int = 8,
 ) {
+    private val inputGate = ScoringInputGate(db)
+
+    data class Candidate(val userId: UUID, val deviceId: UUID, val day: String)
+
+    /** Look before acquiring the input gate; a waiting worker must not age a live claim. */
+    fun peekOne(userId: UUID? = null, deviceId: UUID? = null, day: String? = null): Candidate? =
+        db.withConnection { conn ->
+            conn.prepareStatement("""
+                select user_id,device_id,day from public.physiology_work_items
+                where done_at is null and next_attempt_at<=clock_timestamp()
+                  and (lease_expires_at is null or lease_expires_at<=clock_timestamp())
+                  and (failure_revision<>input_revision or consecutive_failures<?)
+                  and (?::uuid is null or user_id=?) and (?::uuid is null or device_id=?)
+                  and (?::date is null or day=?::date)
+                order by next_attempt_at,dirty_at,user_id,device_id,day limit 1
+            """.trimIndent()).use { p ->
+                p.setInt(1,maxAttempts); p.setObject(2,userId); p.setObject(3,userId)
+                p.setObject(4,deviceId); p.setObject(5,deviceId); p.setString(6,day); p.setString(7,day)
+                p.executeQuery().use { r -> if (r.next()) Candidate(
+                    r.getObject("user_id",UUID::class.java),r.getObject("device_id",UUID::class.java),
+                    r.getDate("day").toString()) else null }
+            }
+        }
+
+    fun <T : Any> withInputGate(candidate: Candidate, block: (ScoringInputGate.Guard) -> T): T? =
+        inputGate.withGate(candidate.userId,candidate.deviceId,block)
+
     data class WorkItem(
         val userId: UUID,
         val deviceId: UUID,

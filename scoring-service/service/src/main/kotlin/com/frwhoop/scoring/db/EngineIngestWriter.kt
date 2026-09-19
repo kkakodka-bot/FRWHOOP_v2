@@ -8,6 +8,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.time.Duration
 import java.util.concurrent.TimeUnit
 
 /** Publishes a device/revision snapshot while the database validates its live lease. */
@@ -44,7 +45,12 @@ class EngineIngestWriter(
         }
     }
 
-    fun write(bundle: ServerScoreBundle, item: ScoringWorkQueue.WorkItem): JSONObject {
+    fun write(bundle: ServerScoreBundle, item: ScoringWorkQueue.WorkItem,
+              publicationBudget: Duration? = null): JSONObject {
+        val deadline=publicationBudget?.let { budget ->
+            require(!budget.isNegative && !budget.isZero) { "Publication budget exhausted" }
+            System.nanoTime()+minOf(budget,Duration.ofSeconds(180)).toNanos()
+        }
         val payload = publicationPayload(bundle, item)
         val body = JSONObject().put("p_secret", ingestSecret).put("p_payload", payload)
             .toString().toRequestBody("application/json".toMediaType())
@@ -52,7 +58,14 @@ class EngineIngestWriter(
             .header("apikey", serviceRoleKey)
             .header("Authorization", "Bearer $serviceRoleKey")
             .header("Content-Type", "application/json").build()
-        http.newCall(request).execute().use { response ->
+        val call=http.newCall(request)
+        if (deadline!=null) {
+            val remaining=deadline-System.nanoTime()
+            check(remaining>0) { "Publication budget exhausted during serialization" }
+            val configured=TimeUnit.MILLISECONDS.toNanos(http.callTimeoutMillis.toLong())
+            call.timeout().timeout(if(configured>0) minOf(remaining,configured) else remaining,TimeUnit.NANOSECONDS)
+        }
+        call.execute().use { response ->
             check(response.isSuccessful) { "physiology publication failed: HTTP ${response.code}" }
         }
         return payload

@@ -31,6 +31,19 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 import kotlinx.coroutines.launch
 
+/** Availability copy never changes measurement eligibility or snapshot freshness. */
+internal fun physiologyReasonResource(reason: String): Int? = when (reason) {
+    "newer_input_pending" -> R.string.physiology_reason_newer_input_pending
+    "no_observations" -> R.string.physiology_reason_no_observations
+    "timing_coverage_unverified" -> R.string.physiology_reason_timing_coverage
+    "timing_unverified" -> R.string.physiology_reason_timing_unverified
+    "continuity_unverified" -> R.string.physiology_reason_continuity
+    "no_quality_eligible_windows" -> R.string.physiology_reason_no_eligible_windows
+    "sleep_context_unavailable" -> R.string.physiology_reason_sleep_context
+    "window_missing" -> R.string.physiology_reason_window_missing
+    else -> null
+}
+
 /** The server five-minute series is not the local daily history below it. */
 @Composable
 internal fun ServerHrvSeriesCard(vm: AppViewModel) {
@@ -64,11 +77,14 @@ internal fun ServerHrvSeriesCard(vm: AppViewModel) {
                 !signedIn -> Text(uiString(R.string.physiology_hrv_sign_in), style = NoopType.footnote)
                 else -> {
                     val status = series.featureStatus ?: "unavailable"
-                    Text(uiString(R.string.physiology_hrv_status, if (series.stale) uiString(R.string.server_sleep_stale, status) else status), style = NoopType.footnote)
+                    Text(uiString(R.string.physiology_hrv_status, if (series.stale && status != "stale") uiString(R.string.server_sleep_stale, status) else status), style = NoopType.footnote)
                     Text(uiString(R.string.physiology_hrv_device, series.deviceId ?: "—"), style = NoopType.footnote)
                     Text(uiString(R.string.physiology_hrv_model, series.algorithmVersion ?: "—"), style = NoopType.footnote)
                     Text(uiString(R.string.physiology_hrv_observed, series.observedThrough ?: "—"), style = NoopType.footnote)
-                    series.featureReason?.let { Text(it, style = NoopType.footnote) }
+                    series.featureReason?.let { reason ->
+                        physiologyReasonResource(reason)?.let { Text(uiString(it), style = NoopType.footnote) }
+                        Text(reason, style = NoopType.footnote)
+                    }
                     error?.let { Text(it, style = NoopType.footnote, color = Palette.statusCritical) }
                     if (series.windows.isEmpty()) {
                         Text(uiString(R.string.physiology_hrv_empty), style = NoopType.footnote)
@@ -101,7 +117,10 @@ private fun HrvWindowRow(window: ServerHrvSeries.Window) {
             uiString(if (window.baselineEligible) R.string.physiology_hrv_eligible else R.string.physiology_hrv_excluded),
             window.baselineEffectiveSampleCount?.toString() ?: "—"), style = NoopType.footnote)
         window.baselineRobustZ?.let { Text(uiString(R.string.physiology_hrv_deviation, decimal(it)), style = NoopType.footnote) }
-        window.reason?.let { Text(it, style = NoopType.footnote) }
-        window.baselineReason?.let { Text(it, style = NoopType.footnote) }
+        window.reason?.let { reason ->
+            physiologyReasonResource(reason)?.let { Text(uiString(it), style = NoopType.footnote) }
+            Text(reason, style = NoopType.footnote)
+        }
+        window.baselineReason?.takeIf { it != window.reason }?.let { Text(it, style = NoopType.footnote) }
     }
 }

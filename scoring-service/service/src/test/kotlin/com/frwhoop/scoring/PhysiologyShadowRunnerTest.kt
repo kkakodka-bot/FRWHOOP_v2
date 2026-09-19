@@ -6,6 +6,9 @@ import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Test
 import java.nio.file.Path
+import java.time.Duration
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.UUID
 import kotlin.math.PI
 import kotlin.math.sin
@@ -78,6 +81,39 @@ class PhysiologyShadowRunnerTest {
         assertTrue(result.rawReasons.contains("shadow_request_timeout"))
         assertEquals(12.0,result.summaries.single().summary.median!!,0.5)
         assertTrue(result.windows.any { it.breathsPerMinute != null })
+    }
+
+    @Test fun `remaining publication budget bounds a configured two minute model lane`() {
+        val stopped=CountDownLatch(1)
+        val model=PhysiologyShadowRunner.Model("neurokit2",JSONObject(),Path.of("."))
+        val assembler=PhysiologyShadowRunner.JobAssembler { _,request,_ -> PhysiologyShadowRunner.PreparedJob(JSONObject()
+            .put("user_id",request.userId).put("device_id",request.deviceId).put("input_revision",request.inputRevision)) }
+        val slow=PhysiologyShadowRunner.Executor { _,_ ->
+            try { Thread.sleep(5000);JSONObject() } finally { stopped.countDown() }
+        }
+        val runner=PhysiologyShadowRunner(models=listOf(model),executor=slow,assembler=assembler,totalTimeoutSeconds=120)
+        val start=System.nanoTime()
+        val result=runner.evaluate(request(),Duration.ofMillis(200))
+        assertTrue(Duration.ofNanos(System.nanoTime()-start)<Duration.ofSeconds(2))
+        assertTrue(result.rawReasons.contains("shadow_request_timeout"))
+        assertTrue(stopped.await(1,TimeUnit.SECONDS))
+        assertEquals(12.0,result.summaries.single().summary.median!!,.5)
+        assertTrue(result.windows.any { it.breathsPerMinute != null })
+        assertFalse(result.json().getBoolean("canonical_outputs_allowed"))
+    }
+
+    @Test fun `expired publication budget abstains before starting model work`() {
+        var calls=0
+        val runner=PhysiologyShadowRunner(executor=PhysiologyShadowRunner.Executor { _,_ -> calls++;JSONObject() })
+        for (budget in listOf(Duration.ZERO,Duration.ofMillis(-1))) {
+            val result=runner.evaluate(request(),budget)
+            assertEquals(listOf("shadow_publication_budget_exhausted"),result.rawReasons)
+            assertTrue(result.modelResults.all { it.getString("status")=="abstained" &&
+                it.getString("reason")=="shadow_publication_budget_exhausted" })
+            assertFalse(result.json().getBoolean("canonical_outputs_allowed"))
+        }
+        assertEquals(0,calls)
+        assertTrue(runner.evaluate(request()).windows.any { it.breathsPerMinute!=null })
     }
     @Test fun `invalid oversized shadow request abstains without failing caller or poisoning slot`() {
         val input=request()

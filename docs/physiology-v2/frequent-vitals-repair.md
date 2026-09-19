@@ -1,6 +1,6 @@
 # Frequent vitals: repair and limits, 2026-09-18
 
-The app now collects the supported standard heart-rate stream throughout the day, preserves original notification evidence, repairs the repeated Apple upload error, and exposes completed five-minute heart-rate windows. This does **not** establish five-minute valid HRV, respiratory rate, calibrated SpO₂, or uninterrupted server publication. The remaining queue liveness issue requires another engineering pass.
+The app now collects the supported standard heart-rate stream throughout the day, preserves original notification evidence, repairs the repeated Apple upload error, and exposes completed five-minute heart-rate windows. This does **not** establish five-minute valid HRV, respiratory rate, calibrated SpO₂, or uninterrupted server publication. The [September 18 follow-up](readings-availability-investigation.md) diagnoses the live packet upload timeout, repairs queue liveness in source, and documents the remaining input-adapter gaps.
 
 ## Exact scope
 
@@ -99,7 +99,7 @@ The phone applied v51 and recorded 220 original standard-HR notifications across
 
 Pre/post counts: HR 248,310→248,825; RR 284,540→284,845; PPG-derived HR 4,251→4,258; waveform records 7,990→8,015. Primary-key comparisons found zero missing pre-install identities in those four tables. Daily records remained four. This checks this migration/install; it is not a universal data-loss guarantee.
 
-The copied post-install status shows 13,332 records accepted during a push cycle, but also `HTTP500 ... push_failed`. Comparing captured preference snapshots shows 6,598 more accepted records across seven batches, and both previously broken workout export checkpoints were created. HR and several other cursors advanced; RR cursors did not. Aggregate preferences do not identify the failing request.
+The copied post-install status shows 13,332 records accepted during a push cycle, but also `HTTP500 ... push_failed`. Comparing those initial preference snapshots shows 6,598 more accepted records across seven batches, and both previously broken workout export checkpoints were created. A later 18:14 preference capture shows the interval cursor advancing from 5,000 to 10,000, while original packet receipts remain at 5,770. Build 350 and production logs subsequently identify the failed original-packet projection; see the follow-up report.
 
 Live authenticated capabilities GET returned HTTP 200/protocol 1.2. It omits the new standardHRReceipt stream, and the client correctly withholds it until advertised, so that new lane does not explain the observed 500. The old local workout-column error is repaired; overall deployed upload health is **not yet verified**. Established SSH access/server logs were unavailable, so the POST failure's root cause remains unknown. No server change was deployed or production database modified during this repair.
 

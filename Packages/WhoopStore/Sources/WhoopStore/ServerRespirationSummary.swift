@@ -14,6 +14,8 @@ public struct ServerRespirationSummary: Equatable {
     public let method: String?
     public let calibrationStatus: String?
     public let reason: String?
+    /// Measurement eligibility is separate from snapshot freshness (for example newer_input_pending).
+    public let measurementReason: String?
     public let legacy: Bool
 
     public static func project(_ cache: ServerScoreDayCache?, day: String) -> Self? {
@@ -50,7 +52,8 @@ public struct ServerRespirationSummary: Equatable {
         let context = summary["context"] as? String
         let distribution = (summary["distribution_bpm"] as? [Any] ?? []).compactMap(number).filter { $0 > 0 }.sorted()
         let visible = ["available", "fresh", "stale"].contains(feature.status)
-        var reason = feature.reason ?? daily["respiration_unavailable_reason"] as? String
+        let measurementReason = daily["respiration_unavailable_reason"] as? String
+        var reason = feature.reason ?? measurementReason
         var primary = visible ? scalar : nil
         if !visible { reason = reason ?? "respiration_unavailable" }
         if legacy {
@@ -69,6 +72,6 @@ public struct ServerRespirationSummary: Equatable {
                     acceptedWindows: legacy ? nil : accepted, totalWindows: legacy ? nil : total,
                     context: legacy ? nil : context, method: legacy ? nil : summary["method_version"] as? String,
                     calibrationStatus: legacy ? nil : summary["calibration_status"] as? String,
-                    reason: reason, legacy: legacy)
+                    reason: reason, measurementReason: primary == nil ? measurementReason : nil, legacy: legacy)
     }
 }

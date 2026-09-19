@@ -21,6 +21,64 @@ import kotlin.math.sin
 
 /** Synthetic wiring controls only, not a WHOOP/reference accuracy result. */
 class DayScorerPhysiologyIntegrationTest {
+    @Test fun exhaustedShadowBudgetKeepsCompletedHeartRateAndSleepOutputsPublishable() {
+        val lo=bounds.dayLo
+        val hr=(lo until lo+600).map { HrSample(device.toString(),it,60) }
+        val gravity=hr.map { GravitySample(device.toString(),it.ts,0.0,0.0,1.0,dynAccel=.01) }
+        val base=input(false).copy(hr=hr,gravity=gravity,rr=emptyList(),hrvObservations=emptyList(),events=emptyList())
+        val now=Instant.ofEpochSecond(lo+459)
+        val normal=DayScorer().score(base,CanonicalScorePayload.ALGORITHM_VERSION,"budget",now)
+        var budgetReads=0
+        val bounded=DayScorer().score(base,CanonicalScorePayload.ALGORITHM_VERSION,"budget",now,
+            shadowBudget={budgetReads++;java.time.Duration.ZERO})
+        assertEquals(1,budgetReads)
+        assertEquals(normal.heartRateWindows,bounded.heartRateWindows)
+        assertEquals(normal.result.sleepSessions,bounded.result.sleepSessions)
+        assertEquals(normal.result.hrvMeasurements,bounded.result.hrvMeasurements)
+        assertEquals(60.0,bounded.heartRateWindows.single().meanBpm!!,0.0)
+        assertEquals(listOf("shadow_publication_budget_exhausted"),bounded.physiologyShadow!!.rawReasons)
+        assertTrue(CanonicalScorePayload.build(bounded).getJSONObject("daily").getJSONArray("heart_rate_windows").length()>0)
+    }
+    @Test fun awakeRestRespirationRunsDuringTheDayWithoutBecomingTheOvernightStatistic() {
+        val lo = bounds.dayLo + 14 * 3600
+        val hi = lo + 600
+        val hr = (lo until hi).map { HrSample(device.toString(), it, 60) }
+        val gravity = hr.map { GravitySample(device.toString(), it.ts, 0.0, 0.0, 1.0, dynAccel = .01) }
+        var time = lo.toDouble()
+        var index = 0
+        val rows = buildList {
+            while (time < hi) {
+                val duration = .8 + .04 * sin(2 * PI * .2 * (time - lo))
+                add(PhysiologyQuality.IntervalObservation("awake:$index", user.toString(), device.toString(),
+                    source = "synthetic_not_reference", eventTime = time, originalRRMs = duration * 1000,
+                    startBeatId = "awake-beat:$index", endBeatId = "awake-beat:${index + 1}", continuityGroup = "awake",
+                    verifiedSpan = PhysiologyQuality.Span(time, time + duration), timestampPrecisionSeconds = .001,
+                    decoderVersion = "synthetic-fixture", clockVersion = "synthetic-fixture"))
+                time += duration; index++
+            }
+        }
+        val annotation = com.noop.analytics.SleepContextSpan(lo, hi, "awake", "fixture", availableAt = lo)
+        val base = input(false).copy(hr = hr, gravity = gravity, rr = emptyList(), hrvObservations = rows,
+            events = emptyList(), sleepContext = listOf(annotation))
+        val now = Instant.ofEpochSecond(hi)
+        val score = DayScorer().score(base, CanonicalScorePayload.ALGORITHM_VERSION, "awake", now)
+        assertTrue(score.result.sleepSessions.isEmpty())
+        assertNull(score.respirationSummary)
+        assertNull(score.result.daily.respRateBpm)
+        val summary = score.physiologyShadow!!.summaries.single().summary
+        assertEquals("qualified_awake_rest", summary.context)
+        assertEquals(12.0, summary.median!!, .5)
+        assertTrue(score.physiologyShadow.windows.all { it.end <= hi })
+        for (unqualified in listOf(base.copy(sleepContext = emptyList()),
+            base.copy(sleepContext = listOf(annotation.copy(availableAt = hi + 1))))) {
+            val result = DayScorer().score(unqualified, CanonicalScorePayload.ALGORITHM_VERSION, "unknown", now)
+            assertTrue(result.physiologyShadow!!.summaries.none { it.summary.context == "qualified_awake_rest" })
+        }
+        val unverified = DayScorer().score(base.copy(hrvObservations = rows.map { it.copy(verifiedSpan = null) }),
+            CanonicalScorePayload.ALGORITHM_VERSION, "no-clock", now)
+        assertTrue(unverified.physiologyShadow!!.windows.all { it.breathsPerMinute == null && it.reason == "timing_unverified" })
+    }
+
     @Test fun completedHeartRateWindowsHonorAcquisitionCutoffAndExplicitOffBodyContext() {
         val lo=bounds.dayLo
         val hr=(lo until lo+600).map { HrSample(device.toString(),it,if(it<lo+300) 60 else 120) }

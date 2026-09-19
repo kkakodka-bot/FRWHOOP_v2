@@ -1,6 +1,7 @@
 package com.frwhoop.scoring
 
 import com.frwhoop.scoring.db.EngineIngestWriter
+import com.frwhoop.scoring.db.ScoringWorkQueue
 import com.frwhoop.scoring.scoring.ServerScoreBundle
 import com.noop.analytics.DayResult
 import com.noop.analytics.DetectedSleep
@@ -8,10 +9,45 @@ import com.noop.data.DailyMetric
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 import java.util.UUID
+import java.net.InetSocketAddress
+import java.time.Duration
+import java.time.Instant
+import java.io.IOException
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import com.sun.net.httpserver.HttpServer
 
 class EngineIngestWriterTest {
+    @Test fun stalledHttpPublicationCannotConsumeMoreThanTheRemainingGateBudget() {
+        val entered=CountDownLatch(1)
+        val server=HttpServer.create(InetSocketAddress("127.0.0.1",0),0)
+        val executor=Executors.newSingleThreadExecutor()
+        server.executor=executor
+        server.createContext("/rpc/engine_publish_physiology") { exchange ->
+            entered.countDown()
+            try { CountDownLatch(1).await(5,TimeUnit.SECONDS) }
+            catch (_:InterruptedException) { Thread.currentThread().interrupt() }
+            finally { exchange.close() }
+        }
+        server.start()
+        try {
+            val user=UUID.randomUUID();val device=UUID.randomUUID();val now=Instant.now()
+            val item=ScoringWorkQueue.WorkItem(user,device,"2026-09-17",now,now,1,UUID.randomUUID(),UUID.randomUUID(),"UTC")
+            val bundle=ServerScoreBundle(user,item.day,device.toString(),"frwhoop-physiology-2",
+                DayResult(DailyMetric(deviceId=device.toString(),day=item.day),emptyList(),emptyList(),null,null))
+            val writer=EngineIngestWriter("http://127.0.0.1:${server.address.port}","test","test")
+            val started=System.nanoTime()
+            try { writer.write(bundle,item,Duration.ofMillis(150));fail("expected bounded HTTP timeout") }
+            catch (_:IOException) { /* The caller keeps its existing fenced retry path. */ }
+            assertTrue(entered.await(1,TimeUnit.SECONDS))
+            assertTrue(Duration.ofNanos(System.nanoTime()-started)<Duration.ofSeconds(2))
+        } finally { server.stop(0);executor.shutdownNow() }
+    }
+
     @Test
     fun payloadHasAlgorithmVersionAtRootAndOmitsForbiddenKeys() {
         val bundle = ServerScoreBundle(

@@ -1813,9 +1813,8 @@ private val SERIES_BACKED_VITAL_KEYS = setOf("fitness_age", "vitality", "steps_e
  *    sensor and NOT missing arithmetic. The strap-computed `@82` percentage that does exist is gated to
  *    `hist_version == 18`, a 5/MG layout. This bounds the record type examined, not the hardware: a live
  *    stream or another record type remains untested (#1617).
- *  - **5/MG with the estimate off.** The candidate exists but ships default-off and unverified, so the
- *    screen stays empty until the user turns it on. Naming the switch beats implying more nights.
- *  - **5/MG with it on.** Genuinely just needs nights, so the default copy is right.
+ *  - **5/MG.** The optical candidate is unverified and is not a calibrated percentage. Its display
+ *    toggle does not resolve that input limitation; neither setting promises readings after more nights.
  *
  * [family] must come from the REGISTRY (`DeviceFamily.forRegistryDevice`), never a live-connection
  * flag: such a flag reads false for a 4.0, for an Oura ring and for nothing-connected alike, and an
@@ -1844,9 +1843,9 @@ internal fun spo2EmptyState(
             R.string.l10n_health_screen_no_blood_oxygen_percentage_from_a_1d3d383e,
             R.string.l10n_health_screen_your_strap_banks_the_raw_optical_b52a0f80,
         )
-        family == com.noop.protocol.DeviceFamily.WHOOP5 && !candidateDisplayOn -> VitalEmptyState(
-            R.string.l10n_health_screen_the_blood_oxygen_estimate_is_turned_4c403ab2,
-            R.string.l10n_health_screen_your_strap_reports_a_blood_oxygen_349fe34a,
+        family == com.noop.protocol.DeviceFamily.WHOOP5 -> VitalEmptyState(
+            R.string.physiology_spo2_unavailable_title,
+            R.string.physiology_spo2_unavailable_body,
         )
         else -> default
     }

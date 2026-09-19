@@ -17,7 +17,8 @@ import com.frwhoop.scoring.signals.PhysiologyShadowRunner
  */
 class DayScorer(private val physiology: PhysiologyShadowRunner = PhysiologyShadowRunner()) {
     fun score(inputs: SignalSampleReader.DayInputs, algorithmVersion: String, inputRevision: String = "unversioned",
-              computedAt: java.time.Instant = java.time.Instant.now()): ServerScoreBundle {
+              computedAt: java.time.Instant = java.time.Instant.now(),
+              shadowBudget: (() -> java.time.Duration)? = null): ServerScoreBundle {
         val cutoff=computedAt.epochSecond
         val exactCutoff=cutoff+computedAt.nano/1_000_000_000.0
         // A retrospective method may inspect later evidence only within this acquisition snapshot.
@@ -39,11 +40,11 @@ class DayScorer(private val physiology: PhysiologyShadowRunner = PhysiologyShado
                 if(span.start>=cutoff || (span.availableAt?.let { it>cutoff } ?: false)) null
                 else span.copy(end=minOf(span.end,cutoff)).takeIf { it.end>it.start }
             })
-        return scoreSnapshot(snapshot,algorithmVersion,inputRevision,computedAt)
+        return scoreSnapshot(snapshot,algorithmVersion,inputRevision,computedAt,shadowBudget)
     }
 
     private fun scoreSnapshot(inputs: SignalSampleReader.DayInputs, algorithmVersion: String, inputRevision: String,
-                              computedAt: java.time.Instant): ServerScoreBundle {
+                              computedAt: java.time.Instant, shadowBudget: (() -> java.time.Duration)?): ServerScoreBundle {
         require(algorithmVersion==CanonicalScorePayload.ALGORITHM_VERSION) { "This scorer cannot impersonate another algorithm version" }
         val ownership=inputs.calendarOwnership
         if(ownership?.unavailableReason!=null) {
@@ -148,6 +149,11 @@ class DayScorer(private val physiology: PhysiologyShadowRunner = PhysiologyShado
         val sleepEpochs=result.sleepSessions.filter { it.episodeType=="main_sleep" }.flatMap { it.stages }
             .filter(SleepStageSemantics::isSleep)
         val sleepingHr=inputs.hr.filter { sample -> sample.bpm>0 && sleepEpochs.any { sample.ts>=it.start && sample.ts<it.end } }
+        val heartRateWindows = com.noop.analytics.HeartRateWindows.windows(dayLo,
+            minOf(dayHi+1, nowSeconds), dayHr, dayGravity,
+            wristOff + inputs.sleepContext.filter { it.kind == "off_body" }.map { it.start to it.end }).filter { window ->
+            ownership == null || ownership.dayIntervals.any { window.start >= it.first && window.end <= it.second }
+        }
 
         // Binary sleep evidence defines context; a deep-stage label is neither necessary nor sufficient.
         // Merge only touching observed sleep spans. Wake, unknown and off-body gaps remain excluded.
@@ -158,10 +164,16 @@ class DayScorer(private val physiology: PhysiologyShadowRunner = PhysiologyShado
                 sleepSpans[sleepSpans.lastIndex]=previous.copy(end=maxOf(previous.end,epoch.end.toDouble()))
             } else sleepSpans.add(PhysiologyShadowRunner.Context(epoch.start.toDouble(),epoch.end.toDouble(),"qualified_sleep"))
         }
+        val respiratoryContexts = RespirationContexts.withAwakeRest(sleepSpans, heartRateWindows,
+            result.sleepSessions.flatMap { it.stages }, contexts)
         val shadow=physiology.evaluate(PhysiologyShadowRunner.Request(inputs.userId,java.util.UUID.fromString(inputs.deviceId),
-            inputRevision,inputs.nightLo,inputs.nightHi+1,observations,sleepSpans))
+            inputRevision,inputs.nightLo,inputs.nightHi+1,observations,respiratoryContexts),shadowBudget?.invoke())
         val mainEpisodes=result.sleepSessions.filter { it.episodeType=="main_sleep" }
-        val respirationSummary=if(mainEpisodes.isEmpty()) null else RespirationEstimator.summarize(shadow.windows,
+        // Awake-rest results are retained separately and never enter the overnight statistic.
+        val sleepRespiration = shadow.windows.filter { window -> sleepSpans.any {
+            window.start >= it.start && window.end <= it.end
+        } }
+        val respirationSummary=if(mainEpisodes.isEmpty()) null else RespirationEstimator.summarize(sleepRespiration,
             mainEpisodes.minOf { it.start }.toDouble(),mainEpisodes.maxOf { it.end }.toDouble(),"qualified_sleep")
         // This v2 shadow snapshot must never relabel the older peak-counting heuristic as the repaired estimator.
         result=result.copy(daily=result.daily.copy(respRateBpm=respirationSummary?.median))
@@ -181,11 +193,7 @@ class DayScorer(private val physiology: PhysiologyShadowRunner = PhysiologyShado
             respirationSummary = respirationSummary,
             localDayEndExclusive = inputs.dayHi+1,
             calendarOwnership = ownership,
-            heartRateWindows = com.noop.analytics.HeartRateWindows.windows(dayLo,
-                minOf(dayHi+1, nowSeconds), dayHr, dayGravity,
-                wristOff + inputs.sleepContext.filter { it.kind == "off_body" }.map { it.start to it.end }).filter { window ->
-                ownership == null || ownership.dayIntervals.any { window.start >= it.first && window.end <= it.second }
-            },
+            heartRateWindows = heartRateWindows,
         )
     }
 }

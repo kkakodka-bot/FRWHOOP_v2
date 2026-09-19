@@ -29,7 +29,13 @@ import { sha256Hex, type S3Store } from './s3.ts';
 import { createPushIngestQuota, createPushWal, type PushWalStore } from './wal.ts';
 import { createPushReplacementStaging, type PushReplacementStaging } from './staging.ts';
 import type { SupabaseRest } from './rest.ts';
+import { ingestStep, PushIngestFailure } from './pushDiagnostics.ts';
+import { validateAppendProjectionRows } from './appendProjection.ts';
 import type { PushFunctionConfig } from './config.ts';
+
+// A wire batch remains one replay/ACK unit, but each database statement has bounded work.
+// This matters for packet provenance: full batches include raw bytes and scoring triggers.
+const APPEND_PROJECTION_ROWS_PER_STATEMENT = 250;
 
 async function applyReplacement({
   header,
@@ -191,18 +197,18 @@ export function createPushArchive({ cfg, rest, raw }: {
         expires_at: expiresAt(stream, new Date(), cfg as unknown as Record<string, unknown>),
         status: 'pending',
       };
-      await manifests.insertPending(row);
-      const put = await raw.putObject(key, body, { contentType: spec.contentType });
+      await ingestStep('archive_manifest', stream, () => manifests.insertPending(row));
+      const put = await ingestStep('archive_write', stream, () => raw.putObject(key, body, { contentType: spec.contentType }));
       const digest = sha256 || sha256Hex(body);
-      const done = await completeUpload({
+      const done = await ingestStep('archive_verify', stream, () => completeUpload({
         manifests,
         objectStore: raw,
         objectId,
         expectedBytes: body.length,
         expectedSha256: digest,
-      });
+      }));
       if (!done.ok) {
-        throw new Error(done.error || 'archive_verify_failed');
+        throw new PushIngestFailure('archive_verify', stream);
       }
       return { ready: true, objectKey: key, manifest: done.row, etag: put?.etag || null };
     },
@@ -254,7 +260,7 @@ export function createPushIngest({
         throw new PushProtocolError('use_object_lane', 422);
       }
 
-      const prior = await wal.getAck(header.batchId);
+      const prior = await ingestStep('receipt_lookup', header.stream, () => wal.getAck(header.batchId));
       if (prior?.bodySha256 === bodySha256 && prior?.ack) {
         return prior.ack;
       }
@@ -262,9 +268,24 @@ export function createPushIngest({
         throw new PushProtocolError('batch_id_conflict', 409);
       }
 
-      await quota.reserve(userId, decodedBody.length);
+      const deviceId = noopDeviceId(userId, header.deviceId);
+      const appendProjection = header.delivery === 'append' ? APPEND_STREAM_PROJECTIONS[header.stream] : undefined;
+      let appendRows: Record<string, unknown>[] = [];
+      if (header.delivery === 'append') {
+        if (!appendProjection) throw new PushProtocolError('unsupported_delivery', 422);
+        appendRows = records.map((record) => {
+          const row = appendProjection.mapRow({ userId, deviceId, sourceId: header.sourceId,
+            batchId: header.batchId, record });
+          // An ACK's acceptedRows must not count records discarded by a projection mapper.
+          if (!row) throw new PushProtocolError('invalid_record', 422);
+          return row;
+        });
+        validateAppendProjectionRows(appendRows, appendProjection.onConflict);
+      }
 
-      await wal.appendWal({
+      await ingestStep('quota', header.stream, () => quota.reserve(userId, decodedBody.length));
+
+      await ingestStep('wal', header.stream, () => wal.appendWal({
         batchId: header.batchId,
         stream: header.stream,
         deviceId: header.deviceId,
@@ -272,17 +293,16 @@ export function createPushIngest({
         recordCount: header.recordCount,
         bodySha256,
         receivedAt: now().toISOString(),
-      });
+      }));
 
-      const deviceId = noopDeviceId(userId, header.deviceId);
       if (typeof ensureDevice === 'function') {
-        await ensureDevice({
+        await ingestStep('device', header.stream, () => ensureDevice!({
           id: deviceId,
           user_id: userId,
           source_kind: 'noop_push',
           external_device_id: String(header.deviceId || ''),
           last_seen_at: now().toISOString(),
-        });
+        }));
       }
 
       const objectId = header.batchId && isUuid(header.batchId) ? header.batchId : crypto.randomUUID();
@@ -298,7 +318,7 @@ export function createPushIngest({
         objectId,
       });
 
-      const manifest = await archiveObject({
+      const manifest = await ingestStep('archive', header.stream, () => archiveObject({
         userId,
         deviceId,
         stream: header.stream,
@@ -314,22 +334,19 @@ export function createPushIngest({
         startAt,
         endAt,
         periodDay: startAt.slice(0, 10),
-      });
+      }));
 
       if (header.delivery === 'append') {
-        const projection = APPEND_STREAM_PROJECTIONS[header.stream];
+        const projection = appendProjection;
         if (projection && typeof upsertRows === 'function') {
-          const rows = records
-            .map((record) => projection.mapRow({
-              userId,
-              deviceId,
-              sourceId: header.sourceId,
-              batchId: header.batchId,
-              record,
-            }))
-            .filter(Boolean);
+          const rows = appendRows;
           if (rows.length) {
-            await upsertRows(projection.table, rows, { onConflict: projection.onConflict });
+            await ingestStep('projection', header.stream, async () => {
+              for (let start = 0; start < rows.length; start += APPEND_PROJECTION_ROWS_PER_STATEMENT) {
+                await upsertRows!(projection.table, rows.slice(start, start + APPEND_PROJECTION_ROWS_PER_STATEMENT),
+                  { onConflict: projection.onConflict });
+              }
+            });
           }
         }
       } else if (header.delivery === 'replace_window') {
@@ -339,17 +356,18 @@ export function createPushIngest({
         if (!replacementStaging) {
           throw new PushProtocolError('replacement_staging_unavailable', 503);
         }
-        const staged = await replacementStaging.stagePart({ userId, header, records, bodySha256 });
+        const staged = await ingestStep('replacement', header.stream,
+          () => replacementStaging!.stagePart({ userId, header, records, bodySha256 }));
         if (staged.isCompletingPart) {
-          await applyReplacement({
+          await ingestStep('projection', header.stream, () => applyReplacement({
             header,
             records: staged.records,
             userId,
             deviceId,
             upsertRows,
             deleteRows,
-          });
-          await replacementStaging.clearGeneration({ userId, header });
+          }));
+          await ingestStep('replacement', header.stream, () => replacementStaging!.clearGeneration({ userId, header }));
         }
       } else {
         throw new PushProtocolError('unsupported_delivery', 422);
@@ -363,8 +381,8 @@ export function createPushIngest({
       if (!ackMatchesBatch(ack, header)) {
         throw new PushProtocolError('ack_internal_mismatch', 500);
       }
-      await wal.saveAck(header.batchId, ack, bodySha256);
-      await wal.trimWal(header.batchId);
+      await ingestStep('ack', header.stream, () => wal.saveAck(header.batchId, ack, bodySha256));
+      await ingestStep('wal_cleanup', header.stream, () => wal.trimWal(header.batchId));
       return ack;
     },
   };
