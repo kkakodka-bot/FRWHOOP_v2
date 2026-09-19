@@ -33,7 +33,7 @@ export async function buildIngestVerifyReport({
     throw Object.assign(new Error('invalid day'), { code: 'invalid_day' });
   }
 
-  const [walRows, ackRows, manifestRows, dailyRows] = await Promise.all([
+  const [walRows, ackRows, manifestRows, dailyRows, heartbeatRows] = await Promise.all([
     rest.select(
       'noop_push_wal',
       `user_id=eq.${userId}&select=batch_id,stream,device_id,record_count,body_sha256,received_at&order=received_at.desc&limit=200`,
@@ -49,6 +49,10 @@ export async function buildIngestVerifyReport({
     rest.select(
       'daily_metrics',
       `user_id=eq.${userId}&day=eq.${day}&select=day,computed_at,algorithm_version,provenance&limit=1`,
+    ).catch(() => []),
+    rest.select(
+      'scoring_service_heartbeats',
+      'id=eq.1&select=version,started_at,last_poll_at,last_score_at,last_error&limit=1',
     ).catch(() => []),
   ]);
 
@@ -120,6 +124,8 @@ export async function buildIngestVerifyReport({
     return null;
   })();
 
+  const heartbeat = (heartbeatRows as any[])[0] ?? null;
+
   return {
     user_id: userId,
     day,
@@ -129,6 +135,15 @@ export async function buildIngestVerifyReport({
     b2_presence: b2Presence,
     projections,
     daily_metrics_row: (dailyRows as any[])[0] ?? null,
+    scoring_service_heartbeat: heartbeat
+      ? {
+        version: heartbeat.version ?? null,
+        started_at: heartbeat.started_at ?? null,
+        last_poll_at: heartbeat.last_poll_at ?? null,
+        last_score_at: heartbeat.last_score_at ?? null,
+        last_error: heartbeat.last_error ?? null,
+      }
+      : null,
     first_incomplete_stage: firstIncompleteStage,
     complete: firstIncompleteStage === null,
   };

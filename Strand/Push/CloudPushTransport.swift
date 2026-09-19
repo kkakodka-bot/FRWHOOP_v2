@@ -80,9 +80,9 @@ struct CloudPushTransport: PushTransport {
         let (data, response) = try await session.data(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard status >= 200, status <= 299 else {
-            throw PushTransportException(PushFailure.http(
-                status: status,
-                receiverCode: PushError.parseCode(data, expectedVersion: PushProtocol.objectVersion)
+            throw PushTransportException(PushError.httpFailure(
+                status: status, body: data, expectedVersion: PushProtocol.objectVersion,
+                table: PushBinaryTable(rawValue: manifest.stream)
             ))
         }
         do {
@@ -120,9 +120,8 @@ struct CloudPushTransport: PushTransport {
         let (data, response) = try await session.data(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard status >= 200, status <= 299 else {
-            throw PushTransportException(PushFailure.http(
-                status: status,
-                receiverCode: PushError.parseCode(data, expectedVersion: PushProtocol.objectVersion)
+            throw PushTransportException(PushError.httpFailure(
+                status: status, body: data, expectedVersion: PushProtocol.objectVersion
             ))
         }
         do {

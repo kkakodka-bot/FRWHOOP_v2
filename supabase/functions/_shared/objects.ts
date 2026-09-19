@@ -16,6 +16,7 @@ import { PushProtocolError } from './registry.ts';
 import type { SupabaseRest } from './rest.ts';
 import type { S3Store } from './s3.ts';
 import type { PushFunctionConfig } from './config.ts';
+import { ingestStep } from './pushDiagnostics.ts';
 
 /** Presigned PUT lifetime. Long enough for a large object on a slow link, short enough to expire. */
 export const UPLOAD_URL_TTL_SEC = 15 * 60;
@@ -170,10 +171,16 @@ export function createPushObjects({
       uncompressed_bytes: row.uncompressed_bytes ?? null,
       updated_at: now().toISOString(),
     };
-    await upsertRows('noop_signal_windows', [window], {
+    await ingestStep('projection', stream, () => upsertRows!('noop_signal_windows', [window], {
       onConflict: 'user_id,device_id,stream,hour_start,object_id',
-    });
+    }));
     return window;
+  }
+
+  function writeManifestWindow(row: any) {
+    return writeSignalWindow({ userId: row.user_id, deviceId: row.device_id, row,
+      stream: row.object_kind, startTs: Math.floor(Date.parse(row.start_at) / 1000),
+      endTs: Math.floor(Date.parse(row.end_at) / 1000), sampleCount: Number(row.sample_count ?? 0) });
   }
 
   return {
@@ -204,7 +211,7 @@ export function createPushObjects({
         objectId: manifest.objectId,
       });
 
-      const prior = await manifests.get(manifest.objectId);
+      const prior = await ingestStep('receipt_lookup', manifest.stream, () => manifests.get(manifest.objectId));
       if (prior) {
         if (prior.user_id !== userId) throw fail('forbidden', 403);
         // A retry must reuse the same bytes. A different digest under a committed objectId is a
@@ -213,6 +220,9 @@ export function createPushObjects({
           throw fail('object_id_conflict', 409);
         }
         if (READY_STATUSES.has(prior.status)) {
+          // Older receivers marked ready before projecting the window. Repair a partially
+          // completed object before a duplicate ACK lets the phone release its local rows.
+          await writeManifestWindow(prior);
           return {
             objectId: prior.id,
             status: prior.status,
@@ -220,7 +230,8 @@ export function createPushObjects({
             duplicate: true,
           };
         }
-        const resumed = raw.presignPut(prior.object_key, urlTtlSec, now());
+        const resumed = await ingestStep('archive_write', manifest.stream,
+          async () => raw.presignPut(prior.object_key, urlTtlSec, now()));
         return {
           objectId: prior.id,
           status: prior.status,
@@ -233,17 +244,17 @@ export function createPushObjects({
       }
 
       if (typeof ensureDevice === 'function') {
-        await ensureDevice({
+        await ingestStep('device', manifest.stream, () => ensureDevice!({
           id: deviceId,
           user_id: userId,
           source_kind: 'noop_push',
           external_device_id: String(manifest.deviceId || ''),
           last_seen_at: now().toISOString(),
-        });
+        }));
       }
 
       const spec = pushArchiveSpecForStream(manifest.stream);
-      await manifests.insertPending({
+      await ingestStep('archive_manifest', manifest.stream, () => manifests.insertPending({
         id: manifest.objectId,
         user_id: userId,
         device_id: deviceId,
@@ -269,9 +280,9 @@ export function createPushObjects({
         batch_id: manifest.batchId,
         source_id: manifest.sourceId,
         status: 'pending',
-      });
+      }));
 
-      const signed = raw.presignPut(key, urlTtlSec, now());
+      const signed = await ingestStep('archive_write', manifest.stream, async () => raw.presignPut(key, urlTtlSec, now()));
       return {
         objectId: manifest.objectId,
         status: 'pending',
@@ -293,44 +304,38 @@ export function createPushObjects({
       if (!manifests) throw fail('archive_not_configured', 503);
       if (!raw) throw fail('archive_not_configured', 503);
 
-      const row = await manifests.get(objectId);
+      // Stream is unknown until the owner-scoped manifest has been loaded and checked.
+      const row = await ingestStep('receipt_lookup', '', () => manifests.get(objectId));
       if (!row) throw fail('missing_manifest', 404);
       if (row.user_id !== userId) throw fail('forbidden', 403);
       if (READY_STATUSES.has(row.status)) {
-        return { objectId: row.id, status: row.status, objectKey: row.object_key, duplicate: true };
+        await writeManifestWindow(row);
+        return { objectId: row.id, deviceId: row.device_id, status: row.status, objectKey: row.object_key, duplicate: true };
       }
 
-      await manifests.mark(objectId, { status: 'uploading' });
-      const head = await raw.head(row.object_key);
+      await ingestStep('archive_manifest', row.object_kind, () => manifests.mark(objectId, { status: 'uploading' }));
+      const head = await ingestStep('archive_verify', row.object_kind, () => raw.head(row.object_key));
       if (!head?.exists) {
-        await manifests.mark(objectId, { status: 'failed' });
+        await ingestStep('archive_manifest', row.object_kind, () => manifests.mark(objectId, { status: 'failed' }));
         throw fail('object_missing', 409);
       }
       if (row.compressed_bytes != null && head.contentLength != null
           && Number(head.contentLength) !== Number(row.compressed_bytes)) {
-        await manifests.mark(objectId, { status: 'failed' });
+        await ingestStep('archive_manifest', row.object_kind, () => manifests.mark(objectId, { status: 'failed' }));
         throw fail('size_mismatch', 409);
       }
 
       const at = now().toISOString();
-      const updated = await manifests.mark(objectId, {
+      // Ready is an acknowledgement boundary: a failed projection must remain retryable.
+      const window = await writeManifestWindow({ ...row, compressed_bytes: head.contentLength ?? row.compressed_bytes });
+      const updated = await ingestStep('archive_manifest', row.object_kind, () => manifests.mark(objectId, {
         status: 'ready',
         compressed_bytes: head.contentLength ?? row.compressed_bytes,
         uploaded_at: at,
-      });
+      }));
       const next = (Array.isArray(updated) ? updated[0] : updated) || row;
 
-      const window = await writeSignalWindow({
-        userId,
-        deviceId: row.device_id,
-        row: next,
-        stream: row.object_kind,
-        startTs: Math.floor(Date.parse(row.start_at) / 1000),
-        endTs: Math.floor(Date.parse(row.end_at) / 1000),
-        sampleCount: Number(row.sample_count ?? 0),
-      });
-
-      return { objectId: next.id, status: 'ready', objectKey: next.object_key, window, duplicate: false };
+      return { objectId: next.id, deviceId: row.device_id, status: 'ready', objectKey: next.object_key, window, duplicate: false };
     },
   };
 }

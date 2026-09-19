@@ -5,6 +5,8 @@
 import assert from 'node:assert/strict';
 import { createPushObjects, windowCoverage } from '../_shared/objects.ts';
 import { noopDeviceId } from '../_shared/keys.ts';
+import { PushProtocolError } from '../_shared/registry.ts';
+import { ingestProtocolErrorResponse, PushIngestFailure, unexpectedIngestDiagnostic } from '../_shared/pushDiagnostics.ts';
 import { makeFakeB2, makeMemRest, compressFor, sha256Hex, B2_BUCKET } from './helpers.ts';
 
 const USER = '11111111-1111-4111-8111-111111111111';
@@ -98,6 +100,7 @@ Deno.test('housing: a PPG object round-trips through a presigned PUT byte-for-by
   });
 
   assert.equal(ack.status, 'ready');
+  assert.equal(ack.deviceId, noopDeviceId(USER, STRAP));
   assert.equal(ack.duplicate, false);
   const stored = h.b2.objects.get(intent.objectKey!);
   assert.ok(stored, 'object must be in the bucket');
@@ -214,8 +217,100 @@ Deno.test('housing: replaying an object is idempotent and writes one manifest ro
   const secondAck = await h.objects.completeObject({ userId: USER, objectId });
   assert.equal(secondAck.duplicate, true);
   assert.equal(secondAck.status, 'ready');
+  assert.equal(secondAck.deviceId, noopDeviceId(USER, STRAP));
   assert.equal(h.rest.manifests.size, 1);
   assert.equal(h.rest.rowCount('noop_signal_windows'), 1);
+});
+
+Deno.test('housing: projection failure never acknowledges ready and identical completion retries', async () => {
+  const h = harness();
+  const { manifest, wire } = manifestFor({ stream: 'ppgWaveformSample', payload: payloadOf(10),
+    startTs: SECOND, endTs: SECOND + 10, sampleCount: 10, compression: 'gzip',
+    objectId: '1a2a3a4a-1a1a-4a1a-8a1a-1a1a1a1a1a1a' });
+  const intent = await h.objects.createIntent({ userId: USER, manifest });
+  h.b2.putViaPresignedUrl(intent.uploadUrl!, wire, { contentType: intent.requiredHeaders!['content-type'] });
+  const upsert = h.rest.upsert.bind(h.rest);
+  let reject = true;
+  h.rest.upsert = async (table, rows, options) => {
+    if (table === 'noop_signal_windows' && reject) throw new Error('synthetic_projection_failure');
+    return upsert(table, rows, options);
+  };
+  await assert.rejects(() => h.objects.completeObject({ userId: USER, objectId: manifest.objectId }),
+    (error: unknown) => {
+      assert.ok(error instanceof PushIngestFailure);
+      const diagnostic = unexpectedIngestDiagnostic(error, '1.2');
+      assert.equal(diagnostic.protocolVersion, '1.2');
+      assert.equal(diagnostic.stream, 'ppgWaveformSample');
+      assert.equal(diagnostic.stage, 'projection');
+      for (const secret of [USER, STRAP, manifest.objectId, 'synthetic_projection_failure']) {
+        assert.ok(!JSON.stringify(diagnostic).includes(secret));
+      }
+      return true;
+    });
+  assert.equal(h.rest.manifests.get(manifest.objectId).status, 'uploading');
+  assert.equal(h.rest.rowCount('noop_signal_windows'), 0);
+  reject = false;
+  const ack = await h.objects.completeObject({ userId: USER, objectId: manifest.objectId });
+  assert.equal(ack.status, 'ready');
+  assert.equal(ack.deviceId, noopDeviceId(USER, STRAP));
+  assert.equal(h.rest.rowCount('noop_signal_windows'), 1);
+  assert.deepEqual(h.b2.objects.get(intent.objectKey!)!.body, wire);
+});
+
+Deno.test('housing: scoring gate refusal keeps object unacknowledged and retries the same archived bytes', async () => {
+  const h = harness();
+  const { manifest, wire } = manifestFor({ stream: 'ppgWaveformSample', payload: payloadOf(10),
+    startTs: SECOND, endTs: SECOND + 10, sampleCount: 10, compression: 'gzip',
+    objectId: '8a2a3a4a-1a1a-4a1a-8a1a-1a1a1a1a1a1a' });
+  const intent = await h.objects.createIntent({ userId: USER, manifest });
+  h.b2.putViaPresignedUrl(intent.uploadUrl!, wire, { contentType: intent.requiredHeaders!['content-type'] });
+  const upsert = h.rest.upsert.bind(h.rest);
+  let busy = true;
+  h.rest.upsert = async (table, rows, options) => {
+    if (table === 'noop_signal_windows' && busy) {
+      const error = new Error('private SQL detail') as Error & { receiverCode: string };
+      error.receiverCode = 'scoring_input_gate_busy';
+      throw error;
+    }
+    return upsert(table, rows, options);
+  };
+  await assert.rejects(() => h.objects.completeObject({ userId: USER, objectId: manifest.objectId }),
+    (error: unknown) => {
+      assert.ok(error instanceof PushProtocolError);
+      const response = ingestProtocolErrorResponse(error, '1.2');
+      assert.equal(response.status, 503);
+      assert.equal(response.headers.get('retry-after'), '2');
+      return error.code === 'scoring_input_gate_busy';
+    });
+  assert.equal(h.rest.manifests.get(manifest.objectId).status, 'uploading');
+  assert.equal(h.rest.rowCount('noop_signal_windows'), 0);
+  assert.deepEqual(h.b2.objects.get(intent.objectKey!)!.body, wire);
+  busy = false;
+  const ack = await h.objects.completeObject({ userId: USER, objectId: manifest.objectId });
+  assert.equal(ack.status, 'ready');
+  assert.equal(ack.objectId, manifest.objectId);
+  assert.equal(h.rest.rowCount('noop_signal_windows'), 1);
+  assert.equal(h.rest.manifests.size, 1);
+});
+
+Deno.test('housing: retries repair legacy ready manifests with missing projections before acknowledging', async () => {
+  for (const retryIntent of [false, true]) {
+    const h = harness();
+    const spec = { stream: 'ppgWaveformSample', payload: payloadOf(10), startTs: SECOND, endTs: SECOND + 10,
+      sampleCount: 10, compression: 'gzip', objectId: '1b2a3a4a-1a1a-4a1a-8a1a-1a1a1a1a1a1a' };
+    const first = await shipObject(h, spec);
+    h.rest.tables.set('noop_signal_windows', []); // Reproduce the old ready-before-projection boundary.
+    assert.equal(h.rest.manifests.get(first.manifest.objectId).status, 'ready');
+    const ack = retryIntent
+      ? await h.objects.createIntent({ userId: USER, manifest: first.manifest })
+      : await h.objects.completeObject({ userId: USER, objectId: first.manifest.objectId });
+    assert.equal(ack.duplicate, true);
+    assert.equal(h.rest.rowCount('noop_signal_windows'), 1);
+    const window = h.rest.tables.get('noop_signal_windows')![0];
+    assert.equal(window.device_id, noopDeviceId(USER, STRAP));
+    assert.equal(window.user_id, USER);
+    assert.equal(window.object_id, first.manifest.objectId);
+  }
 });
 
 Deno.test('housing: an interrupted upload resumes onto the same key', async () => {

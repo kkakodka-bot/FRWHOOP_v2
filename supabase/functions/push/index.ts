@@ -31,6 +31,9 @@ import { createSupabaseRest, restConfigFromEnv } from '../_shared/rest.ts';
 import { createS3 } from '../_shared/s3.ts';
 import { pushConfig, defaultReceiverStateId } from '../_shared/config.ts';
 import { IdentityError, resolvePushUser, createIngestTokenStore } from '../_shared/tokens.ts';
+import { createDeviceRegistrar } from '../_shared/devices.ts';
+import { enqueueScoringAfterIngest } from '../_shared/scoringEnqueue.ts';
+import { inlineRequestProtocol, ingestProtocolErrorResponse, unexpectedIngestDiagnostic } from '../_shared/pushDiagnostics.ts';
 
 const MAX_BODY_BYTES = 4 * 1024 * 1024 + 64 * 1024;
 
@@ -61,10 +64,7 @@ const pushUpsertRows = (table: string, rows: unknown[], opts: { onConflict: stri
   if (!rest.configured) return Promise.resolve([]);
   return rest.upsert(table, rows, opts);
 };
-const pushEnsureDevice = (row: Record<string, unknown>) => {
-  if (!rest.configured) return Promise.resolve([]);
-  return rest.upsert('devices', row, { onConflict: 'id' });
-};
+const pushEnsureDevice = createDeviceRegistrar(rest);
 const pushIngest = createPushIngest({
   walStore: pushWalStore!,
   archiveObject: (args: unknown) => pushArchive.archiveObject(args),
@@ -90,13 +90,6 @@ function json(body: unknown, status = 200): Response {
     status,
     headers: { 'content-type': 'application/json' },
   });
-}
-
-function protocolError(err: any): Response {
-  const status = err?.status || 500;
-  const body: any = { type: 'error', protocolVersion: '1.2', code: err?.code || err?.message || 'push_failed' };
-  if (Array.isArray(err?.fields)) body.fields = err.fields;
-  return json(body, status);
 }
 
 function authError(err: any): Response {
@@ -167,9 +160,10 @@ async function handleObjectIntent(req: Request): Promise<Response> {
     return json({ type: 'objectIntent', protocolVersion: '1.2', ...intent });
   } catch (err: any) {
     if (err instanceof Response) return err;
-    if (err instanceof PushProtocolError) return protocolError(err);
-    console.error('[push] object intent failed:', err?.stack || err);
-    return json({ type: 'error', protocolVersion: '1.2', code: 'push_failed' }, 500);
+    if (err instanceof PushProtocolError) return ingestProtocolErrorResponse(err, '1.2');
+    const diagnostic = unexpectedIngestDiagnostic(err, '1.2');
+    console.error('[push] object intent failed:', JSON.stringify(diagnostic));
+    return json(diagnostic, 500);
   }
 }
 
@@ -180,16 +174,23 @@ async function handleObjectComplete(req: Request, objectId: string): Promise<Res
       return json({ type: 'error', protocolVersion: '1.2', code: 'object_lane_unavailable' }, 503);
     }
     const ack = await pushObjects.completeObject({ userId: user.id, objectId });
+    void enqueueScoringAfterIngest({
+      rest,
+      userId: user.id,
+      deviceId: ack?.deviceId,
+    }).catch((err) => console.error('[push] scoring enqueue failed:', err?.stack || err));
     return json({ type: 'objectAck', protocolVersion: '1.2', ...ack });
   } catch (err: any) {
     if (err instanceof Response) return err;
-    if (err instanceof PushProtocolError) return protocolError(err);
-    console.error('[push] object complete failed:', err?.stack || err);
-    return json({ type: 'error', protocolVersion: '1.2', code: 'push_failed' }, 500);
+    if (err instanceof PushProtocolError) return ingestProtocolErrorResponse(err, '1.2');
+    const diagnostic = unexpectedIngestDiagnostic(err, '1.2');
+    console.error('[push] object complete failed:', JSON.stringify(diagnostic));
+    return json(diagnostic, 500);
   }
 }
 
 async function handleInlineBatch(req: Request): Promise<Response> {
+  let protocolVersion: '1.0' | '1.1' = '1.1';
   try {
     const user = await authenticate(req);
     let body = new Uint8Array(await req.arrayBuffer());
@@ -207,20 +208,26 @@ async function handleInlineBatch(req: Request): Promise<Response> {
     if (body.length > 4 * 1024 * 1024) {
       return json({ type: 'error', protocolVersion: '1.1', code: 'decoded_body_too_large' }, 413);
     }
+    protocolVersion = inlineRequestProtocol(body);
     const ack = await pushIngest.acceptBatch({ userId: user.id, decodedBody: body });
+    void enqueueScoringAfterIngest({
+      rest,
+      userId: user.id,
+      deviceId: ack?.deviceId,
+    }).catch((err) => console.error('[push] scoring enqueue failed:', err?.stack || err));
     return json(ack);
   } catch (err: any) {
     if (err instanceof Response) return err;
     if (err instanceof PushProtocolError) {
-      return json({ type: 'error', protocolVersion: '1.1', code: err.message }, err.status);
+      return ingestProtocolErrorResponse(err, protocolVersion);
     }
     if (err?.message === 'batch_id_conflict') {
-      return json({ type: 'error', protocolVersion: '1.1', code: 'batch_id_conflict' }, 409);
+      return json({ type: 'error', protocolVersion, code: 'batch_id_conflict' }, 409);
     }
-    // The client can attribute every other branch from its receiver code; this one it sees as a bare
-    // 500. Log the cause here or the only record of why a batch was refused is lost.
-    console.error('[push] unexpected ingest failure:', err?.stack || err);
-    return json({ type: 'error', protocolVersion: '1.1', code: 'push_failed' }, 500);
+    // This pair identifies the failing stage without logging database messages or raw health data.
+    const diagnostic = unexpectedIngestDiagnostic(err, protocolVersion);
+    console.error('[push] unexpected ingest failure:', JSON.stringify(diagnostic));
+    return json(diagnostic, 500);
   }
 }
 

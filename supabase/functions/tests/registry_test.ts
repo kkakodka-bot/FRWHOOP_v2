@@ -9,10 +9,30 @@ import {
   buildAck,
   ackMatchesBatch,
   PushProtocolError,
+  APPEND_STREAM_PROJECTIONS,
+  recordTimestamp,
 } from '../_shared/registry.ts';
 import { OBJECT_LANE_STREAMS } from '../_shared/keys.ts';
 
 const OBJECT_LANE_PATH = '/functions/v1/push/objects';
+
+Deno.test('versioned RR packet receipt keeps immutable bytes and cannot assert beat timing', () => {
+  assert.ok(advertisedStreams('1.1').includes('rrPacketProvenance'));
+  assert.ok(!advertisedStreams('1.0').includes('rrPacketProvenance'));
+  const record = { key: { packetId: 'e52beecb9be542acaabce3b8e6d34e4b95e19e31b0c39c910df986da3b2b578b' }, data: {
+    ts: 1700000000, sensorTs: 1700000000, recordIndex: 0,
+    rawHex: 'aa011a00010023592f12000000000000f153650000003c03000400000002c74eaa5b',
+    srcChannel: 5, schemaVersion: 1, decoderVersion: 'whoop5-v18-original-words-v1',
+    clockVersion: 'sensor-second-unmapped', timestampPrecisionSeconds: 1, clockOffsetSeconds: 0, declaredCount: 3,
+    verifiedSpan: { start: 1700000000, end: 1700000300 },
+  } };
+  const context = { userId: 'u', deviceId: 'd', sourceId: 's', batchId: 'b', record };
+  const row = APPEND_STREAM_PROJECTIONS.rrPacketProvenance.mapRow(context);
+  assert.equal(row?.rawHex, record.data.rawHex); assert.equal(row?.packetId, record.key.packetId);
+  assert.equal(row?.verifiedSpan, undefined); assert.equal(recordTimestamp('rrPacketProvenance', record), 1700000000);
+  assert.equal(APPEND_STREAM_PROJECTIONS.rrPacketProvenance.mapRow({ ...context,
+    record: { ...record, data: { ...record.data, schemaVersion: 2 } } }), null);
+});
 
 Deno.test('capabilities: object-lane streams are offered at 1.2 only', () => {
   const at12 = advertisedStreams('1.2');

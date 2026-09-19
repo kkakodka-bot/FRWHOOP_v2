@@ -350,7 +350,7 @@ class PushCoordinator(
                         is PushResult.Rejected -> {
                             rejected += 1
                             if (selectedFailure == null || result.retryable && !retryableFailure) {
-                                selectedFailure = result.failure
+                                selectedFailure = result.failure?.attributedTo(table)
                             }
                             retryableFailure = retryableFailure || result.retryable
                         }
@@ -366,7 +366,7 @@ class PushCoordinator(
                         is PushResult.Rejected -> {
                             rejected += 1
                             if (selectedFailure == null || result.retryable && !retryableFailure) {
-                                selectedFailure = result.failure
+                                selectedFailure = result.failure?.attributedTo(table)
                             }
                             retryableFailure = retryableFailure || result.retryable
                         }
@@ -387,7 +387,7 @@ class PushCoordinator(
                         is PushResult.Rejected -> {
                             rejected += 1
                             if (selectedFailure == null || result.retryable && !retryableFailure) {
-                                selectedFailure = result.failure
+                                selectedFailure = result.failure?.attributedTo(table)
                             }
                             retryableFailure = retryableFailure || result.retryable
                         }
@@ -418,7 +418,7 @@ class PushCoordinator(
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (transport: PushTransportException) {
-            return rejected(transport.failure)
+            return rejected(transport.failure.attributedTo(batch.table))
         } catch (_: Throwable) {
             return rejected(PushFailure(PushFailureCode.NETWORK_IO))
         }
@@ -427,7 +427,7 @@ class PushCoordinator(
         }
         if (response.statusCode !in 200..299) {
             return rejected(
-                PushFailure.http(response.statusCode, PushError.parseCode(response.body, batch.protocolVersion)),
+                PushError.httpFailure(response.statusCode, response.body, batch.protocolVersion, batch.table),
             )
         }
         val ack = try {
@@ -580,7 +580,7 @@ class PushCoordinator(
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (transport: PushTransportException) {
-            return rejected(transport.failure)
+            return rejected(transport.failure.attributedTo(batch.table))
         } catch (_: Throwable) {
             return rejected(PushFailure(PushFailureCode.NETWORK_IO))
         }
@@ -589,7 +589,7 @@ class PushCoordinator(
         }
         if (response.statusCode !in 200..299) {
             return rejected(
-                PushFailure.http(response.statusCode, PushError.parseCode(response.body, batch.protocolVersion)),
+                PushError.httpFailure(response.statusCode, response.body, batch.protocolVersion, batch.table),
             )
         }
         val ack = try {

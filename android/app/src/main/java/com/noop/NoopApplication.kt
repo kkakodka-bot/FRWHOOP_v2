@@ -14,6 +14,8 @@ import com.noop.data.WhoopDatabase
 import com.noop.data.WhoopRepository
 import com.noop.ui.NoopPrefs
 import com.noop.ui.AppLanguagePrefs
+import com.noop.push.ServerScoreRepository
+import com.noop.push.ServerScoringSettings
 import com.noop.push.SelfHostedPushScheduler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -68,6 +70,19 @@ class NoopApplication : Application() {
     /** Process-wide Room-backed store. One instance shared by the UI and the background service. */
     val repository: WhoopRepository by lazy {
         WhoopRepository(WhoopDatabase.get(this))
+    }
+
+    /** Phase 4: authenticated server HRV/sleep readback (default on for this fork). */
+    val serverScoreRepository: ServerScoreRepository by lazy {
+        ServerScoreRepository(this, applicationScope).also { repo ->
+            if (ServerScoringSettings.isEnabled(this)) {
+                applicationScope.launch {
+                    val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+                        .format(java.util.Date())
+                    repo.startPolling(today)
+                }
+            }
+        }
     }
 
     /** Process-wide device registry over the same Room DB — the single source of the active device id. */
