@@ -63,6 +63,7 @@ function headerFor(over: Record<string, unknown> = {}) {
 
 const SHA_A = 'a'.repeat(64);
 const SHA_B = 'b'.repeat(64);
+const SHA_C = 'c'.repeat(64);
 
 Deno.test('staging: parts accumulate and the completing part carries every record', async () => {
   const rest = makeStagingRest();
@@ -202,7 +203,7 @@ Deno.test('ingest: a newer generation repairs a complete unacknowledged generati
   assert.equal(rest.rows.size, 0);
 });
 
-Deno.test('ingest: an acknowledged legacy first part completes after the namespace upgrade', async () => {
+Deno.test('ingest: an acknowledged first part completes after a receiver upgrade', async () => {
   const rest = makeStagingRest();
   const header = headerFor({ window: { ...headerFor().window, endExclusive: '2026-09-03' } });
   const legacyScope = `${USER}|${header.sourceId}|${header.deviceId}|${header.stream}`;
@@ -249,17 +250,58 @@ Deno.test('ingest: an acknowledged legacy first part completes after the namespa
   assert.equal(rest.rows.size, 0);
 });
 
-Deno.test('staging: protocol versions have separate projection namespaces', async () => {
+Deno.test('staging: multipart state survives a new-to-old-to-new receiver sequence', async () => {
   const rest = makeStagingRest();
   const staging = createPushReplacementStaging({ rest: rest as any });
-  const old = headerFor({ window: { ...headerFor().window, parts: 1 } });
+  const first = headerFor();
+  const second = headerFor({
+    batchId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+    window: { ...headerFor().window, part: 2 },
+  });
+  await staging.stagePart({ userId: USER, header: first,
+    records: [{ type: 'record', key: { day: '2026-09-01' }, data: { steps: 100 } }], bodySha256: SHA_A });
+
+  const legacyScope = `${USER}|${first.sourceId}|${first.deviceId}|${first.stream}`;
+  const stored = [...rest.rows.values()];
+  assert.equal(stored.length, 1);
+  assert.equal(stored[0].scope, legacyScope,
+    'an older receiver must find the acknowledged first part in its unchanged scope');
+
+  // This is the same legacy-scope read and write an old receiver performs after rollback. It must
+  // combine the second part rather than ACKing an invisible incomplete generation.
+  const completed = await staging.stagePart({ userId: USER, header: second,
+    records: [{ type: 'record', key: { day: '2026-09-02' }, data: { steps: 200 } }], bodySha256: SHA_B });
+  assert.equal(completed.complete, true);
+  assert.equal(completed.isCompletingPart, true);
+  assert.deepEqual(completed.records.map((row: any) => row.data.steps), [100, 200]);
+
+  // The old receiver clears that generation after projection. Rolling forward then starts the
+  // next generation in the same protocol-defined scope without reviving either old part.
+  await staging.clearGeneration({ userId: USER, header: second });
+  const next = headerFor({
+    protocolVersion: '1.1',
+    batchId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+    window: { ...headerFor().window, replacementId: 'r2' },
+  });
+  const rolledForward = await staging.stagePart({ userId: USER, header: next,
+    records: [{ type: 'record', key: { day: '2026-09-01' }, data: { steps: 300 } }], bodySha256: SHA_C });
+  assert.equal(rolledForward.complete, false);
+  assert.equal(rest.rows.size, 1);
+  assert.equal([...rest.rows.values()][0].replacement_id, 'r2');
+});
+
+Deno.test('staging: a protocol change still supersedes the same stream generation', async () => {
+  const rest = makeStagingRest();
+  const staging = createPushReplacementStaging({ rest: rest as any });
+  const old = headerFor();
   const first = await staging.stagePart({ userId: USER, header: old, records: [], bodySha256: SHA_A });
-  assert.equal(first.complete, true);
-  const next = headerFor({ protocolVersion: '1.1', window: { ...headerFor().window, replacementId: 'r2', parts: 1 } });
-  const isolated = await staging.stagePart({ userId: USER, header: next, records: [], bodySha256: SHA_B });
-  assert.equal(isolated.complete, true);
-  assert.equal(isolated.supersededComplete, undefined);
-  assert.equal(rest.rows.size, 2);
+  assert.equal(first.complete, false);
+  const next = headerFor({ protocolVersion: '1.1', window: { ...headerFor().window, replacementId: 'r2' } });
+  const superseding = await staging.stagePart({ userId: USER, header: next, records: [], bodySha256: SHA_B });
+  assert.equal(superseding.complete, false);
+  assert.equal(superseding.supersededComplete, undefined);
+  assert.equal(rest.rows.size, 1);
+  assert.equal([...rest.rows.values()][0].replacement_id, 'r2');
 });
 
 Deno.test('staging: same part, different batch or bytes, is a conflict', async () => {

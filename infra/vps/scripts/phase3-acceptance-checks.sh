@@ -83,21 +83,33 @@ snapshot() {
           where w.done_at is null
             and ((w.status='running' and w.lease_expires_at>clock_timestamp())
               or w.next_attempt_at<=clock_timestamp())
-            and (w.failure_revision<>w.input_revision or w.consecutive_failures<8))
+            and (w.failure_revision<>w.input_revision or w.consecutive_failures<8)),
+       coalesce((select case
+         when bool_or(w.status<>'running' or w.lease_expires_at is null
+              or w.lease_expires_at<=clock_timestamp()) then 0
+         else ceil(min(extract(epoch from (w.lease_expires_at-clock_timestamp()))))::integer end
+         from public.physiology_work_items w
+         where w.done_at is null
+           and ((w.status='running' and w.lease_expires_at>clock_timestamp())
+             or w.next_attempt_at<=clock_timestamp())
+           and (w.failure_revision<>w.input_revision or w.consecutive_failures<8)),0)
      from public.physiology_service_heartbeats h where h.id=1"
 }
 
 initial="$(snapshot)"
-IFS='|' read -r initial_version initial_poll initial_score initial_healthy initial_active_debt <<<"$initial"
+IFS='|' read -r initial_version initial_poll initial_score initial_healthy initial_active_debt initial_lease_wait <<<"$initial"
 test "$initial_version" = "frwhoop-physiology-2"
 test -n "$initial_poll"
 test "$initial_active_debt" -ge 0
+test "$initial_lease_wait" -ge 0
 
 accepted=false
-for _ in {1..12}; do
+max_wait_seconds=$((60 + initial_lease_wait))
+poll_attempts=$(((max_wait_seconds + 4) / 5))
+for ((attempt=1; attempt<=poll_attempts; attempt++)); do
   sleep 5
   current="$(snapshot)"
-  IFS='|' read -r version poll score healthy active_debt <<<"$current"
+  IFS='|' read -r version poll score healthy active_debt lease_wait <<<"$current"
   test "$version" = "frwhoop-physiology-2"
   test -n "$poll"
   test "$healthy" = "t"
@@ -111,7 +123,7 @@ for _ in {1..12}; do
   fi
 done
 if [[ "$accepted" != true ]]; then
-  echo "FAIL: physiology worker showed no healthy queue progress within 60 seconds" >&2
+  echo "FAIL: physiology worker showed no healthy queue progress within ${max_wait_seconds} seconds" >&2
   exit 1
 fi
 echo "OK: exact image, persistent mode, no ports, healthy heartbeat, and queue progress"

@@ -4,17 +4,13 @@
 // same window land on different isolates. The observable state machine (error codes, completion
 // semantics) is identical to the Node original.
 //
-// The protocol requires each sender to serialize generations per source/device/stream. The scope
-// also includes the selected protocol version because changing destination version creates a new
-// client progress namespace and projection semantics can differ by version.
+// The protocol requires each sender to serialize generations per source/device/stream. Protocol
+// version is deliberately absent: a version change is still a new generation in the same
+// authoritative replacement scope and must supersede older incomplete work.
 import { PushProtocolError } from './registry.ts';
 import type { SupabaseRest } from './rest.ts';
 
 function scopeKey(userId: string, header: any): string {
-  return JSON.stringify(['v2', userId, header.protocolVersion, header.sourceId, header.deviceId, header.stream]);
-}
-
-function legacyScopeKey(userId: string, header: any): string {
   return `${userId}|${header.sourceId}|${header.deviceId}|${header.stream}`;
 }
 
@@ -82,23 +78,10 @@ export function createPushReplacementStaging({ rest }: { rest: SupabaseRest }) {
       bodySha256: string;
     }) {
       const window = validateWindow(header);
-      let scope = scopeKey(userId, header);
+      const scope = scopeKey(userId, header);
       const identity = windowIdentity(window);
 
       let rows = await loadRows(userId, scope);
-      if (!rows.length) {
-        // Before the v2 namespace, protocol version was absent from scope. Non-final parts were
-        // already acknowledged, so an exact in-flight generation must finish in that old scope;
-        // starting only its final part in v2 would acknowledge without ever applying the window.
-        // replacementId includes protocolVersion in both clients, making an exact-id continuation
-        // safe without guessing the version of an unrelated legacy generation.
-        const legacyScope = legacyScopeKey(userId, header);
-        const legacyRows = await loadRows(userId, legacyScope);
-        if (legacyRows.some((row) => row.replacement_id === window.replacementId)) {
-          scope = legacyScope;
-          rows = legacyRows;
-        }
-      }
 
       // A different replacementId under the same scope is a new generation. A superseded
       // incomplete generation is abandoned. A complete generation may be the residue of a
@@ -206,7 +189,6 @@ export function createPushReplacementStaging({ rest }: { rest: SupabaseRest }) {
     async clearGeneration({ userId, header }: { userId: string; header: any }) {
       const replacementId = validateWindow(header).replacementId;
       await deleteScope(userId, scopeKey(userId, header), String(replacementId));
-      await deleteScope(userId, legacyScopeKey(userId, header), String(replacementId));
     },
   };
 }
