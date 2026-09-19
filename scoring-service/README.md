@@ -3,10 +3,10 @@
 Standalone JVM service that runs the extracted Android analytics Kotlin twin (`com.noop.analytics`).
 Scores HRV/RR, sleep and qualified respiration on arrival. It writes immutable owner/device/day/revision
 snapshots via `engine_publish_physiology` under `algorithm_version = frwhoop-physiology-2`.
-This version remains shadow by default; readback selection retains the v1 baseline. Starting the
-service does not promote its outputs. This build refuses to impersonate the v1 algorithm version.
-Canonical v1 runs in the separately built [frozen baseline worker](legacy-baseline/README.md),
-with its original numerical kernel and the required fenced transport patch.
+The hosted fleet selects this deterministic v2 snapshot through migration `20260918130000`.
+Optional learned-model work inside the snapshot remains isolated shadow output and cannot replace
+canonical fields. This build refuses to impersonate the v1 algorithm version. The separately built
+[frozen baseline worker](legacy-baseline/README.md) remains available for an explicit rollback.
 
 ## Layout
 
@@ -35,8 +35,8 @@ export SUPABASE_SERVICE_ROLE_KEY='…'
 ./service/build/install/service/bin/service
 ```
 
-`SUPABASE_URL` is the PostgREST base. The compose template correctly uses the direct container
-`http://rest:3000`; a gateway URL needs `/rest/v1`. The writer appends `/rpc/engine_publish_physiology`.
+`SUPABASE_URL` is the PostgREST base and must identify the same hosted Supabase project as
+`DATABASE_URL`; its HTTPS URL ends in `/rest/v1`. The writer appends `/rpc/engine_publish_physiology`.
 Do not run this against production merely to verify configuration: starting/replaying performs writes.
 
 Replay one day (dirties, claims and renews the same queue lease; publication stays revision-fenced):
@@ -62,7 +62,7 @@ All progress survives container restarts (`kill -9` → clean resume):
 
 | Table | Purpose |
 |---|---|
-| `physiology_work_items` | Independent v2 shadow debt, input/measurement revisions, renewable leases and retry state |
+| `physiology_work_items` | Deterministic v2 scoring debt, input/measurement revisions, renewable leases and retry state |
 | `scoring_work_items` | Independent v1 debt; migration `20260918120000` requires the patched baseline transport |
 | `scoring_timezone_history` | Prospective event-time IANA ownership segments |
 | `scoring_service_heartbeats` / `physiology_service_heartbeats` | Separate v1/v2 liveness records |
@@ -85,9 +85,9 @@ Build from **repo root** (kernel syncs from `../android`):
 docker build -t frwhoop/scoring-service:latest -f scoring-service/Dockerfile .
 ```
 
-See `infra/vps/templates/docker-compose.scoring-override.yml`. It adds `scoring-shadow`;
-keep the separately built, patched v1 worker running as the canonical baseline. Read
-[algorithm-work-isolation.md](docs/algorithm-work-isolation.md) before applying the transport migration.
+See `infra/vps/templates/docker-compose.scoring-override.yml`. It runs the persistent
+`scoring-physiology-v2` service from an immutable commit tag against the hosted Supabase database
+and PostgREST endpoint. Keep the separately built, patched v1 image available for rollback.
 
 ## Scoped kernel (Locked #3)
 
